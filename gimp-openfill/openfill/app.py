@@ -1,10 +1,11 @@
 # OpenFill - generative fill for GIMP 3
 # Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Orchestration: GIMP image in, backend request out, layers back in.
+"""Orchestration: image in, backend request out, layers back in.
 
-This module imports ``gimp_io`` (and therefore ``gi``); everything below it
-is plain Python.
+The image editor is behind ``App.io``: GIMP's ``gimp_io`` (imported only when no
+other is given, since it needs ``gi``) or the PhotoCraft companion's bridge.
+Everything else here is plain Python.
 """
 
 from __future__ import annotations
@@ -18,8 +19,9 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
-from . import caption, comfy_setup, geometry, gimp_io, hardware, quality, ui_text, workflow
+from . import caption, comfy_setup, geometry, hardware, quality, ui_text, workflow
 from . import catalog as cat
 from .backend import (
     SETTINGS_MENU,
@@ -40,7 +42,6 @@ from .config import Paths, Settings, comfy_layout, comfy_problem
 from .geometry import Rect
 from .log import get_logger
 from .progress import OverallProgress
-from .runner import Runner
 from .server import ServerManager, _split_host_port, port_answers
 from .workflow import model_display_name
 
@@ -92,18 +93,28 @@ def _layer_name(kind: str, prompt: str) -> str:
 
 
 class App:
-    def __init__(self, interactive: bool = True) -> None:
+    def __init__(self, interactive: bool = True, io: Any = None, runner_cls: Any = None) -> None:
         # interactive=False (scripts, batch): no progress window, so a failure never waits for a click
         self.interactive = interactive
+        # The image editor: GIMP's gimp_io by default; the PhotoCraft companion passes its own
+        # module with the same functions (export_region, insert_results, resize_canvas, ...).
+        if io is None:
+            from . import gimp_io as io
+        if runner_cls is None:
+            from .runner import Runner
+
+            runner_cls = Runner
+        self.io = io
+        self.runner_cls = runner_cls
         self._opencv_noted = False
         self._device_checked = False
-        self.paths = Paths.for_profile(gimp_io.profile_dir()).ensure()
+        self.paths = Paths.for_profile(self.io.profile_dir()).ensure()
         self.settings = Settings.load(self.paths.config)
         self.log = get_logger(self.paths.log, debug=self.settings.debug)
         if self.settings.load_problem:
             self.log.warning("settings: %s", self.settings.load_problem)
             try:
-                gimp_io.message(self.settings.load_problem)
+                self.io.message(self.settings.load_problem)
             except Exception:  # noqa: BLE001 - the warning is in the log either way
                 pass
         self.server = ServerManager(self.settings, self.paths, self.log)
@@ -171,7 +182,7 @@ class App:
         except OSError:
             pass
         if threading.current_thread() is threading.main_thread():  # GIMP calls only from the main thread
-            gimp_io.message(message)
+            self.io.message(message)
 
     def refresh_models_cache(self, health: HealthStatus) -> None:
         if not health.ok:
@@ -501,7 +512,7 @@ class App:
         except (OSError, ValueError) as err:
             self.log.warning("could not queue the OpenCV install: %s", err)
             queued = None
-        gimp_io.message(NO_OPENCV_MESSAGE + (NO_OPENCV_INSTALLING if queued else NO_OPENCV_MANUAL))
+        self.io.message(NO_OPENCV_MESSAGE + (NO_OPENCV_INSTALLING if queued else NO_OPENCV_MANUAL))
 
     def nodes_to_install(self, model_id: str) -> list[cat.NodeSpec]:
         entry = cat.by_id(self.catalog, model_id)
@@ -658,7 +669,7 @@ class App:
         # selection there is nothing to fill, and filling the whole image is never
         # what was meant.
         self._check_image(image)
-        selection = gimp_io.selection_rect(image)
+        selection = self.io.selection_rect(image)
         if selection is None:
             self.log.info("fill: refused, nothing selected")
             raise NothingSelected(NO_SELECTION_MESSAGE)
@@ -679,7 +690,7 @@ class App:
                 )
         entry, model = self.resolve_model(model_choice)
         profile = self.profile_for(model)
-        full = gimp_io.image_rect(image)
+        full = self.io.image_rect(image)
         target = selection
         removal_intent = remove or not prompt.strip() or model.prompt_free
         refine = (
@@ -756,8 +767,8 @@ class App:
                 float(self.settings.refine_denoise),
                 [(t.rect.x, t.rect.y, t.rect.width, t.rect.height) for t in plan.refine_tiles],
             )
-        image_png, image_rgba = gimp_io.export_region(image, ctx)
-        mask_png, mask_raw = gimp_io.export_selection_mask(image, ctx)
+        image_png, image_rgba = self.io.export_region(image, ctx)
+        mask_png, mask_raw = self.io.export_selection_mask(image, ctx)
         if self.settings.scene_caption and not removal_intent and not model.prompt_free:
             sw, sh, small = caption.sample(ctx.width, ctx.height, image_rgba, 4)
             _, _, small_mask = caption.sample(ctx.width, ctx.height, mask_raw, 1)
@@ -791,7 +802,7 @@ class App:
             full_blur=min(mp.grow_image, mp.feather_image),
         )
         title = "Object Removal" if model.prompt_free else "Generative Fill"
-        runner = Runner(
+        runner = self.runner_cls(
             self, title, model_display_name(entry.name) if entry else model.checkpoint, interactive=self.interactive
         )
         try:
@@ -803,7 +814,7 @@ class App:
             self.server.touch()
             self._after_generation(result)
             self._debug_dump("fill", request, result, ctx)
-            layers = gimp_io.insert_results(
+            layers = self.io.insert_results(
                 image,
                 result.images,
                 ctx,
@@ -846,7 +857,7 @@ class App:
                 for index, layer in enumerate(layers):
                     if (layer.get_width(), layer.get_height()) != (ctx.width, ctx.height):
                         continue
-                    pixels = gimp_io.layer_rgba(layer)
+                    pixels = self.io.layer_rgba(layer)
                     field = quality.seam_field(
                         ctx.width, ctx.height, image_rgba, pixels, mask_raw, 4, band=band, original_rect=original_rect
                     )
@@ -856,7 +867,7 @@ class App:
                         )
                         continue
                     largest = max(max(abs(v) for v in cell) for cell in field.offsets)
-                    gimp_io.set_layer_rgba(layer, quality.apply_seam_field(pixels, ctx.width, ctx.height, 4, field))
+                    self.io.set_layer_rgba(layer, quality.apply_seam_field(pixels, ctx.width, ctx.height, 4, field))
                     self.log.info(
                         "%s: seam corrected on layer %d (largest offset %.1f levels)", kind, index + 1, largest
                     )
@@ -882,12 +893,12 @@ class App:
                 for index, layer in enumerate(layers):
                     if (layer.get_width(), layer.get_height()) != (ctx.width, ctx.height):
                         continue
-                    pixels = gimp_io.layer_rgba(layer)
+                    pixels = self.io.layer_rgba(layer)
                     inside = quality.noise_sigma(ctx.width, ctx.height, pixels, 4, mask_raw, inside=True, step=3)
                     add = quality.grain_to_add(ring, inside)
                     self.log.info("fill: grain ring %.2f, layer %d %.2f, adding %.2f", ring, index + 1, inside, add)
                     if add > 0:
-                        gimp_io.set_layer_rgba(
+                        self.io.set_layer_rgba(
                             layer, quality.add_grain(pixels, 4, add, seed=(int(seed) + index) & 0xFFFF)
                         )
             finally:
@@ -910,7 +921,7 @@ class App:
             for layer in layers:
                 if (layer.get_width(), layer.get_height()) != (ctx.width, ctx.height):
                     return layers
-                cw, ch, data = caption.sample(ctx.width, ctx.height, gimp_io.layer_rgba(layer), 4)
+                cw, ch, data = caption.sample(ctx.width, ctx.height, self.io.layer_rgba(layer), 4)
                 candidates.append(quality.Buffer(cw, ch, data, 4))
             base = quality.Buffer(sw, sh, original, 4)
             distance = quality.signed_distance(sw, sh, small_mask)
@@ -922,7 +933,7 @@ class App:
                 [round(sc.total, 3) for sc in scores],
                 time.monotonic() - started,
             )
-            return gimp_io.reorder_variations(image, layers, order, _layer_name(title, prompt))
+            return self.io.reorder_variations(image, layers, order, _layer_name(title, prompt))
         except Exception as err:  # noqa: BLE001 - ranking must never lose the result
             self.log.warning("fill: ranking skipped: %s", err)
             return layers
@@ -963,7 +974,7 @@ class App:
             self.log.info("expand: crop only %s", crop)
             image.undo_group_start()
             try:
-                gimp_io.resize_canvas(image, kept_w, kept_h, -crop[0], -crop[1])
+                self.io.resize_canvas(image, kept_w, kept_h, -crop[0], -crop[1])
             finally:
                 image.undo_group_end()
             return []
@@ -972,7 +983,7 @@ class App:
         canvases = geometry.round_canvases(kept_w, kept_h, rounds)
         tracker = OverallProgress([w * h for w, h in canvases])
         self.log.info("expand: margins=%s in %d round(s): %s", margins, len(rounds), rounds)
-        runner = Runner(
+        runner = self.runner_cls(
             self,
             "Generative Expand",
             model_display_name(entry.name) if entry else model.checkpoint,
@@ -1009,7 +1020,7 @@ class App:
         seed: int,
         entry: cat.ModelEntry | None,
         model: ModelSpec,
-        runner: Runner,
+        runner: Any,
         tracker: OverallProgress,
     ) -> list:
         """One expand pass: all margins at once. ``crop`` (left, top, right,
@@ -1057,9 +1068,9 @@ class App:
         # back by the offset; pixels outside the image come back transparent) so a
         # backend failure leaves the image untouched. The canvas grows only on success.
         source_rect = plan.context.translate(crop[0] - plan.offset_x, crop[1] - plan.offset_y)
-        image_png, image_rgba = gimp_io.export_region(image, source_rect, transparent_outside=True)
+        image_png, image_rgba = self.io.export_region(image, source_rect, transparent_outside=True)
         mask_pixels = geometry.mask_for_expand(plan)
-        mask_png = gimp_io.mask_png_from_bytes(plan.context, mask_pixels)
+        mask_png = self.io.mask_png_from_bytes(plan.context, mask_pixels)
         request = InpaintRequest(
             image_png=image_png,
             mask_png=mask_png,
@@ -1085,10 +1096,10 @@ class App:
         self._after_generation(result)
         image.undo_group_start()
         try:
-            gimp_io.resize_canvas(
+            self.io.resize_canvas(
                 image, plan.new_width, plan.new_height, plan.offset_x - crop[0], plan.offset_y - crop[1]
             )
-            layers = gimp_io.insert_results(
+            layers = self.io.insert_results(
                 image,
                 result.images,
                 plan.context,
@@ -1133,7 +1144,7 @@ class App:
         profile = self.profile_for(model)
         origin = Rect(0, 0, 0, 0)
         if image is not None and target == "layer":
-            selection = gimp_io.selection_rect(image)
+            selection = self.io.selection_rect(image)
             if selection is not None and (width <= 0 or height <= 0):
                 origin = selection
                 width, height = selection.width, selection.height
@@ -1144,7 +1155,7 @@ class App:
             ws.width, ws.height, prompt, negative, model, self.sampling(model, variations, seed, 1.0)
         )
         self.log.info("txt2img: %dx%d model=%s target=%s", ws.width, ws.height, model.checkpoint, target)
-        runner = Runner(
+        runner = self.runner_cls(
             self,
             "Text to Image",
             model_display_name(entry.name) if entry else model.checkpoint,
@@ -1159,10 +1170,10 @@ class App:
             self.server.touch()
             name = _layer_name("Text to Image", prompt)
             if image is None or target == "image":
-                gimp_io.new_image_from_pngs(result.images, name, self.paths.temp)
+                self.io.new_image_from_pngs(result.images, name, self.paths.temp)
             else:
                 # generated at the model's working size; the layer gets the requested size
-                gimp_io.insert_results(
+                self.io.insert_results(
                     image,
                     result.images,
                     Rect(origin.x, origin.y, width, height),
@@ -1179,7 +1190,7 @@ class App:
         self.log.info("txt2img: done, seed=%s", result.seed)
 
     def _check_image(self, image) -> None:
-        if gimp_io.is_indexed(image):
+        if self.io.is_indexed(image):
             self.log.info("refused: indexed image")
             raise UnsupportedImage(INDEXED_MESSAGE)
 
@@ -1217,7 +1228,7 @@ class App:
 
     def check_backend(self) -> HealthStatus:
         try:
-            backend = self.backend(gimp_io.GimpProgress("Checking the AI backend"))
+            backend = self.backend(self.io.GimpProgress("Checking the AI backend"))
         except BackendError as err:
             return HealthStatus(False, str(err))
         health = backend.health()

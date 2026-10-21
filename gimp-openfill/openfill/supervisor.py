@@ -868,8 +868,10 @@ def release_start_lock(path: Path) -> None:
 
 
 def live_watchers(base: Path, names: tuple[str, ...] = ("gimp",)) -> list[int]:
-    """GIMP pids registered in ``<base>/watchers`` (one file per pid, written by the plug-in of
-    every GIMP that uses the backend). Entries whose process is gone or is not a GIMP are removed."""
+    """Pids registered in ``<base>/watchers`` (one file per pid, written by the plug-in of every
+    GIMP, or by a companion app, that uses the backend). A file may hold the process name its
+    writer expects (the companion runs as Python); otherwise the process must be a GIMP. Entries
+    whose process is gone or is another program (a reused pid) are removed."""
     folder = base / WATCHERS_DIRNAME
     alive = []
     for entry in folder.glob("*") if folder.is_dir() else []:
@@ -878,7 +880,12 @@ def live_watchers(base: Path, names: tuple[str, ...] = ("gimp",)) -> list[int]:
         except ValueError:
             continue
         name = process_name(pid) if pid_alive(pid) else None
-        if pid_alive(pid) and (name is None or any(n in name for n in names)):
+        try:
+            expected = entry.read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            expected = ""
+        wanted = (expected,) if expected else names
+        if pid_alive(pid) and (name is None or any(n in name for n in wanted)):
             alive.append(pid)
         else:
             try:

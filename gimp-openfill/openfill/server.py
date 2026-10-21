@@ -100,6 +100,10 @@ class ServerManager:
         self.settings = settings
         self.paths = paths
         self.log = logger
+        # The process the backend serves; it stops when this one ends. GIMP plug-ins are
+        # children of GIMP (the default, the parent pid); the PhotoCraft companion sets its own.
+        self.watch_pid: int | None = None
+        self.watch_name = ""  # the watched process's executable name, set with watch_pid
 
     # state ---------------------------------------------------------------
 
@@ -132,7 +136,10 @@ class ServerManager:
         try:
             folder = self.paths.base / WATCHERS_DIRNAME
             folder.mkdir(parents=True, exist_ok=True)
-            (folder / str(gimp_pid or os.getppid())).touch()
+            pid = gimp_pid or self.watch_pid or os.getppid()
+            # A companion (not a GIMP) records its own process name, so the supervisor can tell
+            # it apart from an unrelated program that later gets the same pid.
+            (folder / str(pid)).write_text(self.watch_name if self.watch_pid else "", encoding="utf-8")
         except OSError:
             pass
 
@@ -206,7 +213,7 @@ class ServerManager:
             if self.log:
                 self.log.warning("port %s on %s is taken by a program that is not ComfyUI", port, host)
             raise BackendUnavailable(port_in_use_message(host, port))
-        gimp_pid = os.getppid()
+        gimp_pid = self.watch_pid or os.getppid()
         cmd = [
             self._helper_python(),
             str(Path(__file__).with_name("supervisor.py")),
