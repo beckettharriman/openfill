@@ -23,9 +23,8 @@ jobs:
         os: [ubuntu-latest]
         python-version: ["3.10", "3.12"]
         include:
-          # macOS has no /proc and its own paths; catches what Linux alone does not.
-          - os: macos-latest
-            python-version: "3.12"
+          # macOS (no /proc, its own paths) runs in the public gimp-openfill repo; this private
+          # repo gets no macOS runners. Put it back when this merges into gimp-openfill.
           # Windows is the main target: backslash paths, no fork, install.ps1.
           - os: windows-latest
             python-version: "3.12"
