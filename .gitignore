@@ -146,3 +146,4 @@ gimp-openfill/openfill/tmp/
 **/openfill/config.json
 *.part
 docs/evidence/daytime-2026-10-09/benchmark/*/
+photocraft/e2e/out/
