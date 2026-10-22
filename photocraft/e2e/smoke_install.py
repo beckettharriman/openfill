@@ -81,14 +81,25 @@ def main() -> int:
     if info is None:
         print("OpenFill did not start")
         return 1
-    req = urllib.request.Request(info["base"] + "/api/state", headers={"X-OpenFill-Key": info["key"]})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        state = json.loads(resp.read())
-    print("state:", json.dumps(state)[:600])
+    state: dict = {}
+    for _ in range(60):  # the watcher's first look at PhotoCraft
+        req = urllib.request.Request(info["base"] + "/api/state", headers={"X-OpenFill-Key": info["key"]})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            state = json.loads(resp.read())
+        if state["photocraft"].get("connected"):
+            break
+        time.sleep(0.5)
+    print("photocraft:", state["photocraft"])
     pc = ControlClient(7878, profile / "control.token")
     entries = [m["label"] for m in pc.call("ui.menu.list") if m.get("path", [])[:2] == ["Filter", "Plug-ins"]]
-    print("Filter > Plug-ins:", entries)
-    ok = state["photocraft"]["connected"] and any(label.startswith("OpenFill Generative Fill") for label in entries)
+    print("Filter > Plug-ins:", [label.encode("ascii", "replace").decode() for label in entries])
+    ok = True
+    if not state["photocraft"].get("connected"):
+        print("FAIL: the page does not see PhotoCraft")
+        ok = False
+    if not any(label.startswith("OpenFill Generative Fill") for label in entries):
+        print("FAIL: no OpenFill entries in Filter > Plug-ins")
+        ok = False
 
     step("close PhotoCraft: OpenFill stops too")
     try:
