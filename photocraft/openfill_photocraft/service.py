@@ -40,6 +40,7 @@ class JobState:
     preview: bytes = b""
     preview_mime: str = ""
     preview_seq: int = 0
+    preview_rect: tuple[int, int, int, int] | None = None  # the region a preview frame shows (job's first canvas)
     cancel_requested: bool = False
     variations: list[str] = field(default_factory=list)  # names, best first
     shown: int = 0
@@ -58,6 +59,7 @@ class JobState:
                 "message": self.message,
                 "elapsed": round((self.finished or time.time()) - self.started, 1) if self.started else 0,
                 "previewSeq": self.preview_seq,
+                "previewRect": self.preview_rect,
                 "variations": list(self.variations),
                 "shown": self.shown,
                 "notices": list(self.notices[-5:]),
@@ -116,6 +118,7 @@ class Service:
         self.bridge = bridge
         self.state = JobState()
         bridge.notify = self._notice
+        bridge.on_region = self._region
         self.app = App(interactive=True, io=bridge, runner_cls=WebRunner)
         self.app.job_state = self.state
         self._find_comfy()
@@ -162,6 +165,10 @@ class Service:
             app.catalog = cat.merge_entries(entries, found)
         except Exception as err:  # noqa: BLE001 - the catalog stays as it was
             app.log.warning("models not rescanned: %s", err)
+
+    def _region(self, rect: tuple[int, int, int, int]) -> None:
+        with self.state.lock:
+            self.state.preview_rect = rect
 
     def _notice(self, text: str) -> None:
         with self.state.lock:
@@ -236,6 +243,7 @@ class Service:
             self.state.fraction, self.state.started, self.state.finished = 0.0, time.time(), 0.0
             self.state.cancel_requested, self.state.variations, self.state.shown = False, [], 0
             self.state.preview, self.state.preview_seq = b"", self.state.preview_seq + 1
+            self.state.preview_rect = None
         self._thread = threading.Thread(target=self._job, args=(kind, params), name="openfill-job", daemon=True)
         self._thread.start()
 

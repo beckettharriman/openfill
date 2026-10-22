@@ -662,7 +662,12 @@ class Bar:
                     self._say("Drag the frame's edges outward, or pick a ratio.", BAD)
                     return
                 body.update(prompt=prompt, negative="", left=left, top=top, right=right, bottom=bottom)
-                self.service.start("expand", body)
+                self.expand_view.begin_job()
+                try:
+                    self.service.start("expand", body)
+                except Exception:
+                    self.expand_view.end_job(False)
+                    raise
             else:
                 if not prompt:
                     self._say("Describe the image first.", BAD)
@@ -783,8 +788,9 @@ class Bar:
                 else "Select an area first: Marquee, Lasso or Object Selection."
             )
         else:
-            self.expand_view.set_image(doc["name"], int(doc["width"]), int(doc["height"]))
-            if self.expand_view.thumbnail is None and not self._thumb_busy and not self.service.busy():
+            if not self.expand_view.job_active:  # the canvas grows round by round while it runs
+                self.expand_view.set_image(doc["name"], int(doc["width"]), int(doc["height"]))
+            if self.expand_view.needs_thumbnail and not self._thumb_busy and not self.service.busy():
                 self._fetch_thumbnail(self.expand_view.image_key)
             text = f"{doc['name']}: drag the frame to the new canvas size."
         if self.context.cget("text") != text:
@@ -896,11 +902,11 @@ class Bar:
         self._last_state = st["state"]
 
     def _update_preview(self, st: dict[str, Any]) -> None:
-        in_editor = st["kind"] == "expand" and self.tab.get() == "expand" and not self.view
+        in_editor = self.expand_view.job_active
         if st["state"] != "running":
             self.preview.pack_forget()
-            if self.expand_view._preview is not None:
-                self.expand_view.show_preview(None)
+            if in_editor:
+                self.expand_view.end_job(st["state"] == "done")
             return
         if st["previewSeq"] == self._preview_seq:
             return
@@ -913,7 +919,8 @@ class Bar:
         if in_editor:  # the new area fills in where the frame was dragged
             try:
                 with Image.open(io.BytesIO(data)) as im:
-                    self.expand_view.show_preview(im.copy())
+                    rect = st.get("previewRect")
+                    self.expand_view.show_preview(im.copy(), tuple(rect) if rect else None)
             except Exception:  # noqa: BLE001 - a bad frame is skipped
                 pass
             self.preview.pack_forget()

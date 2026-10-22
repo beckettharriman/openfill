@@ -46,12 +46,20 @@ class ExpandView(ttk.Frame):
         self.bar = bar
         self.state = ue.ExpandState(1, 1, listener=self._changed)
         self.image_key: tuple = ()  # (document name, width, height) the state is for
+        self.needs_thumbnail = True
         self.thumbnail: Image.Image | None = None
         self._photo: tk.PhotoImage | None = None
         self._photo_size: tuple[int, int] = (0, 0)
         self._drag: tuple[str, float, float, ue.Margins, ue.View] | None = None
         self.zoom = 1.0
-        self._preview: tk.PhotoImage | None = None  # a running expand's live preview, drawn in place
+        self._preview: tk.PhotoImage | None = None  # unused (kept for the bar's checks)
+        # A running expand: the view the user left (frozen), and each round's latest frame with
+        # the region of the first canvas it shows.
+        self.job_view: ue.View | None = None
+        self.job_margins: ue.Margins | None = None
+        self.painted: dict[tuple[int, int, int, int], Image.Image] = {}
+        self._painted_photos: list[tk.PhotoImage] = []
+        self._keep_scale: float | None = None
 
         ratios = ttk.Frame(self)
         ratios.pack(fill="x")
@@ -95,15 +103,22 @@ class ExpandView(ttk.Frame):
         key = (name, int(width), int(height))
         if key == self.image_key:
             return
+        interim = self._composite(int(width), int(height)) if self._keep_scale else None
         self.image_key = key
-        self.thumbnail = None
+        self.thumbnail = interim  # the finished expand as previewed, until the real one is read
+        self.needs_thumbnail = True
         self._photo = None
         self.state = ue.ExpandState(int(width), int(height), listener=self._changed)
         self.zoom = 1.0
+        if self._keep_scale:  # the result where the frame was, at the size the user left it
+            self.zoom = max(0.2, min(5.0, self._keep_scale / self.base_scale()))
+            self._keep_scale = None
+            self.painted = {}
         self._changed()
 
     def set_thumbnail(self, image: Image.Image) -> None:
         self.thumbnail = image
+        self.needs_thumbnail = False
         self._photo = None
         self._draw()
 
@@ -146,6 +161,8 @@ class ExpandView(ttk.Frame):
 
     def view(self) -> ue.View:
         """What is drawn: the zoomed view, zoomed out further while the frame needs it."""
+        if self.job_view is not None:
+            return self.job_view
         if self._drag is not None:
             s, start = self.state, self._drag[4]
             v = ue.view_at(start.scale, start.ix, start.iy, s.image_w, s.image_h, s.margins)
@@ -158,26 +175,60 @@ class ExpandView(ttk.Frame):
         self.zoom = max(0.2, min(5.0, self.zoom * factor))
         self._draw()
 
-    def show_preview(self, image: Image.Image | None) -> None:
-        """A running expand's frames drawn where the editor is (None: back to the editor)."""
-        if image is None:
-            if self._preview is not None:
-                self._preview = None
-                self._draw()
-            return
-        from .bar import photo
+    @property
+    def job_active(self) -> bool:
+        return self.job_view is not None
 
-        frame = image.convert("RGB")
-        frame.thumbnail((AREA[0] - 8, AREA[1] - 8))
-        self._preview = photo(frame)
-        c = self.canvas
-        c.delete("all")
-        c.create_image(AREA[0] // 2, AREA[1] // 2, image=self._preview)
+    def begin_job(self) -> None:
+        """Freeze the view as the user left it while the expand runs."""
+        self.job_view = self.view()
+        self.job_margins = self.state.margins
+        self.painted = {}
+        self._draw()
+
+    def show_preview(self, image: Image.Image, rect: tuple[int, int, int, int] | None) -> None:
+        """A frame of the running expand, painted over the part of the frame it shows."""
+        if self.job_view is None:
+            return
+        if rect is None:  # no region known: the whole new canvas
+            m = self.job_margins or self.state.margins
+            rect = (-m.left, -m.top, self.state.image_w + m.left + m.right, self.state.image_h + m.top + m.bottom)
+        self.painted[tuple(rect)] = image.convert("RGB")
+        self._draw()
+
+    def end_job(self, finished: bool) -> None:
+        """Back to editing. A finished expand keeps its scale: the result shows where the frame was."""
+        if self.job_view is None:
+            return
+        if finished:
+            self._keep_scale = self.job_view.scale
+        else:
+            self.painted = {}
+        self.job_view = None
+        self.job_margins = None
+        self._draw()
+
+    def _composite(self, width: int, height: int) -> Image.Image | None:
+        """The new canvas as the previews showed it (the old thumbnail under the frames)."""
+        if not self.painted and self.thumbnail is None:
+            return None
+        m = self.job_margins or ue.Margins()
+        k = min(1.0, 420 / max(width, height))
+        out = Image.new("RGB", (max(1, round(width * k)), max(1, round(height * k))), (60, 60, 60))
+        ox, oy = m.left, m.top  # the old image's place in the new canvas (no crop in an expand)
+        if self.thumbnail is not None:
+            w0, h0 = self.state.image_w, self.state.image_h
+            thumb = self.thumbnail.convert("RGB").resize((max(1, round(w0 * k)), max(1, round(h0 * k))))
+            out.paste(thumb, (round(ox * k), round(oy * k)))
+        for (rx, ry, rw, rh), frame in self.painted.items():
+            part = frame.resize((max(1, round(rw * k)), max(1, round(rh * k))))
+            out.paste(part, (round((rx + ox) * k), round((ry + oy) * k)))
+        return out
 
     # pointer -------------------------------------------------------------------------
 
     def _press(self, event) -> None:
-        if self._preview is not None:
+        if self.job_view is not None:
             return
         handle = ue.hit_region(self.view(), event.x, event.y)
         if handle:
@@ -204,7 +255,7 @@ class ExpandView(ttk.Frame):
         self._draw()
 
     def _hover(self, event) -> None:
-        if self._drag is None and self._preview is None:
+        if self._drag is None and self.job_view is None:
             handle = ue.hit_region(self.view(), event.x, event.y)
             self.canvas.configure(cursor=TK_CURSORS.get(handle, ""))
 
@@ -221,8 +272,6 @@ class ExpandView(ttk.Frame):
         return self._photo
 
     def _draw(self) -> None:
-        if self._preview is not None:
-            return  # a job's preview is showing
         c = self.canvas
         c.delete("all")
         v, m = self.view(), self.state.margins
@@ -245,7 +294,18 @@ class ExpandView(ttk.Frame):
             if amount and w > 34 and h > 16:
                 text = f"+{amount}" if amount > 0 else f"-{-amount}"
                 c.create_text(x + w / 2, y + h / 2, text=text, fill="white", font=self.bar.small)
+        self._painted_photos = []
+        for (rx, ry, rw, rh), frame in self.painted.items():
+            sx, sy = v.ix + rx * v.scale, v.iy + ry * v.scale
+            sw, sh = max(1, round(rw * v.scale)), max(1, round(rh * v.scale))
+            from .bar import photo
+
+            image = photo(frame.resize((sw, sh), Image.BILINEAR))
+            self._painted_photos.append(image)
+            c.create_image(round(sx), round(sy), image=image, anchor="nw")
         c.create_rectangle(v.fx, v.fy, v.fx + v.fw, v.fy + v.fh, outline="white", dash=(6, 4), width=1.5)
+        if self.job_view is not None:
+            return  # no handles while it runs
         half = ue.HANDLE_PX / 2
         for _name, (hx, hy) in ue.handle_points(v).items():
             c.create_rectangle(hx - half, hy - half, hx + half, hy + half, fill="white", outline="#1a1a1a")

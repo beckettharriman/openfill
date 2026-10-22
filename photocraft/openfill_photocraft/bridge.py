@@ -80,6 +80,7 @@ class PCImage:
     pending_group: str = ""  # the group several pending variations go into
     selection: bytes | None = None  # the job's selection, canvas-sized 8-bit
     _snapshot: tuple[int, Image.Image, Image.Image | None] | None = None  # (revision, visible, selection)
+    shift: tuple[int, int] = (0, 0)  # where the job's original (0, 0) is now (an expand grows the canvas)
 
     def _inspect(self) -> dict:
         self.bridge.activate(self)
@@ -133,6 +134,7 @@ class PhotoCraftBridge:
         self.read_root = Path(read_root) if read_root else self.exchange
         self.profile = Path(profile)
         self.notify = notify or (lambda _text: None)
+        self.on_region: Callable[[tuple[int, int, int, int]], None] | None = None
         self._names = itertools.count(1)
         self._known_images: list[PCImage] = []
         self.exchange.mkdir(parents=True, exist_ok=True)
@@ -295,6 +297,8 @@ class PhotoCraftBridge:
         """(opaque RGBA PNG, raw RGBA) of ``rect``; outside the canvas is transparent before
         flattening over the mean colour, as GIMP does for an expand."""
         full, _selection = self._snapshot(image)
+        if self.on_region:  # where this round's preview frames belong, in the job's first canvas
+            self.on_region((rect.x - image.shift[0], rect.y - image.shift[1], rect.width, rect.height))
         crop = full.crop((rect.x, rect.y, rect.x + rect.width, rect.y + rect.height))
         flat = flatten_over_mean(crop.tobytes())
         return png.encode(rect.width, rect.height, flat, 4), flat
@@ -565,6 +569,7 @@ class PhotoCraftBridge:
         self.commit(image)
         self.activate(image)
         self.client.run("image.crop", x=-int(off_x), y=-int(off_y), width=int(new_w), height=int(new_h))
+        image.shift = (image.shift[0] + int(off_x), image.shift[1] + int(off_y))
         image._snapshot = None
         image.selection = None  # the job's selection was for the old canvas
 
