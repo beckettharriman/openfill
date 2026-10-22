@@ -406,6 +406,17 @@ class BridgeTests(unittest.TestCase):
         self.assertNotEqual(layer.id, old)
         self.assertNotIn(old, [r["id"] for r in self.target["layers"]])
 
+    def test_baked_results_are_read_by_the_next_pass_but_never_added(self):
+        self.bridge.export_region(self.image, Rect(0, 0, 64, 48))
+        self.bridge.insert_results(
+            self.image, [png_bytes("red")], Rect(0, 0, 64, 48), "Fill", 0.0, None, use_selection_mask=False
+        )
+        self.bridge.bake_pending(self.image)
+        _png, flat = self.bridge.export_region(self.image, Rect(0, 0, 4, 4))
+        self.assertEqual(flat[:3], bytes([255, 0, 0]))  # the next pass sees the baked pixels
+        self.bridge.finish(self.image)
+        self.assertEqual(self.target["history"], ["Open"])  # and nothing reached the document
+
     def test_resize_commits_first_and_is_an_extending_crop(self):
         self.bridge.insert_results(
             self.image, [png_bytes("red")], Rect(0, 0, 64, 48), "E", 0.0, None, use_selection_mask=False
@@ -546,6 +557,27 @@ class InstallTests(unittest.TestCase):
 
 
 class BarLogicTests(unittest.TestCase):
+    def test_removal_menu_puts_lama_plus_the_active_model_first(self):
+        try:
+            from openfill_photocraft.bar import removal_choices
+        except ImportError:
+            self.skipTest("no tkinter")
+        facts = {
+            "active": "realvisxl-v5",
+            "models": {
+                "remove": [("lama-big", "LaMa (big-lama)")],
+                "fill": [
+                    ("dreamshaper-8-inpainting", "DreamShaper 8 (SD 1.5)"),
+                    ("realvisxl-v5", "RealVisXL V5.0 (fp16)"),
+                ],
+            },
+        }
+        choices = removal_choices(facts)
+        self.assertEqual(next(iter(choices.items())), ("LaMa + RealVisXL V5.0 (best)", "refine:realvisxl-v5"))
+        self.assertEqual(choices["LaMa only (fast)"], "lama")
+        self.assertEqual(choices["DreamShaper 8 only"], "dreamshaper-8-inpainting")
+        self.assertNotIn("MAT only (fast)", choices)
+
     def test_expand_margins(self):
         try:
             from openfill_photocraft.bar import expand_margins

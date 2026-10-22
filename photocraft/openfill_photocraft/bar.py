@@ -119,6 +119,32 @@ def primary_monitor() -> tuple[int, int, int, int] | None:
     return best[1], best[2], best[3], best[4]
 
 
+def short_name(name: str) -> str:
+    """A model's name without its parenthesised details."""
+    return name.split(" (")[0].strip() or name
+
+
+def removal_choices(facts: dict[str, Any]) -> dict[str, str]:
+    """Remove object's model menu: label -> Service removal value, best first."""
+    models = facts.get("models") or {}
+    removers = {model_id for model_id, _name in models.get("remove", [])}
+    painters = [(i, n) for i, n in models.get("fill", []) if i not in removers]
+    active = facts.get("active") or ""
+    painters.sort(key=lambda m: m[0] != active)
+    out: dict[str, str] = {}
+    if removers:
+        for model_id, name in painters:
+            label = f"LaMa + {short_name(name)}" + (" (best)" if not out else "")
+            out[label] = f"refine:{model_id}"
+        if "lama-big" in removers:
+            out["LaMa only (fast)"] = "lama"
+        if "mat-places512" in removers:
+            out["MAT only (fast)"] = "mat"
+    for model_id, name in painters:
+        out[f"{short_name(name)} only"] = model_id
+    return out or {"The active model": "refine:active"}
+
+
 def expand_margins(width: int, height: int, preset: tuple[int, int] | None) -> tuple[int, int, int, int]:
     """(left, top, right, bottom) pixels that bring the canvas to ``preset``'s aspect ratio,
     split evenly; ``None`` adds 25% on every side."""
@@ -591,7 +617,7 @@ class Bar:
             self.hint.pack(anchor="w", pady=(4, 0), after=self.prompt_row)
         if key != "remove":
             self.options.pack(fill="x", pady=(8, 0))
-            self.model_row.pack(fill="x", pady=(6, 0))
+        self.model_row.pack(fill="x", pady=(8 if key == "remove" else 6, 0))
         self._fill_models()
         self._update_context()
 
@@ -654,7 +680,7 @@ class Bar:
                     prompt="" if kind == "remove" else prompt, remove=kind == "remove", strength=1.0, negative=""
                 )
                 if kind == "remove":
-                    body.update(variations=1, model="active")
+                    body.update(removal=self._model_ids.get(self.model_choice.get(), "refine:active"))
                 self.service.start("fill", body)
             elif kind == "expand":
                 left, top, right, bottom = self.expand_view.margins()
@@ -759,12 +785,17 @@ class Bar:
 
     def _fill_models(self) -> None:
         facts = self.refresher.get()
-        capability = {"fill": "fill", "remove": "remove", "expand": "expand", "txt2img": "txt2img"}[self.tab.get()]
-        entries = (facts.get("models") or {}).get(capability, [])
+        tab = self.tab.get()
         active = facts.get("active_name") or ""
-        first = f"{active} (active)" if active else "The active model"
-        names = [first] + [name for _id, name in entries]
-        self._model_ids = {first: "active", **{name: model_id for model_id, name in entries}}
+        if tab == "remove":
+            self._model_ids = removal_choices(facts)
+            names = list(self._model_ids)
+            first = names[0]
+        else:
+            entries = (facts.get("models") or {}).get(tab, [])
+            first = f"{active} (active)" if active else "The active model"
+            names = [first] + [name for _id, name in entries]
+            self._model_ids = {first: "active", **{name: model_id for model_id, name in entries}}
         if list(self.model_box["values"]) != names:
             self.model_box["values"] = names
         if self.model_choice.get() not in names:
