@@ -97,7 +97,7 @@ def main() -> int:
     if not state["photocraft"].get("connected"):
         print("FAIL: the page does not see PhotoCraft")
         ok = False
-    if not any(label.startswith("OpenFill Generative Fill") for label in entries):
+    if "OpenFill" not in entries:
         print("FAIL: no OpenFill entries in Filter > Plug-ins")
         ok = False
 

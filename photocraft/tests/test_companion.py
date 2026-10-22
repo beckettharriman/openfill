@@ -459,7 +459,7 @@ class MenuTests(unittest.TestCase):
     def test_watcher_reports_a_pick_and_removes_its_step(self):
         from openfill_photocraft import menu
 
-        state = {"history": ["Open", "Rectangular Marquee", "OpenFill Remove Object"], "revision": 3}
+        state = {"history": ["Open", "Rectangular Marquee", "OpenFill"], "revision": 3}
 
         class Client:
             def call(self, method, **params):
@@ -488,8 +488,8 @@ class MenuTests(unittest.TestCase):
 
         picks = []
         watcher = menu.Watcher(Client(), picks.append)
-        self.assertEqual(watcher.poll(), "remove")
-        self.assertEqual(picks, ["remove"])
+        self.assertEqual(watcher.poll(), "panel")
+        self.assertEqual(picks, ["panel"])
         self.assertEqual(state["history"], ["Open", "Rectangular Marquee"])
         self.assertEqual(watcher.snapshot()["selection"], [1, 2, 3, 4])
         self.assertIsNone(watcher.poll())  # nothing new

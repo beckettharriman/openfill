@@ -27,13 +27,10 @@ from typing import Any
 from .control import ControlClient, ControlError
 
 # (action, menu label). The label is also the name of the history step the entry leaves.
-ENTRIES = (
-    ("fill", "OpenFill Generative Fill…"),
-    ("remove", "OpenFill Remove Object"),
-    ("expand", "OpenFill Generative Expand…"),
-    ("txt2img", "OpenFill Text to Image…"),
-    ("panel", "OpenFill Panel"),
-)
+# One entry: everything else is in the OpenFill bar it opens.
+ENTRIES = (("panel", "OpenFill"),)
+# Entries earlier versions added (removed from a PhotoCraft that still has them).
+OLD_ACTIONS = ("fill", "remove", "expand", "txt2img")
 PLUGIN_PREFIX = "app.openfill."
 VERSION = "1.0.0"
 
@@ -146,6 +143,11 @@ def manifest(action: str, label: str) -> dict[str, Any]:
 def install(client: ControlClient) -> list[str]:
     """Add OpenFill's entries to Filter > Plug-ins (plug-ins last as long as the PhotoCraft
     process). The labels installed; empty when this PhotoCraft has no plug-ins."""
+    for action in OLD_ACTIONS:
+        try:
+            client.run("plugin.remove", id=PLUGIN_PREFIX + action)
+        except ControlError:
+            pass  # not installed
     done = []
     for action, label in ENTRIES:
         data = base64.b64encode(plugin_module(manifest(action, label))).decode("ascii")

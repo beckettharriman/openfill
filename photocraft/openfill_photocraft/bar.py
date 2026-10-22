@@ -149,6 +149,7 @@ class Refresher:
     def __init__(self, service: Service) -> None:
         self.service = service
         self.facts: dict[str, Any] = {}
+        self._hardware: str | None = None
         self.lock = threading.Lock()
         self.wake = threading.Event()
         threading.Thread(target=self._loop, name="openfill-bar-refresh", daemon=True).start()
@@ -200,6 +201,17 @@ class Refresher:
         if busy:
             facts["downloading"] = "; ".join(f"{r['name']}: {cat.row_status(r, current, pending)}" for r in busy)
         facts["starter_missing"] = [r["id"] for r in rows if r["id"] in STARTER and not r["installed"]]
+        for row in rows:
+            row["statusText"] = cat.row_status(row, current, pending)
+        facts["rows"] = rows
+        if self._hardware is None:
+            try:
+                from openfill import hardware
+
+                self._hardware = hardware.detect(app.models_root, app.server.url()).summary()
+            except Exception:  # noqa: BLE001 - only shown in the Models view
+                self._hardware = ""
+        facts["hardware"] = self._hardware
         return facts
 
 
@@ -212,6 +224,9 @@ class Bar:
         self.prefs = self._load_prefs()
         self.calls: queue.Queue = queue.Queue()  # actions from other threads
         self.refresher = Refresher(service)
+        self.wrap = WIDTH - 44
+        self.colors = {"BG": BG, "OK": OK, "BAD": BAD, "DIM": DIM, "TEXT": TEXT}
+        self.view = ""  # "", "models" or "settings"
         self.root = tk.Tk(className="OpenFill")
         self.root.title("OpenFill")
         self.root.configure(bg=BG)
@@ -299,6 +314,9 @@ class Bar:
         s.configure("Chip.TButton", padding=(8, 3), font=self.small, width=0)
         s.configure("ChipOn.TButton", padding=(8, 3), font=self.small, background=ACCENT, foreground="#ffffff", width=0)
         s.configure("TEntry", padding=6)
+        s.configure("TCheckbutton", background=BG, foreground=TEXT, indicatorbackground=PANEL, indicatorforeground=TEXT)
+        s.map("TCheckbutton", background=[("active", BG)], indicatorbackground=[("selected", ACCENT)])
+        s.configure("Vertical.TScrollbar", background=PANEL, troughcolor=BG, arrowcolor=DIM, bordercolor=BG)
         s.configure("TCombobox", padding=4, arrowcolor=TEXT)
         s.map("TCombobox", fieldbackground=[("readonly", PANEL)], foreground=[("readonly", TEXT)])
         s.configure("Horizontal.TProgressbar", background=ACCENT, troughcolor=PANEL, borderwidth=0, thickness=6)
@@ -308,7 +326,7 @@ class Bar:
 
     def _build(self) -> None:
         pad = {"padx": 14}
-        top = ttk.Frame(self.root)
+        top = self.top = ttk.Frame(self.root)
         top.pack(fill="x", pady=(10, 0), **pad)
         self.tab_buttons = {}
         for key, label in TABS:
@@ -317,11 +335,13 @@ class Bar:
             self.tab_buttons[key] = b
         ttk.Button(top, text="\u2013", style="Tab.TButton", command=self.collapse).pack(side="right")
         self._build_pill()
-        self.context = ttk.Label(self.root, style="Dim.TLabel", wraplength=WIDTH - 44, justify="left")
-        self.context.pack(fill="x", pady=(8, 0), **pad)
+        self.main = ttk.Frame(self.root)
+        self.main.pack(fill="x", **pad)
+        self.context = ttk.Label(self.main, style="Dim.TLabel", wraplength=WIDTH - 44, justify="left")
+        self.context.pack(fill="x", pady=(8, 0))
 
-        self.body = ttk.Frame(self.root)
-        self.body.pack(fill="x", pady=(6, 0), **pad)
+        self.body = ttk.Frame(self.main)
+        self.body.pack(fill="x", pady=(6, 0))
 
         # Fill and Create: the prompt
         self.prompt_row = ttk.Frame(self.body)
@@ -415,9 +435,15 @@ class Bar:
         self.footer.pack(side="bottom", fill="x", pady=(10, 10), **pad)
         self.status = ttk.Label(self.footer, style="Dim.TLabel")
         self.status.pack(side="left")
-        ttk.Button(self.footer, text="Models and settings", style="Chip.TButton", command=self.open_page).pack(
-            side="right"
-        )
+        self.view_buttons = {}
+        for key, label in (("settings", "Settings"), ("models", "Models")):
+            b = ttk.Button(self.footer, text=label, style="Chip.TButton", command=lambda k=key: self.select_view(k))
+            b.pack(side="right", padx=(6, 0))
+            self.view_buttons[key] = b
+        from .panels import ModelsView, SettingsView
+
+        self.models_view = ModelsView(self)
+        self.settings_view = SettingsView(self)
 
         self.root.bind("<Escape>", lambda _e: self.service.cancel() if self.service.busy() else None)
         self.select_tab("fill")
@@ -489,9 +515,11 @@ class Bar:
         self.root.attributes("-topmost", True)
         if action in dict(TABS):
             self.select_tab(action)
+        elif self.view:
+            self.select_tab(self.tab.get())
         if action == "remove":
             self.generate()
-        elif action in ("fill", "txt2img", ""):
+        elif action in ("fill", "txt2img", "", "panel"):
             self.root.focus_force()
             self.prompt.focus_set()
             self.prompt.select_range(0, "end")
@@ -513,7 +541,33 @@ class Bar:
                 "(or any OpenFill entry there).",
             )
 
+    def select_view(self, view: str) -> None:
+        """Models or Settings in place of the tab's controls (the same button again goes back)."""
+        if self.view == view:
+            self.select_tab(self.tab.get())
+            return
+        self.view = view
+        self.main.pack_forget()
+        for name, frame in (("models", self.models_view), ("settings", self.settings_view)):
+            frame.pack_forget()
+            self.view_buttons[name].configure(style="ChipOn.TButton" if name == view else "Chip.TButton")
+        for b in self.tab_buttons.values():
+            b.configure(style="Tab.TButton")
+        frame = self.models_view if view == "models" else self.settings_view
+        if view == "settings":
+            self.settings_view.load()
+        else:
+            self.models_view.update_view(self.refresher.get())
+            self.refresher.wake.set()
+        frame.pack(fill="both", expand=True, padx=14, pady=(10, 0), after=self.top)
+
     def select_tab(self, key: str) -> None:
+        if self.view:
+            self.view = ""
+            for name, frame in (("models", self.models_view), ("settings", self.settings_view)):
+                frame.pack_forget()
+                self.view_buttons[name].configure(style="Chip.TButton")
+            self.main.pack(fill="x", padx=14, after=self.top)
         self.tab.set(key)
         for k, b in self.tab_buttons.items():
             b.configure(style="TabOn.TButton" if k == key else "Tab.TButton")
@@ -670,7 +724,7 @@ class Bar:
             self.call_soon(self._say, str(err), BAD)
 
     def open_page(self) -> None:
-        webbrowser.open(self.page_url + "#models")
+        self.select_view("models")
 
     def _setup_action(self) -> None:
         facts = self.refresher.get()
@@ -801,6 +855,8 @@ class Bar:
             self.setup.pack(fill="x", padx=14, pady=(10, 0), before=self.footer)
         else:
             self.setup.pack_forget()
+        if self.view == "models":
+            self.models_view.update_view(facts)
         engine = self.service.engine
         if not facts:
             status = "Checking..."

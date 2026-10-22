@@ -81,7 +81,13 @@ class Scenario:
         return self.pc.run("layer.list", flat=True)["layers"]
 
     def menu_pick(self, action: str) -> None:
-        self.pc.call("ui.menu.invoke", id=f"plugin.filter.{menu.PLUGIN_PREFIX}{action}")
+        """Filter > Plug-ins > OpenFill, then the bar's tab (and Remove's button) as a user would."""
+        self.pc.call("ui.menu.invoke", id=f"plugin.filter.{menu.PLUGIN_PREFIX}panel")
+        self.wait_for(lambda: self.ui(lambda: self.bar.root.state() == "normal"))
+        if action != "panel":
+            self.ui(lambda: self.bar.tab_buttons[action].invoke())
+        if action == "remove":
+            self.ui(lambda: self.bar.go.invoke())
 
     def wait_job(self, timeout: float = 900) -> dict:
         t0 = time.time()
