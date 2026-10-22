@@ -254,7 +254,8 @@ class Bar:
         self.root.minsize(WIDTH, 120)
         self.root.maxsize(WIDTH, 4000)  # a fixed width; long texts wrap
         self.root.attributes("-topmost", True)  # dropped when tied to PhotoCraft (Windows)
-        self.root.protocol("WM_DELETE_WINDOW", self.hide)
+        self.root.protocol("WM_DELETE_WINDOW", self.collapse)  # closing folds it back to the strip
+        self.root.bind("<Unmap>", self._unmapped)
         self._small_icon = None
         try:
             self._icon = photo(icon_image())
@@ -602,6 +603,18 @@ class Bar:
                 window.geometry(f"+{window.winfo_x() + dx}+{window.winfo_y() + dy}")
                 self._placing = False
 
+    def _keep_on_screen(self) -> None:
+        """The bar grows (a job, a view): move it up rather than past the bottom of the screen."""
+        if self.collapsed or not self.root.winfo_viewable():
+            return
+        sh = self.root.winfo_screenheight()
+        bottom = self.root.winfo_y() + self.root.winfo_height()
+        limit = sh - 56  # above a taskbar
+        if bottom > limit:
+            self._placing = True
+            self.root.geometry(f"+{self.root.winfo_x()}+{max(0, limit - self.root.winfo_height())}")
+            self._placing = False
+
     def _moved(self, event) -> None:
         if event.widget is not self.root or self._placing or self.collapsed:
             return
@@ -609,6 +622,11 @@ class Bar:
             return  # the window being shown and placed, not moved by the user
         right, bottom = self._anchor()
         self.prefs["bar_off"] = [right - (self.root.winfo_x() + self.root.winfo_width()), bottom - self.root.winfo_y()]
+
+    def _unmapped(self, event) -> None:
+        """Minimizing the bar folds it back to the strip (not when PhotoCraft hides it)."""
+        if event.widget is self.root and not self.collapsed:
+            self.root.after(10, lambda: self.root.state() == "iconic" and self.collapse())
 
     def collapse(self) -> None:
         self.collapsed = True
@@ -958,6 +976,7 @@ class Bar:
         try:
             self._follow()
             self._update()
+            self._keep_on_screen()
         finally:
             self.root.after(250, self._tick)
 
