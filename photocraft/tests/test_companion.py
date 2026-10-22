@@ -501,8 +501,9 @@ class InstallTests(unittest.TestCase):
     def test_entry_starts_openfill(self):
         from openfill_photocraft import install
 
-        text = install.entry_for(Path("/home/u/.local/bin/openfill-photocraft"), self.ORIGINAL, False, "x")
-        self.assertIn('Exec="/home/u/.local/bin/openfill-photocraft" %F', text)
+        command = Path("/home/u/.local/bin/openfill-photocraft")
+        text = install.entry_for(command, self.ORIGINAL, False, "x")
+        self.assertIn(f'Exec="{command}" %F', text)
         self.assertNotIn("TryExec", text)
         self.assertNotIn("Desktop Action", text)
         self.assertNotIn("Actions=", text)

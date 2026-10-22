@@ -200,7 +200,10 @@ class PhotoCraftBridge:
 
     def open_file(self, path: str) -> dict:
         """Open an image the user picked (inside the read root) in PhotoCraft."""
-        rel = os.path.relpath(Path(path).resolve(), self.read_root.resolve())
+        try:
+            rel = os.path.relpath(Path(path).resolve(), self.read_root.resolve())
+        except ValueError:  # another drive (Windows)
+            rel = ".."
         if rel.startswith(".."):
             raise BridgeError(f"PhotoCraft may only open files in {self.read_root} for OpenFill")
         return self.client.call("app.open", path=rel) or {}
