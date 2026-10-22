@@ -200,6 +200,8 @@ def launch(
         *files,
     ]
     kwargs: dict = {"stdout": open(log, "ab"), "stderr": subprocess.STDOUT, "env": dict(os.environ)}  # noqa: SIM115
+    if Path(args[0]).is_file():
+        kwargs["cwd"] = str(Path(args[0]).resolve().parent)  # not OpenFill's folder: an update must replace it
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "DETACHED_PROCESS", 0)
     else:

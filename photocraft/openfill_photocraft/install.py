@@ -82,9 +82,14 @@ def copy_app(dest: Path) -> None:
                 break
     old = dest.with_name(dest.name + ".old")
     shutil.rmtree(old, ignore_errors=True)
-    if dest.exists():
-        dest.rename(old)
-    staging.rename(dest)
+    try:
+        if dest.exists():
+            dest.rename(old)
+        staging.rename(dest)
+    except OSError:
+        # Windows: a running program keeps the folder busy. Copy the new files over it instead.
+        shutil.copytree(staging, dest, dirs_exist_ok=True)
+        shutil.rmtree(staging, ignore_errors=True)
     shutil.rmtree(old, ignore_errors=True)
 
 
