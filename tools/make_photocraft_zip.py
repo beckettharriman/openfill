@@ -31,7 +31,7 @@ GIMP_ONLY = {
     "ui_picker.py",
     "ui_expand.py",
 }
-EXECUTABLE = {"openfill-photocraft.sh"}
+EXECUTABLE = {"openfill-photocraft.sh", "install.sh"}
 
 
 def version(root: Path = ROOT) -> str:
@@ -55,6 +55,7 @@ def files(root: Path = ROOT) -> list[tuple[Path, str]]:
         out.append((root / "models" / name, f"models/{name}"))
     for src, dest in (
         ("photocraft/openfill-photocraft.sh", "openfill-photocraft.sh"),
+        ("photocraft/install.sh", "install.sh"),
         ("photocraft/README.md", "README.md"),
     ):
         if (root / src).is_file():

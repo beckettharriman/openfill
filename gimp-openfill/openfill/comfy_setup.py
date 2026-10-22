@@ -233,6 +233,7 @@ def _candidate_paths(
         out.append((home / folder / "ComfyUI", "portable folder"))
     # A git checkout with a venv in the home folder (the usual place on macOS and Linux).
     out.append((home / "ComfyUI", "ComfyUI folder"))
+    out.append((home / "AI" / "ComfyUI", "ComfyUI folder"))
     # ComfyUI Desktop remembers where the user put its files.
     xdg_config = Path(env["XDG_CONFIG_HOME"]) if env.get("XDG_CONFIG_HOME") else home / ".config"
     xdg_data = Path(env["XDG_DATA_HOME"]) if env.get("XDG_DATA_HOME") else home / ".local" / "share"

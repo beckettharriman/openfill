@@ -3,14 +3,18 @@
 """PhotoCraft's side of OpenFill: the functions ``openfill.app.App`` calls on ``App.io``.
 
 It mirrors ``openfill.gimp_io`` over PhotoCraft's control channel. Pixels travel as
-PNG files through the folder PhotoCraft was given as its automation root:
+PNG files through the folder PhotoCraft was given as its automation root.
 
-- out: the visible image is duplicated as one merged layer and saved; the selection
-  is saved as a channel, duplicated into its own document and saved.
-- in: a result is written into a transparent PNG the size of the canvas at its
-  exact position, opened, copied and pasted in place, so it lands pixel-exact; its
-  mask is the saved selection (grown and feathered) or an explicit mask, loaded as a
-  selection and turned into a layer mask.
+The user's document is only read until a job's result is ready, and then changed in
+one step, so one Undo takes a fill back:
+
+- out: the document is duplicated as one merged layer and saved; the selection is
+  saved into that duplicate (not into the document) and saved from there.
+- in: results are kept here (``PCImage.pending``) while OpenFill still works on them
+  (seam correction, grain, ranking). They are then built in scratch documents (a
+  canvas-sized PNG per layer, so each lands pixel-exact, its mask and group) and
+  copied into the document with one ``layer.copyToDocument``. The clipboard is never
+  used.
 """
 
 from __future__ import annotations
@@ -32,25 +36,23 @@ from openfill.geometry import Rect, flatten_over_mean
 
 from .control import ControlClient, ControlError
 
-SELECTION_CHANNEL = "OpenFill selection"
-
 
 class BridgeError(RuntimeError):
     """PhotoCraft did not do what OpenFill asked."""
 
 
-@dataclass
+@dataclass(eq=False)
 class PCLayer:
-    """A layer OpenFill added: its id in PhotoCraft and the pixels it was given."""
+    """A layer OpenFill made: its pixels, and its id in PhotoCraft once it is in the document."""
 
-    id: int
+    id: int | None
     name: str
     origin: Rect
-    rgba: bytes  # origin-sized RGBA, as inserted
+    rgba: bytes  # origin-sized RGBA
     group: int | None = None
-    # How its mask was made, to rebuild it when the pixels are replaced (set_layer_rgba):
-    # "" none, "selection" (the saved selection grown by ``grow``), "pixels" (``mask``);
-    # both feathered by ``feather``.
+    visible: bool = True
+    # How its mask is made: "" none, "selection" (the job's selection grown by ``grow``),
+    # "pixels" (``mask``, origin-sized); both feathered by ``feather``.
     mask_kind: str = ""
     grow: int = 0
     feather: float = 0.0
@@ -66,14 +68,18 @@ class PCLayer:
         return self.origin.height
 
 
-@dataclass
+@dataclass(eq=False)
 class PCImage:
-    """The PhotoCraft document a job works on, found again by name before each step."""
+    """The PhotoCraft document a job works on, found again by its tab position and name."""
 
     bridge: PhotoCraftBridge
     name: str
-    saved_selection: bool = False
+    index: int | None = None
     layers: list[PCLayer] = field(default_factory=list)
+    pending: list[PCLayer] = field(default_factory=list)  # made, not yet in the document
+    pending_group: str = ""  # the group several pending variations go into
+    selection: bytes | None = None  # the job's selection, canvas-sized 8-bit
+    _snapshot: tuple[int, Image.Image, Image.Image | None] | None = None  # (revision, visible, selection)
 
     def _inspect(self) -> dict:
         self.bridge.activate(self)
@@ -86,7 +92,7 @@ class PCImage:
         return int(self._inspect()["height"])
 
     def undo_group_start(self) -> None:
-        """PhotoCraft records each command as its own history step."""
+        """Results reach the document in one step anyway (see the module docstring)."""
 
     def undo_group_end(self) -> None:
         pass
@@ -118,40 +124,58 @@ class PhotoCraftBridge:
         exchange_dir: Path,
         profile: Path,
         notify: Callable[[str], None] | None = None,
+        read_root: Path | None = None,
     ) -> None:
         self.client = client
-        self.exchange = Path(exchange_dir)  # PhotoCraft's automation read and write root
+        self.exchange = Path(exchange_dir)  # PhotoCraft's automation write root
+        # Its read root: the exchange folder, or a folder that holds it (the home folder, so the
+        # launcher can open images there too). Paths for app.open are relative to it.
+        self.read_root = Path(read_root) if read_root else self.exchange
         self.profile = Path(profile)
         self.notify = notify or (lambda _text: None)
         self._names = itertools.count(1)
+        self._known_images: list[PCImage] = []
         self.exchange.mkdir(parents=True, exist_ok=True)
 
     # session ------------------------------------------------------------------
 
+    def session(self) -> dict:
+        return self.client.call("ui.inspect").get("session") or {}
+
     def documents(self) -> list[dict]:
-        return list((self.client.call("ui.inspect").get("session") or {}).get("documents") or [])
+        return list(self.session().get("documents") or [])
 
     def active_image(self) -> PCImage | None:
-        session = self.client.call("ui.inspect").get("session") or {}
-        docs = session.get("documents") or []
+        session = self.session()
         active = session.get("active")
-        for d in docs:
+        for d in session.get("documents") or []:
             if d.get("index") == active:
-                return PCImage(self, str(d.get("name")))
+                return PCImage(self, str(d.get("name")), int(d["index"]))
         return None
 
-    def activate(self, image: PCImage) -> None:
-        session = self.client.call("ui.inspect").get("session") or {}
-        for d in session.get("documents") or []:
+    def _find(self, image: PCImage, session: dict | None = None) -> dict:
+        docs = (session or self.session()).get("documents") or []
+        for d in docs:  # where it was, if it is still there (two tabs may share a name)
+            if d.get("index") == image.index and d.get("name") == image.name:
+                return d
+        for d in docs:
             if d.get("name") == image.name:
-                if d.get("index") != session.get("active"):
-                    self.client.run("document.activate", document=d["index"])
-                return
+                image.index = int(d["index"])
+                return d
         raise BridgeError(f"the document '{image.name}' is no longer open in PhotoCraft")
+
+    def activate(self, image: PCImage) -> None:
+        session = self.session()
+        d = self._find(image, session)
+        if d.get("index") != session.get("active"):
+            self.client.run("document.activate", document=d["index"])
+
+    def _revision(self, image: PCImage) -> int:
+        return int(self._find(image).get("revision") or 0)
 
     def _file(self, stem: str) -> str:
         """A fresh name in the exchange folder (relative, as PhotoCraft wants it)."""
-        return f"openfill-{os.getpid()}-{next(self._names)}-{stem}.png"
+        return f"OpenFill {stem} {os.getpid()}-{next(self._names)}.png"
 
     def _read(self, rel: str) -> Image.Image:
         path = self.exchange / rel
@@ -162,10 +186,7 @@ class PhotoCraftBridge:
         with Image.open(path) as im:
             im.load()
             out = im.copy()
-        try:
-            path.unlink()
-        except OSError:
-            pass
+        self._forget(rel)
         return out
 
     def _write(self, image: Image.Image, stem: str) -> str:
@@ -173,10 +194,40 @@ class PhotoCraftBridge:
         image.save(self.exchange / rel, compress_level=1)
         return rel
 
+    def _open_path(self, rel: str) -> str:
+        """``rel`` (in the exchange folder) as app.open wants it: relative to the read root."""
+        return os.path.relpath(self.exchange / rel, self.read_root)
+
+    def open_file(self, path: str) -> dict:
+        """Open an image the user picked (inside the read root) in PhotoCraft."""
+        rel = os.path.relpath(Path(path).resolve(), self.read_root.resolve())
+        if rel.startswith(".."):
+            raise BridgeError(f"PhotoCraft may only open files in {self.read_root} for OpenFill")
+        return self.client.call("app.open", path=rel) or {}
+
     def _forget(self, rel: str) -> None:
         try:
             (self.exchange / rel).unlink()
         except OSError:
+            pass
+
+    def _open(self, image: Image.Image, stem: str) -> tuple[int, int]:
+        """Open ``image`` as a scratch document; (its index, its one layer's id)."""
+        rel = self._write(image, stem)
+        try:
+            self.client.call("app.open", path=self._open_path(rel))
+        finally:
+            self._forget(rel)
+        index = int(self.session().get("active"))
+        layers = (self.client.run("layer.list") or {}).get("layers") or []
+        if not layers:
+            raise BridgeError("PhotoCraft opened an empty document")
+        return index, int(layers[0]["id"])
+
+    def _close(self, index: int) -> None:
+        try:
+            self.client.run("file.close", document=index)
+        except ControlError:
             pass
 
     # the functions App calls ----------------------------------------------------
@@ -205,22 +256,42 @@ class PhotoCraftBridge:
         x, y, w, h = (int(v) for v in bounds)
         return Rect(x, y, w, h) if w > 0 and h > 0 else None
 
-    def _visible(self, image: PCImage) -> Image.Image:
-        """The visible image (all layers merged) as RGBA, the size of the canvas."""
+    def _snapshot(self, image: PCImage) -> tuple[Image.Image, Image.Image | None]:
+        """The visible image (RGBA) and the selection (L, or None), both canvas-sized, read
+        through one merged duplicate; the document itself is not changed. Kept until the
+        document changes."""
+        self.commit(image)
+        revision = self._revision(image)
+        if image._snapshot and image._snapshot[0] == revision:
+            return image._snapshot[1], image._snapshot[2]
         self.activate(image)
-        rel = self._file("visible")
+        has_selection = bool(self.client.run("document.inspect").get("hasSelection"))
         self.client.run("image.duplicate", name="OpenFill export", mergedOnly=True)
+        duplicate = int(self.session().get("active"))
+        visible_rel, mask_rel = self._file("visible"), self._file("mask")
+        mask_doc = None
         try:
-            self.client.call("app.save", path=rel)
+            self.client.call("app.save", path=visible_rel)
+            if has_selection:
+                self.activate(image)
+                self.client.run("select.saveSelection", name="OpenFill selection", document=duplicate)
+                self.client.run("document.activate", document=duplicate)
+                self.client.run("channel.duplicate", channel="OpenFill selection", document="new", name="OpenFill mask")
+                mask_doc = int(self.session().get("active"))
+                self.client.call("app.save", path=mask_rel)
         finally:
-            self.client.run("file.close")
+            for index in sorted((i for i in (duplicate, mask_doc) if i is not None), reverse=True):
+                self._close(index)
             self.activate(image)
-        return self._read(rel).convert("RGBA")
+        visible = self._read(visible_rel).convert("RGBA")
+        selection = self._read(mask_rel).convert("L") if mask_doc is not None else None
+        image._snapshot = (revision, visible, selection)
+        return visible, selection
 
     def export_region(self, image: PCImage, rect: Rect, transparent_outside: bool = False) -> tuple[bytes, bytes]:
         """(opaque RGBA PNG, raw RGBA) of ``rect``; outside the canvas is transparent before
         flattening over the mean colour, as GIMP does for an expand."""
-        full = self._visible(image)
+        full, _selection = self._snapshot(image)
         crop = full.crop((rect.x, rect.y, rect.x + rect.width, rect.y + rect.height))
         flat = flatten_over_mean(crop.tobytes())
         return png.encode(rect.width, rect.height, flat, 4), flat
@@ -229,22 +300,14 @@ class PhotoCraftBridge:
         return self.export_region(image, rect, transparent_outside)[0]
 
     def export_selection_mask(self, image: PCImage, rect: Rect) -> tuple[bytes, bytes]:
-        """(8-bit PNG, raw bytes) of the selection inside ``rect``; 255 = selected. The selection
-        is also kept as a channel so the result's mask uses exactly it, even if the user changes
-        the selection while the job runs."""
-        self.activate(image)
-        self._drop_selection_channel()
-        self.client.run("select.saveSelection", name=SELECTION_CHANNEL)
-        image.saved_selection = True
-        rel = self._file("mask")
-        self.client.run("channel.duplicate", channel=SELECTION_CHANNEL, document="new", name="OpenFill mask")
-        try:
-            self.client.call("app.save", path=rel)
-        finally:
-            self.client.run("file.close")
-            self.activate(image)
-        mask = self._read(rel).convert("L")
-        crop = mask.crop((rect.x, rect.y, rect.x + rect.width, rect.y + rect.height))
+        """(8-bit PNG, raw bytes) of the selection inside ``rect``; 255 = selected. The whole
+        selection is kept for the result's mask, so it is exactly this one even if the user
+        changes the selection while the job runs."""
+        full, selection = self._snapshot(image)
+        if selection is None:
+            selection = Image.new("L", full.size, 255)
+        image.selection = selection.tobytes()
+        crop = selection.crop((rect.x, rect.y, rect.x + rect.width, rect.y + rect.height))
         raw = crop.tobytes()
         return png.encode(rect.width, rect.height, raw, 1), raw
 
@@ -254,87 +317,7 @@ class PhotoCraftBridge:
     def mask_png_from_bytes(self, rect: Rect, pixels: bytes) -> bytes:
         return png.encode(rect.width, rect.height, pixels, 1)
 
-    def _drop_selection_channel(self) -> None:
-        try:
-            names = [
-                c.get("name") for c in (self.client.run("document.inspect").get("channels") or {}).get("alpha") or []
-            ]
-            while SELECTION_CHANNEL in names:
-                self.client.run("channel.delete", channel=SELECTION_CHANNEL)
-                names.remove(SELECTION_CHANNEL)
-        except ControlError:
-            pass
-
     # writing ------------------------------------------------------------------------
-
-    def _paste(self, image: PCImage, rgba: Image.Image, origin: Rect, above: int | None = None) -> int:
-        """Paste ``rgba`` at ``origin`` as a new layer (above layer ``above`` when given); its id."""
-        canvas = image._inspect()
-        full = Image.new("RGBA", (int(canvas["width"]), int(canvas["height"])), (0, 0, 0, 0))
-        full.paste(rgba, (origin.x, origin.y))
-        rel = self._write(full, "paste")
-        try:
-            target = above if above is not None else self._top_layer(image)
-            if target is not None:
-                self.client.run("layer.select", layer=target)
-            self.client.call("app.open", path=rel)
-            self.client.run("select.all")
-            self.client.run("edit.copy")
-            self.client.run("file.close")
-            self.activate(image)
-            if target is not None:
-                self.client.run("layer.select", layer=target)
-            result = self.client.run("edit.pasteSpecial.pasteInPlace") or {}
-        finally:
-            self._forget(rel)
-        layer = result.get("layer")
-        if layer is None:
-            raise BridgeError("PhotoCraft did not report the pasted layer")
-        return int(layer)
-
-    def _top_layer(self, image: PCImage) -> int | None:
-        """The topmost layer outside any group, so a paste lands on top of the stack."""
-        for row in self._flat_layers(image):
-            if not row.get("depth"):
-                return int(row["id"]) if row.get("id") is not None else None
-        return None
-
-    def _select_mask(self, image: PCImage, origin: Rect, mask: bytes) -> None:
-        """Make an explicit 8-bit mask (``origin``-sized) the selection: paste it as the
-        transparency of a temporary layer and load that."""
-        alpha = Image.frombytes("L", (origin.width, origin.height), mask)
-        rgba = Image.new("RGBA", alpha.size, (255, 255, 255, 0))
-        rgba.putalpha(alpha)
-        temp = self._paste(image, rgba, origin)
-        try:
-            self.client.run("select.loadSelection", channel="transparency", layer=temp)
-        finally:
-            self.client.run("layer.delete", layer=temp)
-
-    def _mask_layer(
-        self, image: PCImage, layer: int, origin: Rect, feather: float, grow: int, mask_pixels: bytes | None
-    ) -> None:
-        if mask_pixels is not None:
-            # Feathered here, not by PhotoCraft: a Gaussian blur that clamps at the canvas edges
-            # keeps the generated area fully opaque (the canvas PhotoCraft extended for an expand
-            # is filled with the background colour, which a soft edge would let through).
-            if feather > 0:
-                soft = Image.frombytes("L", (origin.width, origin.height), mask_pixels).filter(
-                    ImageFilter.GaussianBlur(float(feather) / 2)
-                )
-                mask_pixels = soft.tobytes()
-            self._select_mask(image, origin, mask_pixels)
-        else:
-            if image.saved_selection:
-                self.client.run("select.loadSelection", channel=SELECTION_CHANNEL)
-                if grow > 0:
-                    self.client.run("select.modify.expand", radius=int(grow), applyAtCanvasBounds=False)
-            else:
-                self.client.run("select.all")
-            if feather > 0:
-                self.client.run("select.modify.feather", radius=float(feather), applyAtCanvasBounds=False)
-        self.client.run("layer.select", layer=layer)
-        self.client.run("layer.layerMask.revealSelection", layer=layer)
 
     def insert_results(
         self,
@@ -351,14 +334,9 @@ class PhotoCraftBridge:
         scale_to_origin: bool = False,
     ) -> list[PCLayer]:
         """Generated PNGs as layers at ``origin`` with a mask (see ``gimp_io.insert_results``).
-        Several variations go into a group; only the first is visible. The user's selection is
-        put back afterwards."""
-        self.activate(image)
-        group = None
-        if group_variations and len(images) > 1:
-            group = (self.client.run("layer.new.group", name=base_name) or {}).get("layer")
-            if group is None:
-                group = self.client.run("document.inspect").get("activeLayer")
+        Several variations go into a group; only the first is visible. They reach the document
+        at the end of the job (``commit``)."""
+        self.commit(image)  # an earlier round's results come first
         layers: list[PCLayer] = []
         for index, data in enumerate(images):
             name = base_name if len(images) == 1 else f"{base_name} ({index + 1})"
@@ -366,70 +344,177 @@ class PhotoCraftBridge:
                 rgba = im.convert("RGBA")
             if scale_to_origin and rgba.size != (origin.width, origin.height):
                 rgba = rgba.resize((origin.width, origin.height), Image.LANCZOS)
-            layer_id = self._paste(image, rgba, origin)
-            self.client.run("layer.setProps", layer=layer_id, name=name, visible=index == 0)
-            if use_selection_mask:
-                self._mask_layer(image, layer_id, origin, feather, grow, mask_pixels)
-            if group is not None:
-                self.client.run("layer.moveTo", layer=layer_id, target=int(group), position="into")
             kind = "" if not use_selection_mask else ("pixels" if mask_pixels is not None else "selection")
-            layers.append(PCLayer(layer_id, name, origin, rgba.tobytes(), group, kind, grow, feather, mask_pixels))
-        self._restore_selection(image)
-        if layers:
-            self.client.run("layer.select", layer=layers[0].id)
+            layers.append(
+                PCLayer(None, name, origin, rgba.tobytes(), None, index == 0, kind, grow, feather, mask_pixels)
+            )
+        image.pending = layers
+        image.pending_group = base_name if group_variations and len(images) > 1 else ""
         image.layers.extend(layers)
         return layers
-
-    def _restore_selection(self, image: PCImage) -> None:
-        try:
-            if image.saved_selection:
-                self.client.run("select.loadSelection", channel=SELECTION_CHANNEL)
-            else:
-                self.client.run("select.deselect")
-        except ControlError:
-            pass
 
     def layer_rgba(self, layer: PCLayer) -> bytes:
         return layer.rgba
 
     def set_layer_rgba(self, layer: PCLayer, data: bytes) -> None:
-        """Replace a layer's pixels: paste the new ones above it, give them its mask, name,
-        visibility and group, then delete the old layer."""
+        """Replace a layer's pixels: here while it is pending; in the document, a copy with the
+        new pixels, its mask, name and visibility goes above it and the old one is deleted."""
+        layer.rgba = data
+        if layer.id is None:
+            return
         image = self._image_of(layer)
-        rgba = Image.frombytes("RGBA", (layer.origin.width, layer.origin.height), data)
-        info = next((row for row in self._flat_layers(image) if row.get("id") == layer.id), {})
-        new_id = self._paste(image, rgba, layer.origin, above=layer.id)
-        self.client.run("layer.setProps", layer=new_id, name=layer.name, visible=bool(info.get("visible", True)))
-        if layer.mask_kind:
-            self._mask_layer(
-                image,
-                new_id,
-                layer.origin,
-                layer.feather,
-                layer.grow,
-                layer.mask if layer.mask_kind == "pixels" else None,
-            )
+        scratch, _ids, top = self._build(image, [layer], "")
+        try:
+            self.activate(image)
+            self.client.run("layer.select", layer=layer.id)
+            copied = self._copy_in(image, scratch, top)
+        finally:
+            self._close(scratch)
+            self.activate(image)
         self.client.run("layer.delete", layer=layer.id)
-        self._restore_selection(image)
-        self.client.run("layer.select", layer=new_id)
-        layer.id, layer.rgba = new_id, data
+        layer.id = copied
+        self.client.run("layer.select", layer=copied)
+
+    def _mask_image(self, image: PCImage, layer: PCLayer, size: tuple[int, int]) -> Image.Image | None:
+        """The canvas-sized 8-bit mask ``layer`` gets before PhotoCraft grows or feathers it."""
+        if layer.mask_kind == "pixels" and layer.mask is not None:
+            mask = Image.frombytes("L", (layer.origin.width, layer.origin.height), layer.mask)
+            if layer.feather > 0:
+                # Feathered here, not by PhotoCraft: a Gaussian blur that clamps at the canvas
+                # edges keeps the generated area fully opaque (the canvas an expand extended is
+                # filled with the background colour, which a soft edge would let through).
+                mask = mask.filter(ImageFilter.GaussianBlur(float(layer.feather) / 2))
+            full = Image.new("L", size, 0)
+            full.paste(mask, (layer.origin.x, layer.origin.y))
+            return full
+        if layer.mask_kind == "selection":
+            if image.selection is not None and len(image.selection) == size[0] * size[1]:
+                return Image.frombytes("L", size, image.selection)
+            return Image.new("L", size, 255)
+        return None
+
+    def _build(self, image: PCImage, layers: list[PCLayer], group_name: str) -> tuple[int, list[int], int]:
+        """Build ``layers`` (top first) with masks, names and visibility in a scratch document
+        the size of the canvas; (its index, the layer ids there, the id to copy)."""
+        d = image._inspect()
+        size = (int(d["width"]), int(d["height"]))
+        scratch, ids = None, []
+        try:
+            for layer in reversed(layers):  # each copy lands above the last, so bottom first
+                full = Image.new("RGBA", size, (0, 0, 0, 0))
+                full.paste(
+                    Image.frombytes("RGBA", (layer.origin.width, layer.origin.height), layer.rgba),
+                    (layer.origin.x, layer.origin.y),
+                )
+                index, layer_id = self._open(full, "layer")
+                if scratch is None:
+                    scratch = index
+                    ids.insert(0, layer_id)
+                else:
+                    copied = self.client.run("layer.copyToDocument", document=scratch, source=index, layers=[layer_id])
+                    self._close(index)
+                    ids.insert(0, int((copied or {}).get("layers", [0])[0]))
+            assert scratch is not None
+            self.client.run("document.activate", document=scratch)
+            masks: dict[tuple, list[int]] = {}
+            for layer, layer_id in zip(layers, ids, strict=True):
+                key = (layer.mask_kind, layer.grow, layer.feather, id(layer.mask))
+                if layer.mask_kind:
+                    masks.setdefault(key, []).append(layer_id)
+            for (kind, grow, feather, _), targets in masks.items():
+                sample = next(layer for layer, i in zip(layers, ids, strict=True) if i == targets[0])
+                mask = self._mask_image(image, sample, size)
+                if mask is None:
+                    continue
+                rgba = Image.new("RGBA", size, (255, 255, 255, 0))
+                rgba.putalpha(mask)
+                mask_doc, mask_layer = self._open(rgba, "mask")
+                try:
+                    self.client.run("document.activate", document=scratch)
+                    for layer_id in targets:  # adding a mask uses the selection up, so load it for each
+                        self.client.run(
+                            "select.loadSelection", channel="transparency", layer=mask_layer, document=mask_doc
+                        )
+                        if kind == "selection":
+                            if grow > 0:
+                                self.client.run("select.modify.expand", radius=int(grow), applyAtCanvasBounds=False)
+                            if feather > 0:
+                                self.client.run(
+                                    "select.modify.feather", radius=float(feather), applyAtCanvasBounds=False
+                                )
+                        self.client.run("layer.layerMask.revealSelection", layer=layer_id)
+                finally:
+                    self._close(mask_doc)
+                    self.client.run("document.activate", document=scratch)
+            for layer, layer_id in zip(layers, ids, strict=True):
+                self.client.run("layer.setProps", layer=layer_id, name=layer.name, visible=layer.visible)
+            top = ids[0]
+            if group_name:
+                top = int((self.client.run("layer.new.group", name=group_name) or {}).get("layer"))
+                for layer_id in reversed(ids):  # "into" puts it at the top of the group
+                    self.client.run("layer.moveTo", layer=layer_id, target=top, position="into")
+            return scratch, ids, top
+        except BaseException:
+            if scratch is not None:
+                self._close(scratch)
+            raise
+
+    def _copy_in(self, image: PCImage, scratch: int, layer_id: int) -> int:
+        """Copy ``layer_id`` from the scratch document into ``image``, above its active layer:
+        one step in the document's history. The copy's id."""
+        target = self._find(image)
+        copied = self.client.run(
+            "layer.copyToDocument", document=int(target["index"]), source=scratch, layers=[layer_id]
+        )
+        ids = (copied or {}).get("layers") or []
+        if not ids:
+            raise BridgeError("PhotoCraft did not report the copied layer")
+        return int(ids[0])
+
+    def commit(self, image: PCImage) -> None:
+        """Put the pending results into the document in one step, on top of the stack."""
+        layers, group_name = image.pending, image.pending_group
+        if not layers:
+            return
+        image.pending, image.pending_group = [], ""
+        scratch, _ids, top = self._build(image, layers, group_name)
+        try:
+            self.activate(image)
+            top_layer = self._top_layer(image)
+            if top_layer is not None:
+                self.client.run("layer.select", layer=top_layer)  # not a history step
+            copied = self._copy_in(image, scratch, top)
+        finally:
+            self._close(scratch)
+            self.activate(image)
+        if group_name:
+            rows = [row for row in self._flat_layers(image) if row.get("parent") == copied]
+            if len(rows) != len(layers):
+                raise BridgeError("the copied group does not hold the variations")
+            for layer, row in zip(layers, rows, strict=True):
+                layer.id, layer.group = int(row["id"]), copied
+        else:
+            layers[0].id = copied
+        self.client.run("layer.select", layer=layers[0].id)
+        image._snapshot = None
+
+    def _top_layer(self, image: PCImage) -> int | None:
+        """The topmost layer outside any group, so a result lands on top of the stack."""
+        for row in self._flat_layers(image):
+            if not row.get("depth"):
+                return int(row["id"]) if row.get("id") is not None else None
+        return None
 
     def _image_of(self, layer: PCLayer) -> PCImage:
-        for image in self._images:
+        for image in self._known_images:
             if layer in image.layers:
                 return image
         raise BridgeError("layer of an unknown document")
 
-    @property
-    def _images(self) -> list[PCImage]:
-        return getattr(self, "_known_images", [])
-
     def track(self, image: PCImage) -> PCImage:
         """Remember ``image`` so its layers can be found again (``set_layer_rgba``)."""
-        known = getattr(self, "_known_images", [])
-        if image not in known:
-            known.append(image)
-        self._known_images = known
+        if image not in self._known_images:
+            self._known_images.append(image)
         return image
 
     def _flat_layers(self, image: PCImage) -> list[dict]:
@@ -444,29 +529,41 @@ class PhotoCraftBridge:
         if len(layers) < 2 or order == list(range(len(layers))):
             return layers
         ordered = [layers[i] for i in order]
+        for position, layer in enumerate(ordered):
+            layer.name, layer.visible = f"{base_name} ({position + 1})", position == 0
+        if all(layer.id is None for layer in ordered):
+            image.pending = [layer for layer in ordered if layer in image.pending] or image.pending
+            return ordered
         self.activate(image)
         for layer in reversed(ordered):
             if layer.group is not None:
                 self.client.run("layer.moveTo", layer=layer.id, target=int(layer.group), position="into")
             else:
                 self.client.run("layer.arrange.bringToFront", layer=layer.id)
-        for position, layer in enumerate(ordered):
-            layer.name = f"{base_name} ({position + 1})"
-            self.client.run("layer.setProps", layer=layer.id, name=layer.name, visible=position == 0)
+        for layer in ordered:
+            self.client.run("layer.setProps", layer=layer.id, name=layer.name, visible=layer.visible)
         self.client.run("layer.select", layer=ordered[0].id)
         return ordered
 
     def show_variation(self, image: PCImage, layers: list[PCLayer], index: int) -> None:
-        """The variations picker: only ``layers[index]`` visible."""
+        """The variations picker: only ``layers[index]`` visible (two steps, not one per layer)."""
+        self.commit(image)
         self.activate(image)
         for i, layer in enumerate(layers):
-            self.client.run("layer.setProps", layer=layer.id, visible=i == index)
-        self.client.run("layer.select", layer=layers[index].id)
+            want = i == index
+            if layer.visible != want and layer.id is not None:
+                self.client.run("layer.setProps", layer=layer.id, visible=want)
+                layer.visible = want
+        if layers[index].id is not None:
+            self.client.run("layer.select", layer=layers[index].id)
 
     def resize_canvas(self, image: PCImage, new_w: int, new_h: int, off_x: int, off_y: int) -> None:
         """Grow or crop the canvas; ``off_x``/``off_y`` is where the old (0, 0) lands."""
+        self.commit(image)
         self.activate(image)
         self.client.run("image.crop", x=-int(off_x), y=-int(off_y), width=int(new_w), height=int(new_h))
+        image._snapshot = None
+        image.selection = None  # the job's selection was for the old canvas
 
     def clip_layers_to_canvas(self, image: PCImage) -> None:
         """PhotoCraft's crop already cuts the layers (deleteCroppedPixels)."""
@@ -482,33 +579,44 @@ class PhotoCraftBridge:
             rel = f"{stem} {next(self._names)}.png"
         first.save(self.exchange / rel, compress_level=1)
         try:
-            opened = self.client.call("app.open", path=rel) or {}
+            opened = self.client.call("app.open", path=self._open_path(rel)) or {}
         finally:
             self._forget(rel)
-        image = self.track(PCImage(self, str(opened.get("name") or rel)))
-        try:
-            base = self.client.run("document.inspect").get("activeLayer")
-            if base is not None:
-                self.client.run(
-                    "layer.setProps", layer=base, name=base_name if len(images) == 1 else f"{base_name} (1)"
-                )
-        except ControlError:
-            pass
-        for index, data in enumerate(images[1:], start=2):
+        index = int(self.session().get("active"))
+        image = self.track(PCImage(self, str(opened.get("name") or rel), index))
+        base = (self.client.run("document.inspect") or {}).get("activeLayer")
+        if base is not None:
+            self.client.run("layer.setProps", layer=base, name=base_name if len(images) == 1 else f"{base_name} (1)")
+        for number, data in enumerate(images[1:], start=2):
             with Image.open(_io.BytesIO(data)) as im:
                 rgba = im.convert("RGBA")
-            layer = self._paste(image, rgba, Rect(0, 0, rgba.width, rgba.height))
-            self.client.run("layer.setProps", layer=layer, name=f"{base_name} ({index})", visible=False)
+            extra = PCLayer(
+                None, f"{base_name} ({number})", Rect(0, 0, rgba.width, rgba.height), rgba.tobytes(), visible=False
+            )
+            scratch, _ids, top = self._build(image, [extra], "")
+            try:
+                self.activate(image)
+                self._copy_in(image, scratch, top)
+            finally:
+                self._close(scratch)
+                self.activate(image)
+        if base is not None:
+            self.client.run("layer.select", layer=base)
         return image
 
     def finish(self, image: PCImage) -> None:
-        """End of a job: drop the saved selection channel (the selection itself stays)."""
+        """End of a job: the results go into the document (a failed job leaves it untouched)."""
         try:
-            self.activate(image)
-            self._drop_selection_channel()
-            image.saved_selection = False
-        except (ControlError, BridgeError):
-            pass
+            self.commit(image)
+        finally:
+            image.selection = None
+            image._snapshot = None
+
+    def discard(self, image: PCImage) -> None:
+        """A failed or cancelled job: forget results that never reached the document."""
+        image.pending, image.pending_group = [], ""
+        image.selection = None
+        image._snapshot = None
 
 
 def default_profile() -> Path:

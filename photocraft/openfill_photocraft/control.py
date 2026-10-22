@@ -12,14 +12,23 @@ import json
 import socket
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 IDLE_RECONNECT_S = 20.0  # below the app's 30 s idle limit
+# PhotoCraft runs requests from its frame loop. On Wayland a window that is fully covered or
+# on a sleeping display draws no frames, so a request waits and is dropped after 60 s with
+# "timeout: not run", which is safe to send again. Keep trying this long.
+NOT_RUN_PATIENCE_S = 30 * 60.0
 
 
 class ControlError(RuntimeError):
     """PhotoCraft refused a request or could not be reached."""
+
+
+class _NotRun(Exception):
+    """PhotoCraft dropped the request before running it (safe to send again)."""
 
 
 class ControlClient:
@@ -32,6 +41,7 @@ class ControlClient:
         self._lock = threading.Lock()
         self._next_id = 0
         self._last = 0.0
+        self.on_wait: Callable[[bool], None] | None = None  # told when PhotoCraft stops and resumes answering
 
     # connection -----------------------------------------------------------
 
@@ -75,6 +85,26 @@ class ControlClient:
 
     def call(self, method: str, **params: Any) -> Any:
         """Run one control method and return its ``result``; raises ``ControlError``."""
+        waited_since = None
+        try:
+            while True:
+                try:
+                    return self._call_once(method, params)
+                except _NotRun:
+                    now = time.monotonic()
+                    if waited_since is None:
+                        waited_since = now
+                        if self.on_wait:
+                            self.on_wait(True)
+                    if now - waited_since > NOT_RUN_PATIENCE_S:
+                        raise ControlError(
+                            f"{method}: PhotoCraft did not answer for {NOT_RUN_PATIENCE_S / 60:.0f} minutes"
+                        ) from None
+        finally:
+            if waited_since is not None and self.on_wait:
+                self.on_wait(False)
+
+    def _call_once(self, method: str, params: dict[str, Any]) -> Any:
         with self._lock:
             for attempt in (1, 2):
                 if self._sock is None or time.monotonic() - self._last > IDLE_RECONNECT_S:
@@ -88,7 +118,10 @@ class ControlClient:
                         raise ControlError(f"lost the connection to PhotoCraft: {err}") from err
                     continue
                 if not reply.get("ok"):
-                    raise ControlError(f"{method}: {reply.get('error')}")
+                    error = str(reply.get("error"))
+                    if error.startswith("timeout: not run"):
+                        raise _NotRun(error)
+                    raise ControlError(f"{method}: {error}")
                 return reply.get("result")
         raise ControlError(f"{method}: no reply")
 

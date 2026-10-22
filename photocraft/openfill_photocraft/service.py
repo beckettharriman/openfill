@@ -125,16 +125,22 @@ class Service:
         self.app.server.watch_pid = os.getpid()
         self.app.server.watch_name = process_name(os.getpid()) or "python"
         self._thread: threading.Thread | None = None
+        self.watcher = None  # menu.Watcher, set by the launcher: keeps the document's facts current
         self.image: PCImage | None = None
         self.layers: list[PCLayer] = []
 
     def _find_comfy(self) -> None:
-        """First start: use a ComfyUI already on this computer (as the GIMP plug-in's notice does)."""
+        """First start: use the ComfyUI OpenFill for GIMP uses, or one already on this computer."""
         from openfill.comfy_setup import detect_comfy
         from openfill.config import comfy_layout
 
         if comfy_layout(self.app.settings.comfy_dir) is not None:
             return
+        for folder in gimp_comfy_dirs():
+            if comfy_layout(folder) is not None:
+                self.app.use_comfy_dir(folder)
+                self.app.log.info("using the ComfyUI OpenFill for GIMP uses: %s", folder)
+                return
         found = detect_comfy()
         if found:
             self.app.use_comfy_dir(str(found[0].path))
@@ -150,6 +156,8 @@ class Service:
 
     def photocraft(self) -> dict[str, Any]:
         """The active document and its selection, or why there is none."""
+        if self.watcher is not None:
+            return self.watcher.snapshot()
         try:
             image = self.bridge.active_image()
             if image is None:
@@ -250,11 +258,16 @@ class Service:
                 layers = []
             else:
                 raise RuntimeError(f"unknown job {kind}")
+            done_text = self.state.text or "Done"
+            if image is not None:
+                with self.state.lock:
+                    self.state.text = "Adding the result to PhotoCraft..."
+                self.bridge.finish(image)  # the results reach the document here, in one step
             self.layers = list(layers or [])
             with self.state.lock:
                 self.state.state = "done"
                 self.state.fraction = 1.0
-                self.state.message = self.state.text or "Done"
+                self.state.text = self.state.message = done_text
                 self.state.variations = [layer.name for layer in self.layers] if len(self.layers) > 1 else []
                 self.state.shown = 0
         except BaseException as err:  # noqa: BLE001 - reported on the page
@@ -265,7 +278,7 @@ class Service:
                 self.state.message = "Cancelled - the image was left unchanged." if cancelled else describe_error(err)
         finally:
             if image is not None:
-                self.bridge.finish(image)
+                self.bridge.discard(image)  # whatever did not reach the document is dropped
             with self.state.lock:
                 self.state.finished = time.time()
 
@@ -281,14 +294,47 @@ class Service:
         if not self.image or not self.layers:
             return
         shown = self.state.shown
-        doomed = [
-            layer for i, layer in enumerate(self.layers) if which == "none" or (which == "selected" and i != shown)
-        ]
-        for layer in doomed:
+        group = self.layers[0].group
+        if which == "none" and group is not None and all(layer.group == group for layer in self.layers):
+            doomed_ids = [group]  # the variations' group, in one step
+        else:
+            doomed_ids = [
+                layer.id
+                for i, layer in enumerate(self.layers)
+                if layer.id is not None and (which == "none" or (which == "selected" and i != shown))
+            ]
+        for layer_id in doomed_ids:
             try:
-                self.client.run("layer.delete", layer=layer.id)
+                self.client.run("layer.delete", layer=layer_id)
             except ControlError:
                 pass
         self.layers = [] if which != "all" else self.layers
         with self.state.lock:
             self.state.variations = []
+
+
+def gimp_comfy_dirs() -> list[str]:
+    """ComfyUI folders set in OpenFill for GIMP's settings (newest GIMP first)."""
+    import json
+    import os
+    import sys
+    from pathlib import Path
+
+    home = Path.home()
+    if sys.platform == "win32":
+        bases = [Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming") / "GIMP"]
+    elif sys.platform == "darwin":
+        bases = [home / "Library" / "Application Support" / "GIMP"]
+    else:
+        config = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+        bases = [config / "GIMP", home / ".var" / "app" / "org.gimp.GIMP" / "config" / "GIMP"]
+    found = []
+    for base in bases:
+        for cfg in sorted(base.glob("*/openfill/config.json"), reverse=True):
+            try:
+                folder = json.loads(cfg.read_text(encoding="utf-8")).get("comfy_dir")
+            except (OSError, ValueError):
+                continue
+            if isinstance(folder, str) and folder and folder not in found:
+                found.append(folder)
+    return found

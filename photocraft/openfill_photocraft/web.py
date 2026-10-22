@@ -42,6 +42,7 @@ class Api:
     def __init__(self, service: Service) -> None:
         self.service = service
         self.key = secrets.token_urlsafe(24)
+        self.on_show = None  # brings the OpenFill bar up (set by the launcher)
 
     # GET ------------------------------------------------------------------------------
 
@@ -88,6 +89,12 @@ class Api:
         if path in ("/api/fill", "/api/expand", "/api/txt2img"):
             svc.start(path.rsplit("/", 1)[1], body)
             return {"started": True}
+        if path == "/api/show":
+            if self.on_show:
+                self.on_show(str(body.get("action") or "panel"))
+            return {"ok": True}
+        if path == "/api/open":
+            return svc.bridge.open_file(str(body["path"]))
         if path == "/api/cancel":
             svc.cancel()
             return {"ok": True}
@@ -173,6 +180,8 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
             try:
                 if path in ("/", "/index.html"):
                     self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+                elif path == "/api/ping":
+                    self._json(200, {"ok": True, "version": __version__})
                 elif path == "/api/state":
                     self._json(200, api.state())
                 elif path == "/api/models":

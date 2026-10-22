@@ -47,12 +47,18 @@ def api(path: str, body: dict | None = None) -> dict:
 
 def job(kind: str, body: dict, timeout: float = 900) -> dict:
     t0 = time.time()
+    before = pc.run("document.inspect")["history"] if pc.call("ui.inspect")["session"]["documents"] else []
+    docs_before = len(pc.call("ui.inspect")["session"]["documents"])
     api(f"/api/{kind}", body)
     seqs = set()
     while time.time() - t0 < timeout:
         st = api("/api/state")["job"]
         seqs.add(st["previewSeq"])
         if st["state"] != "running":
+            after = pc.run("document.inspect")["history"]
+            # what the job added to the document's history (one step is the goal)
+            st["history"] = after[len(before) :] if after[: len(before)] == before else after
+            st["documents_added"] = len(pc.call("ui.inspect")["session"]["documents"]) - docs_before
             st["seconds"] = round(time.time() - t0, 1)
             st["previewFrames"] = len(seqs) - 1
             return st
@@ -137,6 +143,8 @@ def main() -> int:
     record(
         "expand",
         state=st["state"],
+        history=st["history"],
+        documents_added=st["documents_added"],
         message=st["message"],
         seconds=st["seconds"],
         previews=st["previewFrames"],
@@ -166,6 +174,8 @@ def main() -> int:
     record(
         "fill-3-variations",
         state=st["state"],
+        history=st["history"],
+        documents_added=st["documents_added"],
         message=st["message"],
         seconds=st["seconds"],
         previews=st["previewFrames"],
@@ -183,7 +193,15 @@ def main() -> int:
     # 3. remove object on an ellipse (LaMa)
     pc.run("select.rect", x=250, y=680, width=960, height=480, ellipse=True)
     st = job("fill", {"prompt": "", "remove": True, "variations": 1, "strength": 1, "seed": 3, "model": "active"})
-    record("remove", state=st["state"], message=st["message"], seconds=st["seconds"], top=layers()[0]["name"])
+    record(
+        "remove",
+        state=st["state"],
+        history=st["history"],
+        documents_added=st["documents_added"],
+        message=st["message"],
+        seconds=st["seconds"],
+        top=layers()[0]["name"],
+    )
     export(out, "3-remove")
     shot(out, "3-remove")
 
@@ -204,6 +222,8 @@ def main() -> int:
     record(
         "txt2img-layer",
         state=st["state"],
+        history=st["history"],
+        documents_added=st["documents_added"],
         message=st["message"],
         seconds=st["seconds"],
         top=(layers()[0]["name"], layers()[0].get("bounds")),
@@ -224,6 +244,8 @@ def main() -> int:
     record(
         "txt2img-image",
         state=st["state"],
+        history=st["history"],
+        documents_added=st["documents_added"],
         message=st["message"],
         seconds=st["seconds"],
         documents=docs,
