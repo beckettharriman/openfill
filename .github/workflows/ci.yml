@@ -44,3 +44,27 @@ jobs:
         run: |
           python -m pip install --quiet pillow
           python -m unittest photocraft/tests/test_companion.py -v
+
+  photocraft-windows-smoke:
+    # The PhotoCraft companion against a real PhotoCraft on Windows: its .msi, then
+    # "Install OpenFill for PhotoCraft.cmd", start, Filter menu entries, quit, uninstall.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PhotoCraft
+        shell: pwsh
+        run: |
+          gh release download v0.12.0 -R storytold/photocraft -p 'photocraft-0.12.0-windows-x64.msi' -D $env:RUNNER_TEMP
+          $msi = Join-Path $env:RUNNER_TEMP 'photocraft-0.12.0-windows-x64.msi'
+          Start-Process msiexec.exe -Wait -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart'
+          Get-ItemProperty 'HKLM:\Software\PhotoCraft' | Select-Object InstallDir
+      - name: Smoke test
+        run: |
+          python -m pip install --quiet pillow
+          python photocraft/e2e/smoke_install.py

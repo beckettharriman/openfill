@@ -103,6 +103,7 @@ def write_command(app: Path, python: str) -> Path:
     uninstall = bin_dir() / "openfill-photocraft-uninstall"
     uninstall.write_text(
         "#!/bin/sh\n"
+        "# Removes OpenFill for PhotoCraft (written by its installer)\n"
         f'export PYTHONPATH="{app}${{PYTHONPATH:+:$PYTHONPATH}}"\n'
         f'exec "{python}" -m openfill_photocraft.install --uninstall "$@"\n',
         encoding="utf-8",
@@ -413,7 +414,7 @@ def uninstall(with_photocraft: bool = False) -> int:
             print(f"put back {entry}")
     for name in ("openfill-photocraft", "openfill-photocraft-uninstall"):
         path = bin_dir() / name
-        if path.is_file() and "OpenFill" in path.read_text(encoding="utf-8", errors="replace"):
+        if path.is_file() and "openfill" in path.read_text(encoding="utf-8", errors="replace").lower():
             path.unlink()
     shutil.rmtree(share_dir() / "app", ignore_errors=True)
     downloaded = sorted(share_dir().glob("photocraft-*"))

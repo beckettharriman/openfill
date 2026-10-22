@@ -329,6 +329,9 @@ class Bar:
         self.prompt.pack(side="left", fill="x", expand=True)
         self.prompt.bind("<Return>", lambda _e: self.generate())
         self.prompt.bind("<KP_Enter>", lambda _e: self.generate())
+        self.prompt.bind("<Up>", lambda _e: self._recall(1))
+        self.prompt.bind("<Down>", lambda _e: self._recall(-1))
+        self._recall_at = -1
         self.go = ttk.Button(self.prompt_row, text="Generate", style="Accent.TButton", command=self.generate)
         self.go.pack(side="left", padx=(8, 0))
         self.hint = ttk.Label(self.body, style="Dim.TLabel", wraplength=WIDTH - 44, justify="left")
@@ -634,7 +637,25 @@ class Bar:
             return
         self._say("")
         self._thumbs_for = ()
+        self._remember(prompt)
         self._save_prefs()
+
+    def _remember(self, prompt: str) -> None:
+        if prompt:
+            past = [p for p in self.prefs.get("prompts", []) if p != prompt]
+            self.prefs["prompts"] = [prompt, *past][:30]
+        self._recall_at = -1
+
+    def _recall(self, step: int) -> str:
+        """Up and Down in the prompt go through the earlier prompts."""
+        past = self.prefs.get("prompts", [])
+        if not past:
+            return "break"
+        self._recall_at = max(-1, min(len(past) - 1, self._recall_at + step))
+        self.prompt.delete(0, "end")
+        if self._recall_at >= 0:
+            self.prompt.insert(0, past[self._recall_at])
+        return "break"
 
     def keep(self, which: str) -> None:
         threading.Thread(target=self._safe, args=(self.service.keep, which), daemon=True).start()
