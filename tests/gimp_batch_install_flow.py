@@ -1,6 +1,6 @@
 # OpenFill - generative fill for GIMP 3
-# Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Beckett Harriman
+# SPDX-License-Identifier: Apache-2.0
 """Fresh-PC walk-through, executed INSIDE a GUI GIMP 3.2 with an empty profile
 (python-fu-eval batch interpreter). Not a unit test.
 

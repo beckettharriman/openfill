@@ -1,6 +1,6 @@
 # OpenFill - generative fill for GIMP 3
-# Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Beckett Harriman
+# SPDX-License-Identifier: Apache-2.0
 """Backend interface shared by the ComfyUI and AUTOMATIC1111 implementations.
 
 The GIMP side only ever talks to a :class:`Backend`; it never knows which

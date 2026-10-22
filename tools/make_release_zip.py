@@ -1,11 +1,11 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """Build the OpenFill release zip: what a user unzips and drops into GIMP.
 
     python tools/make_release_zip.py [--out dist] [--version 2.0.0-beta.2]
 
 ``openfill-<version>.zip`` holds ``gimp-openfill/`` at its top level. That folder
 is complete on its own (plug-in code, ``models/catalog.json``,
-``models/comfy_setup.json``, README, COPYING): copying it into GIMP's plug-ins
+``models/comfy_setup.json``, README, LICENSE): copying it into GIMP's plug-ins
 folder is the whole install. Next to it sit the optional installer scripts and
 documents. Tests, screenshots and evidence are left out.
 """
@@ -26,7 +26,7 @@ FILES = (
     "install.ps1",
     "install.sh",
     "README.md",
-    "COPYING",
+    "LICENSE",
     "CHANGELOG.md",
     "SECURITY.md",
     "models/catalog.json",
@@ -36,7 +36,7 @@ FILES = (
 )
 PLUGIN_DIR = "gimp-openfill"
 # Copies placed inside the plug-in folder so it works wherever it is dropped.
-BUNDLED = ("models/catalog.json", "models/comfy_setup.json", "README.md", "COPYING")
+BUNDLED = ("models/catalog.json", "models/comfy_setup.json", "README.md", "LICENSE")
 # Unzipped on Linux or macOS these must stay executable: GIMP skips a plug-in whose entry point is not.
 EXECUTABLE = {f"{PLUGIN_DIR}/{PLUGIN_DIR}.py", "install.sh"}
 SKIP_PARTS = {"__pycache__"}

@@ -1,6 +1,6 @@
 # OpenFill - generative fill for GIMP 3
-# Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Beckett Harriman
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests for the GIMP-free parts of OpenFill.
 
 Run with any Python 3.10+ from the repository root:

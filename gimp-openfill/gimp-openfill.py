@@ -1,23 +1,11 @@
 #!/usr/bin/env python3
 # OpenFill - generative fill for GIMP 3
-# Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# Copyright (C) 2026 Beckett Harriman
+# SPDX-License-Identifier: Apache-2.0
 """GIMP 3 entry point: registers the Filters > OpenFill procedures.
 
-OpenFill is based on Stable Boy by Torben Giesselmann (GPL-3.0),
-https://github.com/thndrbrrr/gimp-stable-boy.
+OpenFill started as a GIMP 3 port of Stable Boy by Torben Giesselmann
+(https://github.com/thndrbrrr/gimp-stable-boy); none of its code remains.
 
 Menu:
   Filters > OpenFill > Generative Fill...           python-fu-openfill-generative-fill
@@ -86,7 +74,7 @@ PROC_TXT2IMG = "python-fu-openfill-text-to-image"
 PROC_SETTINGS = "python-fu-openfill-settings"
 PROC_STOP = "python-fu-openfill-stop-backend"
 MENU = "<Image>/Filters/OpenFill"
-AUTHOR = "Beckett Harriman (original: Torben Giesselmann)"
+AUTHOR = "Beckett Harriman"
 RW = GObject.ParamFlags.READWRITE
 
 SAMPLERS = [

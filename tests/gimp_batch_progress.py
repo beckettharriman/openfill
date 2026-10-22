@@ -1,6 +1,6 @@
 # OpenFill - generative fill for GIMP 3
-# Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Beckett Harriman
+# SPDX-License-Identifier: Apache-2.0
 """Inside GIMP: run one Generative Fill so the floating progress window can be
 observed/captured from outside, and record the outcome. Launch twice:
 

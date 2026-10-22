@@ -1,6 +1,6 @@
 # OpenFill - generative fill for GIMP 3
-# Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Beckett Harriman
+# SPDX-License-Identifier: Apache-2.0
 """ServerManager: find a healthy backend or start one, hidden.
 
 The plug-in process is short-lived, so the long-running work is delegated to

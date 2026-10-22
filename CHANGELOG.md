@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- License: Apache-2.0 (was GPL-3.0-or-later). OpenFill started as a port of
+  Stable Boy by Torben Giesselmann; none of its code remains, and the README
+  keeps the credit.
+
 ## [2.0.0-beta.2] - 2026-10-19
 
 From the first user reports: a ComfyUI running on the processor without a

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """Generate tests/data/fabric-button.png: dark knit fabric with a small bright
 round button (the Beckett bug: tiny selection on dark textured cloth)."""
 

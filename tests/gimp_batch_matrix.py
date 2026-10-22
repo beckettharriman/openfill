@@ -1,6 +1,6 @@
 # OpenFill - generative fill for GIMP 3
-# Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Beckett Harriman
+# SPDX-License-Identifier: Apache-2.0
 """Correctness matrix driver, executed INSIDE GIMP by the python-fu-eval batch
 interpreter (not a unit test). It reads a JSON spec of cases, and for each case
 builds the input image, applies a selection recipe, calls a registered

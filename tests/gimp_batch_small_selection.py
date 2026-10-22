@@ -1,6 +1,6 @@
 # OpenFill - generative fill for GIMP 3
-# Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Beckett Harriman
+# SPDX-License-Identifier: Apache-2.0
 """Inside GIMP: small-selection removal test. For each model id, open the
 image, select an ellipse, run Generative Fill with an EMPTY prompt (removal
 intent), export the full result and a crop around the selection.

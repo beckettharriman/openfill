@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """ComfyUI setup logic: manifest, detection, pre-flight, install sequence (network and tar mocked)."""
 
 import json

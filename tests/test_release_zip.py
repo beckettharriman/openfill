@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """The release zip holds what a user needs and nothing else."""
 
 import sys
@@ -28,7 +28,7 @@ class ReleaseZipTests(unittest.TestCase):
             "install.ps1",
             "install.sh",
             "README.md",
-            "COPYING",
+            "LICENSE",
             "models/catalog.json",
             "models/comfy_setup.json",
             "gimp-openfill/gimp-openfill.py",
@@ -43,7 +43,7 @@ class ReleaseZipTests(unittest.TestCase):
             "gimp-openfill/models/catalog.json",
             "gimp-openfill/models/comfy_setup.json",
             "gimp-openfill/README.md",
-            "gimp-openfill/COPYING",
+            "gimp-openfill/LICENSE",
         ):
             self.assertIn(need, self.names)
 

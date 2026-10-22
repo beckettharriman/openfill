@@ -1,6 +1,6 @@
 # OpenFill - generative fill for GIMP 3
-# Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Beckett Harriman
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end check of the model catalog features, executed INSIDE GIMP via
 python-fu-eval (see gimp_batch_fill.py for the command line). It downloads
 one small catalog entry (MAT, 125 MB, published sha256), verifies the status

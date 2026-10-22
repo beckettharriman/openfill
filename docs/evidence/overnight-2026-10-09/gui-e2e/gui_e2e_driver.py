@@ -1,5 +1,5 @@
 # Stable Boy - generative fill for GIMP 3
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """GUI end-to-end driver, executed INSIDE a GUI GIMP 3.2 (--new-instance,
 isolated profile) by the python-fu-eval batch interpreter. Runs real
 generations through the INTERACTIVE procedures with the plug-in's test hooks

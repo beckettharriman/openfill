@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # OpenFill - generative fill for GIMP 3
-# Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Beckett Harriman
+# SPDX-License-Identifier: Apache-2.0
 """Backend supervisor: a tiny detached process that owns the ComfyUI server
 and runs long tasks (model downloads, custom node installs) for the plug-in.
 

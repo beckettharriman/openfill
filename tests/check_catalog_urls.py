@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """Network check (not a unit test): HEAD every URL in models/catalog.json.
 
     HF_TOKEN=hf_xxx python tests/check_catalog_urls.py

@@ -2,7 +2,7 @@
 
 # OpenFill
 
-[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](COPYING) ![GIMP 3.2](https://img.shields.io/badge/GIMP-3.2-444.svg) ![Tested on Windows, Linux and macOS](https://img.shields.io/badge/tested%20on-Windows%20%7C%20Linux%20%7C%20macOS-444.svg) ![Python + ComfyUI](https://img.shields.io/badge/built%20with-Python%20%2B%20ComfyUI-orange.svg) ![Local](https://img.shields.io/badge/100%25-local-30d158.svg) ![Beta](https://img.shields.io/badge/status-beta-e8a33d.svg)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) ![GIMP 3.2](https://img.shields.io/badge/GIMP-3.2-444.svg) ![Tested on Windows, Linux and macOS](https://img.shields.io/badge/tested%20on-Windows%20%7C%20Linux%20%7C%20macOS-444.svg) ![Python + ComfyUI](https://img.shields.io/badge/built%20with-Python%20%2B%20ComfyUI-orange.svg) ![Local](https://img.shields.io/badge/100%25-local-30d158.svg) ![Beta](https://img.shields.io/badge/status-beta-e8a33d.svg)
 
 *Generative fill, expand and object removal for GIMP 3, running on your graphics card. You own the whole pipeline, nothing leaves your computer.*
 
@@ -177,10 +177,10 @@ Not tested yet: FLUX and Qwen end to end, Intel Macs, and the AUTOMATIC1111 back
 
 ## Where it came from
 
-Early versions used code from [Stable Boy](https://github.com/thndrbrrr/gimp-stable-boy) (GPL-3.0). The backend is [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Acly's [comfyui-inpaint-nodes](https://github.com/Acly/comfyui-inpaint-nodes) do the inpainting, and his [krita-ai-diffusion](https://github.com/Acly/krita-ai-diffusion) was the reference for how to build the graphs and manage the server. The model authors and their licenses are listed in [docs/models.md](docs/models.md).
+OpenFill started as a GIMP 3 port of Torben Giesselmann's [Stable Boy](https://github.com/thndrbrrr/gimp-stable-boy); thanks to him for the idea and the head start. The backend is [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Acly's [comfyui-inpaint-nodes](https://github.com/Acly/comfyui-inpaint-nodes) do the inpainting, and his [krita-ai-diffusion](https://github.com/Acly/krita-ai-diffusion) was the reference for how to build the graphs and manage the server. The model authors and their licenses are listed in [docs/models.md](docs/models.md).
 
-Open, as in GPL and on your own machine. Fill, as in the thing everyone else rents you by the month.
+Open, as in open source and on your own machine. Fill, as in the thing everyone else rents you by the month.
 
 ## License
 
-[GPL-3.0-or-later](COPYING) © 2022 Torben Giesselmann, © 2026 Beckett Harriman.
+[Apache-2.0](LICENSE) © 2026 Beckett Harriman.

@@ -1,6 +1,6 @@
 # OpenFill - generative fill for GIMP 3
-# Copyright (C) 2022 Torben Giesselmann, (C) 2026 Beckett Harriman
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Beckett Harriman
+# SPDX-License-Identifier: Apache-2.0
 """Performance driver, executed INSIDE GIMP by the python-fu-eval batch
 interpreter (not a unit test). It builds one photo-like test image, then runs
 Generative Fill non-interactively once per case, timing each PDB call and

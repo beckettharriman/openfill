@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """Live model search (Hugging Face, Civitai) against recorded responses: mapping
 rules, exclusions, the 24 hour cache and the offline fallback. No network."""
 

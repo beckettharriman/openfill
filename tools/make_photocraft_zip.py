@@ -59,7 +59,7 @@ def files(root: Path = ROOT) -> list[tuple[Path, str]]:
     ):
         if (root / src).is_file():
             out.append((root / src, dest))
-    for name in ("LICENSE", "COPYING", "NOTICE"):
+    for name in ("LICENSE", "NOTICE"):
         if (root / name).is_file():
             out.append((root / name, name))
     return out

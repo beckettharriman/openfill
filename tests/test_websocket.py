@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 """Tests the stdlib WebSocket client against a tiny in-process server."""
 
 import base64

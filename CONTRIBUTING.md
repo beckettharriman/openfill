@@ -144,8 +144,7 @@ published into evidence files.
 - Line endings are LF (`.gitattributes` enforces it); files are UTF-8 without
   a byte-order mark.
 - Public functions and classes get type hints and a docstring.
-- Keep the GPL-3.0-or-later headers and the credit to Torben Giesselmann
-  (thndrbrrr), the author of the original Stable Boy.
+- Keep the Apache-2.0 headers (`# SPDX-License-Identifier: Apache-2.0`)
 - No emojis in code, docs or commit messages.
 
 ## Adding a model to the catalog
