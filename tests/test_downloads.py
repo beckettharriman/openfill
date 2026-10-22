@@ -916,3 +916,29 @@ class PipTaskTests(WorkerFixture):
             mock.patch.object(downloads, "install_pip_packages", side_effect=RuntimeError("offline")),
         ):
             self.worker._ensure_opencv(Path("py"), {"id": "t", "type": "install_nodes"})
+
+
+class LocalModelTaskTests(WorkerFixture):
+    """The worker recognises the user's own model files itself, so their missing companions
+    (a local FLUX.1 Fill file needs the text encoders and VAE) can be downloaded."""
+
+    def test_companions_of_a_local_flux_file_are_accepted(self):
+        from openfill import local_models
+        from tests.test_local_models import FLUX_FILL, write_gguf
+
+        write_gguf(self.models_root / "unet" / "my-fill.gguf", FLUX_FILL)
+        entry = next(e for e in self.worker._catalog() if e.source == local_models.SOURCE)
+        clip = entry.file_by_role("clip1")
+        task = {
+            "type": "download",
+            "model_id": entry.id,
+            "models_root": str(self.models_root),
+            "files": [{"url": clip.url, "dest": clip.dest, "size": clip.size, "sha256": clip.sha256, "gated": False}],
+        }
+        ((spec, _dest),) = self.worker.checked_download_files(task)
+        self.assertEqual(spec.sha256, clip.sha256)
+        main = entry.files[0]
+        self.assertTrue(main.optional and not main.url)  # the user's own file is never fetched
+        evil = dict(task, files=[{"url": "https://evil.example/x.gguf", "dest": "unet/my-fill.gguf", "size": 1}])
+        with self.assertRaises(ValueError):
+            self.worker.checked_download_files(evil)

@@ -21,7 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from . import caption, comfy_setup, geometry, hardware, quality, ui_text, workflow
+from . import caption, comfy_setup, geometry, hardware, local_models, quality, ui_text, workflow
 from . import catalog as cat
 from .backend import (
     SETTINGS_MENU,
@@ -124,6 +124,18 @@ class App:
         except cat.CatalogError as err:
             self.log.warning("catalog unavailable: %s", err)
             self.catalog = []
+        if self.catalog and self.settings.comfy_dir:
+            # The user's own SD 1.5 inpainting, SDXL and FLUX.1 Fill files in ComfyUI's folders.
+            try:
+                found, skipped = local_models.scan(self.models_root, self.catalog, self.paths.base)
+            except Exception as err:  # noqa: BLE001 - a broken folder must not hide the catalog
+                self.log.warning("own model files not scanned: %s", err)
+                found, skipped = [], []
+            self.catalog = cat.merge_entries(self.catalog, found)
+            for e in found:
+                self.log.debug("own model file: %s (%s)", e.files[0].dest, e.family)
+            for item in skipped:
+                self.log.info("model file not used: %s (%s)", item["file"], item["reason"])
 
     # paths ---------------------------------------------------------------
 

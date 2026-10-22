@@ -843,7 +843,12 @@ SECTION_TITLES = {
     SECTION_VERIFIED: "Verified",
     SECTION_MORE: "More from Hugging Face and Civitai",
 }
-SOURCE_LABELS = {"bundled": "verified", "huggingface": "Hugging Face", "civitai": "Civitai"}
+SOURCE_LABELS = {
+    "bundled": "verified",
+    "huggingface": "Hugging Face",
+    "civitai": "Civitai",
+    "local": "your ComfyUI folder",
+}
 
 
 def model_row(
@@ -978,9 +983,11 @@ def row_details(row: dict[str, Any]) -> str:
     if not row.get("installed") and row.get("fit_label"):
         parts.append(str(row["fit_label"]))
     origin = row.get("origin", "bundled")
-    if origin != "bundled":
+    if origin == "local":
+        parts.append("in " + SOURCE_LABELS["local"])
+    elif origin != "bundled":
         parts.append("from " + SOURCE_LABELS.get(origin, origin))
-    if not row.get("checksum_known", True):
+    if not row.get("checksum_known", True) and origin != "local":
         parts.append("unverified checksum")
     if not row.get("runnable", True):
         parts.append("helper file for another model")

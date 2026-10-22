@@ -62,6 +62,8 @@ Times are for a 512 px selection on an RTX 4070 Laptop (8 GB); the first request
 
 The defaults come from a judged benchmark of 33 cases per model. Every download is checked against a published SHA-256, and the live Hugging Face and Civitai search never offers pickled `.ckpt` or `.bin` files, since those can run code when loaded. Details in [docs/models.md](docs/models.md) and [docs/performance.md](docs/performance.md).
 
+Already have models? OpenFill also finds your own SD 1.5 inpainting and SDXL checkpoints in ComfyUI's `checkpoints` folder, and FLUX.1 Fill files in `unet` or `diffusion_models`, and lists them in the model menu as "your file", with no download. It reads only `.safetensors` and `.gguf` files, and only their headers, to tell the model family apart.
+
 ## Install
 
 1. **Install [GIMP 3.2](https://www.gimp.org/downloads/).**

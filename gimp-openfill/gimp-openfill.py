@@ -252,9 +252,14 @@ def _model_options(
     installed_rows, other_rows = [], []
     flux_ids: set[str] = set()
     try:
-        catalog = cat.load_catalog(plugin_dir=Path(__file__).resolve().parent)
+        from openfill import local_models
+
+        base = Paths.for_profile(Gimp.directory()).base
+        catalog = cat.load_merged(plugin_dir=Path(__file__).resolve().parent, base=base)
         root = cat.default_models_root(settings.comfy_dir)
         nodes = cat.default_custom_nodes_dir(settings.comfy_dir)
+        # the user's own model files, and models chosen from the hubs, are offered too
+        catalog = local_models.with_local(catalog, root, base) if settings.comfy_dir else catalog
         active_id = cat.effective_active(catalog, root, nodes, settings.active_model)
         active_name = active_id or "none installed"
         for entry in catalog:
@@ -266,7 +271,7 @@ def _model_options(
                 if entry.arch == "flux":
                     flux_ids.add("active")
                 continue
-            if entry.id not in nicks or not entry.runnable:
+            if (entry.id not in nicks and entry.source == "bundled") or not entry.runnable:
                 continue
             if not any(c in entry.capabilities for c in KIND_CAPABILITY[kind]):
                 continue
@@ -279,6 +284,16 @@ def _model_options(
         pass
     options = [("active", ui_text.model_option_label(active_name, True, True))]
     return options + installed_rows + other_rows, active_name, prompt_free, frozenset(flux_ids)
+
+
+_PICKED_MODEL: str | None = None  # a dialog pick outside the registered model ids (one run)
+
+
+def _model_arg(config: Gimp.ProcedureConfig) -> str:
+    """The model of this run: the dialog's pick of a local or hub model, else the argument."""
+    global _PICKED_MODEL
+    picked, _PICKED_MODEL = _PICKED_MODEL, None
+    return picked or config.get_property("model")
 
 
 def _image_sizes(image: Gimp.Image | None) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
@@ -350,6 +365,13 @@ def _generation_dialog(
     )
     if result is None:
         return False
+    global _PICKED_MODEL
+    _PICKED_MODEL = None
+    if result.get("model") and result["model"] not in [n for n, _ in (_choice_options(config, "model") or [])]:
+        # Not one of the ids registered with the procedure (a local file or a hub model, which
+        # can change while GIMP runs): this run uses it; the procedure argument says "active".
+        _PICKED_MODEL = result["model"]
+        result["model"] = "active"
     for key, value in result.items():
         config.set_property(key, value)
     if result.get("prompt") and not result.get("remove"):
@@ -693,7 +715,7 @@ def run_fill(
             config.get_property("variations"),
             config.get_property("strength"),
             config.get_property("seed"),
-            config.get_property("model"),
+            _model_arg(config),
             remove=bool(config.get_property("remove")),
         )
     except Exception as err:  # noqa: BLE001 - every failure must reach the user
@@ -748,7 +770,7 @@ def run_expand(
     before_ids = _layer_ids(image)
     try:
         app = App(interactive=run_mode == Gimp.RunMode.INTERACTIVE)
-        model_choice = config.get_property("model")
+        model_choice = _model_arg(config)
         grows = any(config.get_property(side) > 0 for side in ("left", "top", "right", "bottom"))
         if run_mode == Gimp.RunMode.INTERACTIVE and grows:  # a pure crop generates nothing
             suggestion = app.expand_suggestion(model_choice)
@@ -814,7 +836,7 @@ def run_txt2img(
             config.get_property("height"),
             config.get_property("variations"),
             config.get_property("seed"),
-            config.get_property("model"),
+            _model_arg(config),
             config.get_property("target"),
         )
     except Exception as err:  # noqa: BLE001

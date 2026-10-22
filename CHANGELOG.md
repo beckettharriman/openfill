@@ -13,6 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Stable Boy by Torben Giesselmann; none of its code remains, and the README
   keeps the credit.
 
+## [2.0.0-beta.3] - 2026-10-21
+
+### Added
+
+- Your own models: SD 1.5 inpainting and SDXL checkpoints in ComfyUI's
+  `checkpoints` folder and FLUX.1 Fill files in `unet` or `diffusion_models`
+  that the catalog doesn't list are found and offered as "your file", in the
+  Fill, Expand and Text to Image model menus and in the Models tab, with no
+  download. Only `.safetensors` and `.gguf` headers are read (pickled files
+  are never opened); the family comes from the shapes of a few tensors (SD 1.5
+  inpainting: a 9-channel input at 320 features with 768-wide text attention;
+  SDXL: the label embedding; FLUX.1 Fill: a 384-wide image input). Each file
+  takes the settings and companion files of the bundled model of its family
+  (the Fooocus patch, FLUX's text encoders and VAE). Files that don't fit
+  (regular SD 1.5, SDXL inpainting, FLUX.1 dev, SD 2) are skipped and logged
+  with the reason.
+- Models chosen from the live Hugging Face and Civitai search can be picked
+  in the dialogs' model menu too, not only made active in the Models tab.
+
 ## [2.0.0-beta.2] - 2026-10-19
 
 From the first user reports: a ComfyUI running on the processor without a

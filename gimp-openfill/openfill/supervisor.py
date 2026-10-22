@@ -56,7 +56,7 @@ from typing import Any
 from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from openfill import catalog, comfy_setup, downloads  # noqa: E402
+from openfill import catalog, comfy_setup, downloads, local_models  # noqa: E402
 from openfill.config import Settings, comfy_layout  # noqa: E402
 from openfill.log import redact  # noqa: E402
 
@@ -509,8 +509,13 @@ class TaskWorker:
 
     def _catalog(self) -> list[catalog.ModelEntry]:
         """The shipped catalog plus the live (hub) entries the user chose in the
-        Models tab (``hub-selected.json``), each re-validated by the strict live rules."""
-        return catalog.load_merged(base=self.base)
+        Models tab (``hub-selected.json``), each re-validated by the strict live rules,
+        plus the user's own model files, recognised again here from their headers."""
+        entries = catalog.load_merged(base=self.base)
+        comfy_dir = self._comfy_dir()
+        if not comfy_dir:
+            return entries
+        return local_models.with_local(entries, catalog.default_models_root(comfy_dir), self.base)
 
     def _catalog_files(self, task: dict[str, Any]) -> dict[str, catalog.FileSpec]:
         """Files of the task's catalog entry, keyed by normalised ``dest``."""
