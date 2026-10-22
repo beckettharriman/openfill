@@ -43,6 +43,10 @@ class Api:
         self.service = service
         self.key = secrets.token_urlsafe(24)
         self.on_show = None  # brings the OpenFill bar up (set by the launcher)
+        self._pick = {"seq": 0, "action": ""}  # the last Filter menu pick, for the page
+
+    def pick(self, action: str) -> None:
+        self._pick = {"seq": self._pick["seq"] + 1, "action": action}
 
     # GET ------------------------------------------------------------------------------
 
@@ -56,6 +60,7 @@ class Api:
             "activeModel": app.active_model_id(),
             "comfyReady": _comfy_set(app),
             "comfyProblem": "" if _comfy_set(app) else _comfy_problem(app),
+            "pick": self._pick,
         }
 
     def models(self) -> dict[str, Any]:

@@ -64,10 +64,16 @@ def find_photocraft(explicit: str | None) -> list[str] | None:
             candidates += sorted(folder.glob("photocraft-*.AppImage"), reverse=True)
     if sys.platform == "win32":
         local = Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
+        installed = _registry_install_dir()
+        if installed:
+            candidates.append(Path(installed) / "photocraft.exe")
         candidates += [
-            local / "Programs" / "PhotoCraft" / "photocraft.exe",
             Path(os.environ.get("PROGRAMFILES") or r"C:\Program Files") / "PhotoCraft" / "photocraft.exe",
+            local / "Programs" / "PhotoCraft" / "photocraft.exe",
         ]
+        for folder in (home / "Downloads", home / "Desktop", home / "Documents", home, Path("C:/"), Path("C:/AI")):
+            if folder.is_dir():  # the portable zip, unpacked
+                candidates += sorted(folder.glob("photocraft*/photocraft.exe"), reverse=True)
     if sys.platform == "darwin":
         candidates += [Path("/Applications/PhotoCraft.app/Contents/MacOS/photocraft")]
     for path in candidates:
@@ -78,6 +84,52 @@ def find_photocraft(explicit: str | None) -> list[str] | None:
         if r.returncode == 0:
             return ["flatpak", "run", FLATPAK_ID]
     return None
+
+
+def _registry_install_dir() -> str | None:
+    """Where PhotoCraft's Windows installer put it (HKLM\\Software\\PhotoCraft InstallDir)."""
+    try:
+        import winreg
+
+        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE, r"Software\PhotoCraft", 0, winreg.KEY_READ | view
+                ) as key:
+                    return str(winreg.QueryValueEx(key, "InstallDir")[0])
+            except OSError:
+                continue
+    except ImportError:
+        pass
+    return None
+
+
+def app_window(url: str) -> bool:
+    """Open ``url`` as a small app window (Edge or Chrome without tabs or address bar), for
+    when Python has no Tk for the OpenFill bar. False when no such browser is found."""
+    names = ["msedge", "chrome", "chromium", "chromium-browser", "google-chrome", "brave-browser"]
+    paths = [shutil.which(n) for n in names]
+    if sys.platform == "win32":
+        for base in (
+            os.environ.get("PROGRAMFILES(X86)"),
+            os.environ.get("PROGRAMFILES"),
+            os.environ.get("LOCALAPPDATA"),
+        ):
+            if base:
+                paths += [
+                    str(Path(base) / "Microsoft" / "Edge" / "Application" / "msedge.exe"),
+                    str(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe"),
+                ]
+    for path in paths:
+        if path and Path(path).is_file():
+            subprocess.Popen(
+                [path, f"--app={url}", "--window-size=480,820"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=sys.platform != "win32",
+            )
+            return True
+    return False
 
 
 def photocraft_settings_dir() -> Path | None:
@@ -216,7 +268,7 @@ def hand_over(info: dict, files: list[str], command: list[str] | None) -> int:
 def tell(title: str, text: str, ask: bool = False) -> bool:
     """A message box when there is no terminal to print to (started from the app menu)."""
     print(f"{title}: {text}", file=sys.stderr)
-    if sys.stderr.isatty() and not ask:
+    if sys.stderr and sys.stderr.isatty() and not ask:
         return False
     try:
         import tkinter as tk
@@ -230,8 +282,12 @@ def tell(title: str, text: str, ask: bool = False) -> bool:
             messagebox.showinfo(title, text, parent=root)
         finally:
             root.destroy()
-    except Exception:  # noqa: BLE001 - no Tk: the text went to the log
-        pass
+    except Exception:  # noqa: BLE001 - no Tk (ComfyUI's embedded Python on Windows)
+        if sys.platform == "win32":
+            import ctypes
+
+            flags = 0x1 | 0x30 if ask else 0x40  # OK/Cancel with a warning icon, or OK with info
+            return ctypes.windll.user32.MessageBoxW(None, text, title, flags | 0x10000) == 1
     return False
 
 
@@ -332,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
         if bar is not None:
             bar.call_soon(bar.show, action)
         else:
-            webbrowser.open(url + "#" + action)
+            api.pick(action)  # the page switches to it on its next look
 
     watcher = menu.Watcher(client, picked)
     service.watcher = watcher
@@ -353,7 +409,10 @@ def main(argv: list[str] | None = None) -> int:
     except ControlError as err:
         print("menu entries not added:", err)
     watcher.start()
-    if bar is None or args.page:
+    service.warm_up()
+    if os.environ.get("OPENFILL_NO_BROWSER"):
+        pass  # tests and headless use: the address is in page-url.txt
+    elif args.page or (bar is None and not app_window(url + "#fill")):
         webbrowser.open(url)
 
     def alive() -> bool:

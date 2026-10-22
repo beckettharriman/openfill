@@ -126,6 +126,8 @@ class Service:
         self.app.server.watch_name = process_name(os.getpid()) or "python"
         self._thread: threading.Thread | None = None
         self.watcher = None  # menu.Watcher, set by the launcher: keeps the document's facts current
+        self.engine = ""  # "" not started by us, "starting", "ready", or why it failed
+        self._warm: threading.Thread | None = None
         self.image: PCImage | None = None
         self.layers: list[PCLayer] = []
 
@@ -140,17 +142,55 @@ class Service:
             if comfy_layout(folder) is not None:
                 self.app.use_comfy_dir(folder)
                 self.app.log.info("using the ComfyUI OpenFill for GIMP uses: %s", folder)
+                self.rescan_models()
                 return
         found = detect_comfy()
         if found:
             self.app.use_comfy_dir(str(found[0].path))
             self.app.log.info("using the ComfyUI found at %s (%s)", found[0].path, found[0].source)
+            self.rescan_models()
+
+    def rescan_models(self) -> None:
+        """The catalog plus the user's own model files in the (new) ComfyUI folder."""
+        from openfill import catalog as cat
+        from openfill import local_models
+
+        app = self.app
+        try:
+            entries = cat.load_merged(plugin_dir=app.plugin_dir, base=app.paths.base)
+            found, _skipped = local_models.scan(app.models_root, entries, app.paths.base)
+            app.catalog = cat.merge_entries(entries, found)
+        except Exception as err:  # noqa: BLE001 - the catalog stays as it was
+            app.log.warning("models not rescanned: %s", err)
 
     def _notice(self, text: str) -> None:
         with self.state.lock:
             self.state.notices.append(text)
         if hasattr(self, "app"):
             self.app.log.info("notice: %s", text)
+
+    def warm_up(self) -> None:
+        """Start ComfyUI in the background so the first Generate does not wait for it (only
+        when it is set up and a model is there to use)."""
+        from openfill.config import comfy_layout
+
+        app = self.app
+        if comfy_layout(app.settings.comfy_dir) is None or not app.settings.autostart:
+            return
+        if not (app.has_model_for("fill") or app.has_model_for("remove")):
+            return
+
+        def run() -> None:
+            self.engine = "starting"
+            try:
+                health = app.check_backend()
+                self.engine = "ready" if health.ok else (health.detail or "not running")
+            except Exception as err:  # noqa: BLE001 - shown on the bar; a job tries again
+                self.engine = describe_error(err)
+            app.log.info("warm-up: %s", self.engine)
+
+        self._warm = threading.Thread(target=run, name="openfill-warm-up", daemon=True)
+        self._warm.start()
 
     # status -------------------------------------------------------------------------
 
@@ -209,6 +249,10 @@ class Service:
 
     def _job(self, kind: str, p: dict[str, Any]) -> None:
         image = None
+        if self._warm is not None and self._warm.is_alive():
+            with self.state.lock:
+                self.state.text = "Starting the AI engine (the first time takes about a minute)..."
+            self._warm.join()  # one start of ComfyUI, not two
         try:
             image = self.bridge.active_image() if kind != "txt2img" or p.get("target") == "layer" else None
             if kind != "txt2img" and image is None:

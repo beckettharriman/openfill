@@ -64,6 +64,46 @@ CREATE_SIZES = (("Square", 1024, 1024), ("Landscape", 1216, 832), ("Portrait", 8
 STARTER = ("lama-big", "dreamshaper-8-inpainting")
 
 
+def icon_image(size: int = 64) -> Image.Image:
+    """OpenFill's window icon: a white four-point sparkle on a blue rounded square."""
+    from PIL import ImageDraw
+
+    scale = 4
+    big = size * scale
+    im = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle((0, 0, big - 1, big - 1), radius=big // 5, fill=(74, 142, 240, 255))
+    c, r, w = big / 2, big * 0.36, big * 0.09
+    d.polygon(
+        [
+            (c, c - r),
+            (c + w, c - w),
+            (c + r, c),
+            (c + w, c + w),
+            (c, c + r),
+            (c - w, c + w),
+            (c - r, c),
+            (c - w, c - w),
+        ],
+        fill="white",
+    )
+    sc, sr, sw = big * 0.76, big * 0.12, big * 0.035
+    d.polygon(
+        [
+            (sc, sc - sr - big * 0.48),
+            (sc + sw, sc - sw - big * 0.48),
+            (sc + sr, sc - big * 0.48),
+            (sc + sw, sc + sw - big * 0.48),
+            (sc, sc + sr - big * 0.48),
+            (sc - sw, sc + sw - big * 0.48),
+            (sc - sr, sc - big * 0.48),
+            (sc - sw, sc - sw - big * 0.48),
+        ],
+        fill="white",
+    )
+    return im.resize((size, size), Image.LANCZOS)
+
+
 def expand_margins(width: int, height: int, preset: tuple[int, int] | None) -> tuple[int, int, int, int]:
     """(left, top, right, bottom) pixels that bring the canvas to ``preset``'s aspect ratio,
     split evenly; ``None`` adds 25% on every side."""
@@ -157,6 +197,11 @@ class Bar:
         self.root.maxsize(WIDTH, 4000)  # a fixed width; long texts wrap
         self.root.attributes("-topmost", True)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
+        try:
+            self._icon = photo(icon_image())
+            self.root.iconphoto(True, self._icon)
+        except Exception:  # noqa: BLE001 - the window works without an icon
+            pass
         self._style()
         self.tab = tk.StringVar(value="fill")
         self.variations = tk.IntVar(value=int(self.prefs.get("variations", 1)))
@@ -540,7 +585,7 @@ class Bar:
             self.call_soon(self._say, str(err), BAD)
 
     def open_page(self) -> None:
-        webbrowser.open(self.page_url)
+        webbrowser.open(self.page_url + "#models")
 
     def _setup_action(self) -> None:
         facts = self.refresher.get()
@@ -567,7 +612,9 @@ class Bar:
         except Exception as err:  # noqa: BLE001 - says what the folder lacks
             self._say(str(err), BAD)
             return
-        self._say("ComfyUI found. OpenFill starts it when you generate.", OK)
+        self.service.rescan_models()
+        self.service.warm_up()
+        self._say("ComfyUI found. It is starting in the background.", OK)
         self.refresher.wake.set()
 
     def _comfy_help(self) -> None:
@@ -669,7 +716,18 @@ class Bar:
             self.setup.pack(fill="x", padx=14, pady=(10, 0), before=self.footer)
         else:
             self.setup.pack_forget()
-        self.status.configure(text="Ready" if facts.get("comfy_ok") else ("Checking..." if not facts else "Not set up"))
+        engine = self.service.engine
+        if not facts:
+            status = "Checking..."
+        elif not facts.get("comfy_ok"):
+            status = "Not set up"
+        elif engine == "starting":
+            status = "Starting the AI engine..."
+        elif engine in ("", "ready"):
+            status = "Ready"
+        else:
+            status = "AI engine: " + engine[:60]
+        self.status.configure(text=status)
 
         st = self.service.state.snapshot()
         busy = self.service.busy()

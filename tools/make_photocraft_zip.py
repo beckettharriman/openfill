@@ -56,6 +56,7 @@ def files(root: Path = ROOT) -> list[tuple[Path, str]]:
     for src, dest in (
         ("photocraft/openfill-photocraft.sh", "openfill-photocraft.sh"),
         ("photocraft/install.sh", "install.sh"),
+        ("photocraft/Install OpenFill for PhotoCraft.cmd", "Install OpenFill for PhotoCraft.cmd"),
         ("photocraft/README.md", "README.md"),
     ):
         if (root / src).is_file():

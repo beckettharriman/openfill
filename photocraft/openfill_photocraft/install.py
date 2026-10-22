@@ -1,7 +1,7 @@
 # OpenFill for PhotoCraft
 # SPDX-License-Identifier: Apache-2.0
-"""Install OpenFill for PhotoCraft for this user (Linux), so PhotoCraft opens with OpenFill
-from its usual icon and from images opened in the file manager.
+"""Install OpenFill for PhotoCraft for this user, so PhotoCraft opens with OpenFill from its
+usual icon (Linux) or from a "PhotoCraft with OpenFill" shortcut (Windows).
 
     python -m openfill_photocraft.install [--get-photocraft] [--separate-icon] [--uninstall]
 
@@ -13,6 +13,10 @@ from its usual icon and from images opened in the file manager.
   ~/.local/share/applications whose command is OpenFill's launcher (it starts PhotoCraft).
   ``--separate-icon`` adds "PhotoCraft with OpenFill" instead and leaves PhotoCraft's entry
   alone. ``--uninstall`` takes all of it back out.
+
+On Windows: OpenFill goes to %LOCALAPPDATA%\\OpenFill for PhotoCraft, with "PhotoCraft with
+OpenFill" in the Start menu and on the desktop; PhotoCraft's own shortcut and file types stay
+as they are.
 
 Nothing outside your home folder is changed.
 """
@@ -259,9 +263,87 @@ def ask(question: str) -> bool:
     return input(f"{question} [Y/n] ").strip().lower() in ("", "y", "yes")
 
 
+# Windows ------------------------------------------------------------------------------------
+
+WINDOWS_NAME = "PhotoCraft with OpenFill"
+BOOT = "OpenFill for PhotoCraft.pyw"
+
+
+def windows_home() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "OpenFill for PhotoCraft"
+
+
+def windows_shortcut_paths() -> list[Path]:
+    appdata = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    desktop = Path(os.environ.get("USERPROFILE") or Path.home()) / "Desktop"
+    return [
+        appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / f"{WINDOWS_NAME}.lnk",
+        desktop / f"{WINDOWS_NAME}.lnk",
+    ]
+
+
+def _ps_quote(text: str) -> str:
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def make_shortcut(link: Path, target: str, arguments: str, workdir: Path, icon: str) -> None:
+    script = (
+        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut(" + _ps_quote(link) + "); "
+        f"$s.TargetPath = {_ps_quote(target)}; $s.Arguments = {_ps_quote(arguments)}; "
+        f"$s.WorkingDirectory = {_ps_quote(workdir)}; $s.IconLocation = {_ps_quote(icon)}; "
+        "$s.Description = 'PhotoCraft with OpenFill (generative fill on your own GPU)'; $s.Save()"
+    )
+    link.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["powershell", "-NoProfile", "-Command", script], check=True, capture_output=True)
+
+
+def install_windows(python: str) -> int:
+    sys.path.insert(0, str(source_root()))
+    from openfill_photocraft.__main__ import find_photocraft
+
+    found = find_photocraft(None)
+    if not found:
+        print("PhotoCraft is not installed. Get it from https://github.com/storytold/photocraft/releases")
+        print("(the .msi), install it, then run this again.")
+        return 1
+    app = windows_home() / "app"
+    copy_app(app)
+    # The embedded Python of ComfyUI's portable build ignores PYTHONPATH: the starter adds its
+    # own folder to the path.
+    (app / BOOT).write_text(
+        "import os, sys\n"
+        "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n"
+        "from openfill_photocraft.__main__ import main\n"
+        "raise SystemExit(main(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    pythonw = Path(python).with_name("pythonw.exe")
+    target = str(pythonw if pythonw.is_file() else python)
+    for link in windows_shortcut_paths():
+        make_shortcut(link, target, f'"{app / BOOT}"', app, f"{found[0]},0")
+        print(f"shortcut: {link}")
+    print(f"OpenFill installed in {app}")
+    print(f"Open '{WINDOWS_NAME}' from the Start menu or the desktop.")
+    print("To remove it: run this installer again with --uninstall.")
+    return 0
+
+
+def uninstall_windows() -> int:
+    for link in windows_shortcut_paths():
+        if link.is_file():
+            link.unlink()
+            print(f"removed {link}")
+    shutil.rmtree(windows_home() / "app", ignore_errors=True)
+    print("OpenFill for PhotoCraft is removed. Your settings stay in %APPDATA%\\OpenFill for PhotoCraft;")
+    print("models stay in your ComfyUI folder.")
+    return 0
+
+
 def install(get_photocraft: bool, separate: bool, python: str) -> int:
+    if sys.platform == "win32":
+        return install_windows(python)
     if sys.platform != "linux":
-        print("This installer is for Linux. On Windows run 'Install OpenFill for PhotoCraft.cmd'.")
+        print("This installer is for Linux and Windows. On a Mac run openfill-photocraft.sh.")
         return 2
     sys.path.insert(0, str(source_root()))
     from openfill_photocraft.__main__ import find_photocraft
@@ -327,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--uninstall", action="store_true", help="remove OpenFill for PhotoCraft")
     args = parser.parse_args(argv)
     if args.uninstall:
-        return uninstall()
+        return uninstall_windows() if sys.platform == "win32" else uninstall()
     return install(args.get_photocraft, args.separate_icon, sys.executable)
 
 
