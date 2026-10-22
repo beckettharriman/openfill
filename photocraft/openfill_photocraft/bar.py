@@ -615,9 +615,8 @@ class Bar:
             }[key]
             self.hint.configure(text=placeholder)
             self.hint.pack(anchor="w", pady=(4, 0), after=self.prompt_row)
-        if key != "remove":
-            self.options.pack(fill="x", pady=(8, 0))
-        self.model_row.pack(fill="x", pady=(8 if key == "remove" else 6, 0))
+        self.options.pack(fill="x", pady=(8, 0))
+        self.model_row.pack(fill="x", pady=(6, 0))
         self._fill_models()
         self._update_context()
 
@@ -680,7 +679,10 @@ class Bar:
                     prompt="" if kind == "remove" else prompt, remove=kind == "remove", strength=1.0, negative=""
                 )
                 if kind == "remove":
-                    body.update(removal=self._model_ids.get(self.model_choice.get(), "refine:active"))
+                    removal = self._model_ids.get(self.model_choice.get(), "refine:active")
+                    body.update(removal=removal)
+                    if removal in ("lama", "mat"):
+                        body.update(variations=1)  # same input, same result: one is enough
                 self.service.start("fill", body)
             elif kind == "expand":
                 left, top, right, bottom = self.expand_view.margins()
