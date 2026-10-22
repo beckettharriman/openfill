@@ -226,8 +226,8 @@ class Scenario:
         w, h = d["width"], d["height"]
         self.menu_pick("expand")
         self.wait_for(lambda: self.ui(lambda: self.bar.tab.get() == "expand"))
-        self.ui(lambda: (self.bar.prompt.delete(0, "end"), self.bar.preset_buttons["16:9"].invoke()))
-        size_text = self.ui(lambda: self.bar.expand_size.cget("text"))
+        self.ui(lambda: (self.bar.prompt.delete(0, "end"), self.bar.expand_view._ratio("16:9")))
+        size_text = self.ui(lambda: self.bar.expand_view.size.cget("text"))
         before = self.history()
         self.ui(lambda: self.bar.go.invoke())
         st = self.wait_job()

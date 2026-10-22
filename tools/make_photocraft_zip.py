@@ -29,7 +29,6 @@ GIMP_ONLY = {
     "models_ui.py",
     "ui_setup.py",
     "ui_picker.py",
-    "ui_expand.py",
 }
 EXECUTABLE = {"openfill-photocraft.sh", "install.sh"}
 

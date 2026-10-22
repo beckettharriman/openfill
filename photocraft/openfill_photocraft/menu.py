@@ -162,6 +162,7 @@ def install(client: ControlClient) -> list[str]:
 # Watching -----------------------------------------------------------------------------
 
 LABEL_ACTION = {label: action for action, label in ENTRIES}
+SCRATCH_PREFIX = "OpenFill "  # the names of the documents the bridge opens for a moment
 
 
 @dataclass
@@ -234,6 +235,8 @@ class Watcher:
             with self.lock:
                 self.info = DocInfo(connected=True, documents=len(docs), updated=time.time(), waiting=self.info.waiting)
             return None
+        if str(active.get("name") or "").startswith(SCRATCH_PREFIX):
+            return None  # OpenFill's own short-lived document: keep showing the user's
         key = (int(active["index"]), str(active.get("name")))
         revision = int(active.get("revision") or 0)
         if self._seen.get(key) == revision and self.info.name == key[1]:

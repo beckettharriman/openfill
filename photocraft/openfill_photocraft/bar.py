@@ -52,14 +52,6 @@ def photo(image: Image.Image) -> tk.PhotoImage:
 
 
 TABS = (("fill", "Fill"), ("remove", "Remove"), ("expand", "Expand"), ("txt2img", "Create"))
-EXPAND_PRESETS = (
-    ("+25%", None),
-    ("1:1", (1, 1)),
-    ("4:3", (4, 3)),
-    ("3:2", (3, 2)),
-    ("16:9", (16, 9)),
-    ("9:16", (9, 16)),
-)
 CREATE_SIZES = (("Square", 1024, 1024), ("Landscape", 1216, 832), ("Portrait", 832, 1216))
 STARTER = ("lama-big", "dreamshaper-8-inpainting")
 
@@ -246,8 +238,6 @@ class Bar:
         self.model_choice = tk.StringVar(value="Active model")
         self.target = tk.StringVar(value="image")
         self.size_name = tk.StringVar(value="Square")
-        self.margins = [0, 0, 0, 0]
-        self.preset = tk.StringVar(value="")
         self._preview_seq = -1
         self._images: list[Any] = []  # keep PhotoImages alive
         self._thumbs_for: tuple = ()
@@ -356,19 +346,11 @@ class Bar:
         self.go.pack(side="left", padx=(8, 0))
         self.hint = ttk.Label(self.body, style="Dim.TLabel", wraplength=WIDTH - 44, justify="left")
 
-        # Expand: presets
-        self.expand_row = ttk.Frame(self.body)
-        self.preset_buttons = {}
-        for label, ratio in EXPAND_PRESETS:
-            b = ttk.Button(
-                self.expand_row,
-                text=label,
-                style="Chip.TButton",
-                command=lambda lab=label, r=ratio: self.pick_preset(lab, r),
-            )
-            b.pack(side="left", padx=(0, 4))
-            self.preset_buttons[label] = b
-        self.expand_size = ttk.Label(self.body, style="Dim.TLabel")
+        # Expand: the GIMP plug-in's drag editor
+        from .expand_view import ExpandView
+
+        self.expand_view = ExpandView(self, self.body)
+        self._thumb_busy = False
 
         # Create: size and destination
         self.create_row = ttk.Frame(self.body)
@@ -574,8 +556,7 @@ class Bar:
         for w in (
             self.prompt_row,
             self.hint,
-            self.expand_row,
-            self.expand_size,
+            self.expand_view,
             self.create_row,
             self.options,
             self.model_row,
@@ -584,8 +565,7 @@ class Bar:
             w.pack_forget()
         if key in ("fill", "txt2img", "expand"):
             if key == "expand":
-                self.expand_row.pack(fill="x")
-                self.expand_size.pack(anchor="w", pady=(4, 6))
+                self.expand_view.pack(fill="x", pady=(0, 8))
             self.prompt_row.pack(fill="x")
             if key == "txt2img":
                 self.create_row.pack(fill="x", pady=(8, 0))
@@ -621,17 +601,25 @@ class Bar:
         for i, b in enumerate(self.var_buttons, start=1):
             b.configure(style="ChipOn.TButton" if i == n else "Chip.TButton")
 
-    def pick_preset(self, label: str, ratio) -> None:
-        info = self.watcher.snapshot().get("document") or {}
-        if not info:
-            return
-        self.margins = list(expand_margins(int(info["width"]), int(info["height"]), ratio))
-        self.preset.set(label if any(self.margins) else "")
-        for k, b in self.preset_buttons.items():
-            b.configure(style="ChipOn.TButton" if k == self.preset.get() else "Chip.TButton")
-        self._update_context()
-        if not any(self.margins):
-            self.expand_size.configure(text=f"The image is already {label}. Pick another size.")
+    def _fetch_thumbnail(self, key: tuple) -> None:
+        """The image for the Expand editor, read once per document size (off the UI thread)."""
+        self._thumb_busy = True
+
+        def work() -> None:
+            try:
+                image = self.service.bridge.active_image()
+                if image is not None:
+                    visible, _selection = self.service.bridge._snapshot(image)
+                    thumb = visible.copy()
+                    thumb.thumbnail((420, 420))
+                    if self.expand_view.image_key == key:
+                        self.call_soon(self.expand_view.set_thumbnail, thumb)
+            except Exception:  # noqa: BLE001 - the editor works without a thumbnail
+                pass
+            finally:
+                self._thumb_busy = False
+
+        threading.Thread(target=work, daemon=True).start()
 
     def pick_size(self, label: str) -> None:
         self.size_name.set(label)
@@ -669,16 +657,12 @@ class Bar:
                     body.update(variations=1, model="active")
                 self.service.start("fill", body)
             elif kind == "expand":
-                if not any(self.margins):
-                    self._say("Pick how far to expand: one of the sizes above.", BAD)
+                left, top, right, bottom = self.expand_view.margins()
+                if not any((left, top, right, bottom)):
+                    self._say("Drag the frame's edges outward, or pick a ratio.", BAD)
                     return
-                left, top, right, bottom = self.margins
                 body.update(prompt=prompt, negative="", left=left, top=top, right=right, bottom=bottom)
                 self.service.start("expand", body)
-                self.margins = [0, 0, 0, 0]
-                self.preset.set("")
-                for b in self.preset_buttons.values():
-                    b.configure(style="Chip.TButton")
             else:
                 if not prompt:
                     self._say("Describe the image first.", BAD)
@@ -799,13 +783,10 @@ class Bar:
                 else "Select an area first: Marquee, Lasso or Object Selection."
             )
         else:
-            w, h = int(doc["width"]), int(doc["height"])
-            if any(self.margins):
-                left, top, right, bottom = self.margins
-                self.expand_size.configure(text=f"{w} x {h}  >  {w + left + right} x {h + top + bottom} px")
-            elif "already" not in self.expand_size.cget("text"):
-                self.expand_size.configure(text=f"{w} x {h} px. Pick a size.")
-            text = f"{doc['name']}: adds new image around the edges."
+            self.expand_view.set_image(doc["name"], int(doc["width"]), int(doc["height"]))
+            if self.expand_view.thumbnail is None and not self._thumb_busy and not self.service.busy():
+                self._fetch_thumbnail(self.expand_view.image_key)
+            text = f"{doc['name']}: drag the frame to the new canvas size."
         if self.context.cget("text") != text:
             self.context.configure(text=text)
 
