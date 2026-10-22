@@ -15,7 +15,9 @@ from __future__ import annotations
 import io
 import json
 import queue
+import sys
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from pathlib import Path
@@ -251,13 +253,18 @@ class Bar:
         self.root.resizable(False, False)
         self.root.minsize(WIDTH, 120)
         self.root.maxsize(WIDTH, 4000)  # a fixed width; long texts wrap
-        self.root.attributes("-topmost", True)
+        self.root.attributes("-topmost", True)  # dropped when tied to PhotoCraft (Windows)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
+        self._small_icon = None
         try:
             self._icon = photo(icon_image())
             self.root.iconphoto(True, self._icon)
+            self._small_icon = photo(icon_image(18))
         except Exception:  # noqa: BLE001 - the window works without an icon
             pass
+        from .tether import Tether
+
+        self.tether = Tether()
         self._style()
         self.tab = tk.StringVar(value="fill")
         self.variations = tk.IntVar(value=int(self.prefs.get("variations", 1)))
@@ -460,56 +467,169 @@ class Bar:
         self._update_target()
 
     def _build_pill(self) -> None:
-        """The collapsed bar: one line with the status; a click opens the bar again."""
-        self.pill = tk.Toplevel(self.root, bg=BG)
+        """The collapsed bar: a small strip in a corner of PhotoCraft; a click opens the bar."""
+        self.pill = tk.Toplevel(self.root, bg=PANEL)
         self.pill.title("OpenFill")
         self.pill.resizable(False, False)
-        self.pill.attributes("-topmost", True)
         self.pill.protocol("WM_DELETE_WINDOW", self.hide)
+        self.pill.attributes("-topmost", True)  # dropped when tied to PhotoCraft (Windows)
+        if sys.platform == "win32":
+            self.pill.overrideredirect(True)  # a chip, not a window: it is tied to PhotoCraft's
         self.pill.withdraw()
-        row = ttk.Frame(self.pill)
-        row.pack(fill="x", padx=10, pady=6)
-        ttk.Label(row, text="OpenFill", font=self.bold).pack(side="left")
-        self.pill_text = ttk.Label(row, style="Dim.TLabel", width=24)
-        self.pill_text.pack(side="left", padx=(8, 8))
-        ttk.Button(row, text="Open", style="Chip.TButton", command=self.expand).pack(side="right")
-        for widget in (row, self.pill_text):
-            widget.bind("<Button-1>", lambda _e: self.expand())
+        row = tk.Frame(self.pill, bg=PANEL, cursor="hand2")
+        row.pack(fill="both", padx=1, pady=1)
+        logo = tk.Label(row, image=self._small_icon, bg=PANEL) if self._small_icon else None
+        if logo is not None:
+            logo.pack(side="left", padx=(8, 0), pady=6)
+        name = tk.Label(row, text="OpenFill", font=self.bold, fg=TEXT, bg=PANEL)
+        name.pack(side="left", padx=(6, 0))
+        self.pill_text = tk.Label(row, fg=DIM, bg=PANEL, font=self.small)
+        self.pill_text.pack(side="left", padx=(8, 10))
+        for widget in (row, name, self.pill_text, *([logo] if logo else [])):
+            widget.bind("<ButtonPress-1>", self._pill_press)
+            widget.bind("<B1-Motion>", self._pill_drag)
+            widget.bind("<ButtonRelease-1>", self._pill_release)
         self.collapsed = False
+        self._pill_grab: tuple[int, int, int, int] | None = None
+
+    def _pill_press(self, event) -> None:
+        self._pill_grab = (event.x_root, event.y_root, self.pill.winfo_x(), self.pill.winfo_y())
+
+    def _pill_drag(self, event) -> None:
+        if self._pill_grab is not None:
+            x0, y0, px, py = self._pill_grab
+            self.pill.geometry(f"+{px + event.x_root - x0}+{py + event.y_root - y0}")
+
+    def _pill_release(self, event) -> None:
+        grab, self._pill_grab = self._pill_grab, None
+        if grab is None or (abs(event.x_root - grab[0]) < 4 and abs(event.y_root - grab[1]) < 4):
+            self.expand()  # a click
+            return
+        self.pill.update_idletasks()  # a drag: remember where, relative to PhotoCraft
+        right, bottom = self._anchor()
+        self.prefs["pill_off"] = [
+            right - (self.pill.winfo_x() + self.pill.winfo_width()),
+            bottom - (self.pill.winfo_y() + self.pill.winfo_height()),
+        ]
+
+    # where the windows go -------------------------------------------------------------
+
+    def _anchor(self) -> tuple[int, int]:
+        """The corner OpenFill's windows are placed from: PhotoCraft's bottom right (tied), else
+        the primary monitor's."""
+        if self.tied and self._pc_rect:
+            return self._pc_rect[2], self._pc_rect[3]
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        mx, my, mw, mh = primary_monitor() or (0, 0, sw, sh)
+        return mx + mw, my + mh
+
+    def _default_pill_off(self) -> list[int]:
+        return [360, 52] if self.tied else [40, 70]  # left of PhotoCraft's panels, above its status bar
+
+    def _clamp(self, x: int, y: int, w: int, h: int) -> tuple[int, int]:
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        return max(0, min(x, sw - w)), max(0, min(y, sh - h))
+
+    def _place_pill(self) -> None:
+        self.pill.update_idletasks()
+        w, h = self.pill.winfo_reqwidth(), self.pill.winfo_reqheight()
+        dx, dy = self.prefs.get("pill_off") or self._default_pill_off()
+        right, bottom = self._anchor()
+        x, y = self._clamp(right - dx - w, bottom - dy - h, w, h)
+        self._placing = True
+        self.pill.geometry(f"+{x}+{y}")
+        self._placing = False
+
+    def _place_bar(self) -> None:
+        """The full bar opens from the strip: its bottom right where the strip's is (or where
+        the user last left it, relative to PhotoCraft)."""
+        self.root.update_idletasks()
+        w, h = max(WIDTH, self.root.winfo_reqwidth()), self.root.winfo_reqheight()
+        right, bottom = self._anchor()
+        if self.prefs.get("bar_off"):
+            dx, dy = self.prefs["bar_off"]  # top right, from the anchor
+            x, y = right - dx - w, bottom - dy
+        else:
+            dx, dy = self.prefs.get("pill_off") or self._default_pill_off()
+            x, y = right - dx - w, bottom - dy - h
+        x, y = self._clamp(x, y, w, h)
+        self._placing = True
+        self.root.geometry(f"+{x}+{y}")
+        self._placing = False
+
+    def _place(self) -> None:
+        self.tied = False
+        self._settle_until = 0.0
+        self._pc_rect: tuple[int, int, int, int] | None = None
+        self._placing = False
+        self.root.bind("<Configure>", self._moved)
+        self.root.withdraw()
+        self._tie()
+        if self.prefs.get("collapsed", True):
+            self.collapse()
+        else:
+            self.expand()
+
+    def _tie(self) -> None:
+        """Tie both windows to PhotoCraft's main window when it can be found (Windows)."""
+        if self.tied or not self.tether.available:
+            return
+        if self.tether.attach(self.root) and self.tether.attach(self.pill):
+            self.tied = True
+            self._pc_rect = self.tether.rect()
+            for window in (self.root, self.pill):
+                window.attributes("-topmost", False)  # above PhotoCraft only, not every app
+
+    def _follow(self) -> None:
+        """Keep the windows where they belong when PhotoCraft moves or resizes."""
+        if not self.tether.available:
+            return
+        if not self.tied:
+            self._tie()
+            if self.tied:
+                self._place_pill() if self.collapsed else self._place_bar()
+            return
+        rect = self.tether.rect()
+        if rect is None or rect == self._pc_rect:
+            return  # minimized (Windows hides owned windows itself) or unchanged
+        old, self._pc_rect = self._pc_rect, rect
+        if old is None:
+            return
+        dx, dy = rect[2] - old[2], rect[3] - old[3]
+        for window, shown in ((self.pill, self.collapsed), (self.root, not self.collapsed)):
+            if shown:
+                self._placing = True
+                window.geometry(f"+{window.winfo_x() + dx}+{window.winfo_y() + dy}")
+                self._placing = False
+
+    def _moved(self, event) -> None:
+        if event.widget is not self.root or self._placing or self.collapsed:
+            return
+        if time.monotonic() < self._settle_until:
+            return  # the window being shown and placed, not moved by the user
+        right, bottom = self._anchor()
+        self.prefs["bar_off"] = [right - (self.root.winfo_x() + self.root.winfo_width()), bottom - self.root.winfo_y()]
 
     def collapse(self) -> None:
         self.collapsed = True
         self.prefs["collapsed"] = True
-        x = self.root.winfo_x() + self.root.winfo_width()
-        y = self.root.winfo_y()
         self.root.withdraw()
-        self.pill.update_idletasks()
-        self.pill.geometry(f"+{max(0, x - self.pill.winfo_reqwidth())}+{y}")
         self.pill.deiconify()
+        self._place_pill()
+        self.root.after(60, self._place_pill)  # again once mapped: Tk may drop it before
         self.pill.lift()
 
     def expand(self) -> None:
-        if self.collapsed:
-            self.collapsed = False
-            self.prefs["collapsed"] = False
-            self.pill.withdraw()
+        was = self.collapsed
+        self._settle_until = time.monotonic() + 1.0
+        self.collapsed = False
+        self.prefs["collapsed"] = False
+        self.pill.withdraw()
         self.root.deiconify()
+        if was or not self.root.winfo_viewable():
+            self._place_bar()
+            self.root.after(60, self._place_bar)  # again once mapped: Tk may drop it before
         self.root.lift()
-
-    def _place(self) -> None:
-        self.root.update_idletasks()
-        x, y = self.prefs.get("x"), self.prefs.get("y")
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        w = max(WIDTH, self.root.winfo_reqwidth())
-        if not isinstance(x, int) or not isinstance(y, int) or not (0 <= x <= sw - w and 0 <= y < sh - 120):
-            mx, my, mw, _mh = primary_monitor() or (0, 0, sw, sh)
-            x, y = max(mx, mx + mw - w - 40), my + 110  # top right, below a window's title and menu bars
-        self.root.geometry(f"+{x}+{y}")
-        self.root.bind("<Configure>", self._moved)
-
-    def _moved(self, event) -> None:
-        if event.widget is self.root:
-            self.prefs["x"], self.prefs["y"] = self.root.winfo_x(), self.root.winfo_y()
 
     # actions ------------------------------------------------------------------------
 
@@ -520,7 +640,6 @@ class Bar:
     def show(self, action: str = "") -> None:
         """Bring the bar up; a menu action also picks its tab (Remove starts at once)."""
         self.expand()
-        self.root.attributes("-topmost", True)
         if action in dict(TABS):
             self.select_tab(action)
         elif self.view:
@@ -837,6 +956,7 @@ class Bar:
         except queue.Empty:
             pass
         try:
+            self._follow()
             self._update()
         finally:
             self.root.after(250, self._tick)
