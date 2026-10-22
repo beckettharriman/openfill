@@ -1,0 +1,82 @@
+[
+  {
+    "case": "open_image",
+    "ok": true,
+    "context": "Open an image in PhotoCraft."
+  },
+  {
+    "case": "fill_from_menu",
+    "ok": true,
+    "menu_step_removed": true,
+    "focus": ".!frame2.!frame.!entry",
+    "state": "done",
+    "message": "Added layer: Generative Fill: a red and yellow hot air balloon (1)",
+    "seconds": 73.2,
+    "history_added": [
+      "Duplicate Layer"
+    ],
+    "variations": 3,
+    "thumbnails_shown": 1
+  },
+  {
+    "case": "pick_and_keep",
+    "ok": true,
+    "kept": [
+      "Generative Fill: a red and yellow hot air balloon (2)"
+    ]
+  },
+  {
+    "case": "remove_from_menu",
+    "ok": true,
+    "state": "done",
+    "message": "Added layer: Object Removal",
+    "seconds": 5.8,
+    "history_added": [
+      "Duplicate Layer"
+    ],
+    "top": "Object Removal"
+  },
+  {
+    "case": "fill_needs_selection",
+    "ok": true,
+    "message": "Select an area first: Marquee, Lasso or Object Selection."
+  },
+  {
+    "case": "expand_preset",
+    "ok": true,
+    "size_text": "1448 x 1086  >  1931 x 1086 px",
+    "canvas": [
+      1931,
+      1086
+    ],
+    "expected": [
+      1931,
+      1086
+    ],
+    "history_added": [
+      "Crop",
+      "Duplicate Layer"
+    ],
+    "seconds": 63.3,
+    "message": "Canvas is now 1931 x 1086"
+  },
+  {
+    "case": "create_image",
+    "ok": true,
+    "size": [
+      704,
+      1024
+    ],
+    "documents": [
+      1,
+      2
+    ],
+    "seconds": 20.7,
+    "message": "Done"
+  },
+  {
+    "case": "hide_and_panel",
+    "ok": true,
+    "hidden": "withdrawn"
+  }
+]

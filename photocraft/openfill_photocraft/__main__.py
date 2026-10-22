@@ -378,8 +378,6 @@ def main(argv: list[str] | None = None) -> int:
     server, url = serve(api, args.web_port)
     base, key = url.split("/?key=")
     (profile / "page-url.txt").write_text(url + "\n", encoding="utf-8")
-    (profile / COMPANION_FILE).write_text(json.dumps({"pid": os.getpid(), "base": base, "key": key}), encoding="utf-8")
-    print(f"OpenFill for PhotoCraft is running: {url}")
 
     holder: dict = {}
 
@@ -408,7 +406,13 @@ def main(argv: list[str] | None = None) -> int:
         print("Filter > Plug-ins:", ", ".join(labels) or "(this PhotoCraft has no plug-ins)")
     except ControlError as err:
         print("menu entries not added:", err)
+    try:
+        watcher.poll()  # so the page and the bar know the document from the start
+    except ControlError:
+        pass
     watcher.start()
+    (profile / COMPANION_FILE).write_text(json.dumps({"pid": os.getpid(), "base": base, "key": key}), encoding="utf-8")
+    print(f"OpenFill for PhotoCraft is running: {url}")
     service.warm_up()
     if os.environ.get("OPENFILL_NO_BROWSER"):
         pass  # tests and headless use: the address is in page-url.txt
