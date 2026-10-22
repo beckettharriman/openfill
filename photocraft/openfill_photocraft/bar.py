@@ -896,8 +896,11 @@ class Bar:
         self._last_state = st["state"]
 
     def _update_preview(self, st: dict[str, Any]) -> None:
+        in_editor = st["kind"] == "expand" and self.tab.get() == "expand" and not self.view
         if st["state"] != "running":
             self.preview.pack_forget()
+            if self.expand_view._preview is not None:
+                self.expand_view.show_preview(None)
             return
         if st["previewSeq"] == self._preview_seq:
             return
@@ -905,6 +908,14 @@ class Bar:
         with self.service.state.lock:
             data = self.service.state.preview
         if not data:
+            self.preview.pack_forget()
+            return
+        if in_editor:  # the new area fills in where the frame was dragged
+            try:
+                with Image.open(io.BytesIO(data)) as im:
+                    self.expand_view.show_preview(im.copy())
+            except Exception:  # noqa: BLE001 - a bad frame is skipped
+                pass
             self.preview.pack_forget()
             return
         try:
