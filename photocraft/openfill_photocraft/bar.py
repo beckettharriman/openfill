@@ -104,6 +104,29 @@ def icon_image(size: int = 64) -> Image.Image:
     return im.resize((size, size), Image.LANCZOS)
 
 
+def primary_monitor() -> tuple[int, int, int, int] | None:
+    """(x, y, width, height) of the primary monitor (X11 and XWayland, through xrandr)."""
+    import re
+    import shutil
+    import subprocess
+
+    if not shutil.which("xrandr"):
+        return None
+    try:
+        out = subprocess.run(["xrandr", "--listmonitors"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    monitors = []
+    for line in out.splitlines():
+        m = re.match(r"\s*\d+:\s+\+(\*?)\S+\s+(\d+)/\d+x(\d+)/\d+\+(-?\d+)\+(-?\d+)", line)
+        if m:
+            monitors.append((m.group(1) == "*", int(m.group(4)), int(m.group(5)), int(m.group(2)), int(m.group(3))))
+    if not monitors:
+        return None
+    best = next((m for m in monitors if m[0]), monitors[0])
+    return best[1], best[2], best[3], best[4]
+
+
 def expand_margins(width: int, height: int, preset: tuple[int, int] | None) -> tuple[int, int, int, int]:
     """(left, top, right, bottom) pixels that bring the canvas to ``preset``'s aspect ratio,
     split evenly; ``None`` adds 25% on every side."""
@@ -292,6 +315,8 @@ class Bar:
             b = ttk.Button(top, text=label, style="Tab.TButton", command=lambda k=key: self.select_tab(k))
             b.pack(side="left")
             self.tab_buttons[key] = b
+        ttk.Button(top, text="\u2013", style="Tab.TButton", command=self.collapse).pack(side="right")
+        self._build_pill()
         self.context = ttk.Label(self.root, style="Dim.TLabel", wraplength=WIDTH - 44, justify="left")
         self.context.pack(fill="x", pady=(8, 0), **pad)
 
@@ -397,13 +422,51 @@ class Bar:
         self.pick_size("Square")
         self._update_target()
 
+    def _build_pill(self) -> None:
+        """The collapsed bar: one line with the status; a click opens the bar again."""
+        self.pill = tk.Toplevel(self.root, bg=BG)
+        self.pill.title("OpenFill")
+        self.pill.resizable(False, False)
+        self.pill.attributes("-topmost", True)
+        self.pill.protocol("WM_DELETE_WINDOW", self.hide)
+        self.pill.withdraw()
+        row = ttk.Frame(self.pill)
+        row.pack(fill="x", padx=10, pady=6)
+        ttk.Label(row, text="OpenFill", font=self.bold).pack(side="left")
+        self.pill_text = ttk.Label(row, style="Dim.TLabel", width=24)
+        self.pill_text.pack(side="left", padx=(8, 8))
+        ttk.Button(row, text="Open", style="Chip.TButton", command=self.expand).pack(side="right")
+        for widget in (row, self.pill_text):
+            widget.bind("<Button-1>", lambda _e: self.expand())
+        self.collapsed = False
+
+    def collapse(self) -> None:
+        self.collapsed = True
+        self.prefs["collapsed"] = True
+        x = self.root.winfo_x() + self.root.winfo_width()
+        y = self.root.winfo_y()
+        self.root.withdraw()
+        self.pill.update_idletasks()
+        self.pill.geometry(f"+{max(0, x - self.pill.winfo_reqwidth())}+{y}")
+        self.pill.deiconify()
+        self.pill.lift()
+
+    def expand(self) -> None:
+        if self.collapsed:
+            self.collapsed = False
+            self.prefs["collapsed"] = False
+            self.pill.withdraw()
+        self.root.deiconify()
+        self.root.lift()
+
     def _place(self) -> None:
         self.root.update_idletasks()
         x, y = self.prefs.get("x"), self.prefs.get("y")
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         w = max(WIDTH, self.root.winfo_reqwidth())
         if not isinstance(x, int) or not isinstance(y, int) or not (0 <= x <= sw - w and 0 <= y < sh - 120):
-            x, y = max(0, sw - w - 40), 110  # top right, below a window's title and menu bars
+            mx, my, mw, _mh = primary_monitor() or (0, 0, sw, sh)
+            x, y = max(mx, mx + mw - w - 40), my + 110  # top right, below a window's title and menu bars
         self.root.geometry(f"+{x}+{y}")
         self.root.bind("<Configure>", self._moved)
 
@@ -419,8 +482,7 @@ class Bar:
 
     def show(self, action: str = "") -> None:
         """Bring the bar up; a menu action also picks its tab (Remove starts at once)."""
-        self.root.deiconify()
-        self.root.lift()
+        self.expand()
         self.root.attributes("-topmost", True)
         if action in dict(TABS):
             self.select_tab(action)
@@ -434,6 +496,8 @@ class Bar:
     def hide(self) -> None:
         self._save_prefs()
         self.root.withdraw()
+        self.pill.withdraw()
+        self.collapsed = False
         if not self.prefs.get("told_reopen"):
             self.prefs["told_reopen"] = True
             self._save_prefs()
@@ -731,6 +795,15 @@ class Bar:
 
         st = self.service.state.snapshot()
         busy = self.service.busy()
+        if self.collapsed:
+            if st["state"] == "running":
+                self.pill_text.configure(
+                    text=f"{ {'fill': 'Fill', 'expand': 'Expand', 'txt2img': 'Create'}.get(st['kind'], 'Working') }: {int(st['fraction'] * 100)}%"
+                )
+            elif st["state"] == "done" and len(st["variations"]) > 1:
+                self.expand()  # pick a variation
+            else:
+                self.pill_text.configure(text=status)
         self.go.state(["disabled"] if busy else ["!disabled"])
         if st["state"] == "idle":
             self.job.pack_forget()

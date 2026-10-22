@@ -238,6 +238,33 @@ def refresh_menus(folder: Path) -> None:
             subprocess.run(tool, capture_output=True, timeout=60)
 
 
+def plain_entry(binary: Path) -> Path:
+    """PhotoCraft's own menu entry and ``photocraft`` command for a PhotoCraft OpenFill
+    downloaded (the tarball has no installer of its own)."""
+    folder = data_home() / "applications"
+    folder.mkdir(parents=True, exist_ok=True)
+    sources = desktop_sources(str(binary))
+    text = sources[0].read_text(encoding="utf-8", errors="replace") if sources else entry_for(binary, None, False, "x")
+    lines = []
+    for line in text.splitlines():
+        key = line.split("=", 1)[0]
+        if key == "Exec":
+            line = f'Exec="{binary}" %F'
+        elif key == "TryExec":
+            line = f"TryExec={binary}"
+        elif line == MARKER:
+            continue
+        lines.append(line)
+    copy_icons(str(binary))
+    entry = folder / DESKTOP_ID
+    entry.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    link = bin_dir() / "photocraft"
+    if not link.exists() and not link.is_symlink():
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(binary)
+    return entry
+
+
 def install_entry(command: Path, photocraft: str | None, separate: bool) -> Path:
     folder = data_home() / "applications"
     folder.mkdir(parents=True, exist_ok=True)
@@ -354,6 +381,7 @@ def install(get_photocraft: bool, separate: bool, python: str) -> int:
         print("PhotoCraft is not installed.")
         if get_photocraft or ask("Download PhotoCraft (about 85 MB) and install it for you, no admin rights needed?"):
             photocraft = str(install_photocraft())
+            plain_entry(Path(photocraft))  # PhotoCraft's own entry: put back if OpenFill is removed
             print(f"PhotoCraft installed: {photocraft}")
         else:
             print("Install PhotoCraft (https://github.com/storytold/photocraft/releases), then run this again.")
@@ -372,7 +400,7 @@ def install(get_photocraft: bool, separate: bool, python: str) -> int:
     return 0
 
 
-def uninstall() -> int:
+def uninstall(with_photocraft: bool = False) -> int:
     folder = data_home() / "applications"
     for name in (DESKTOP_ID, SEPARATE_ID):
         entry = folder / name
@@ -389,9 +417,18 @@ def uninstall() -> int:
             path.unlink()
     shutil.rmtree(share_dir() / "app", ignore_errors=True)
     downloaded = sorted(share_dir().glob("photocraft-*"))
-    for folder_ in downloaded:
-        shutil.rmtree(folder_, ignore_errors=True)
-        print(f"removed {folder_} (the PhotoCraft OpenFill installed)")
+    if with_photocraft:
+        for folder_ in downloaded:
+            shutil.rmtree(folder_, ignore_errors=True)
+            print(f"removed {folder_} (the PhotoCraft OpenFill installed)")
+        link = bin_dir() / "photocraft"
+        if link.is_symlink() and str(share_dir()) in str(os.readlink(link)):
+            link.unlink()
+        entry = folder / DESKTOP_ID
+        if entry.is_file() and str(share_dir()) in entry.read_text(encoding="utf-8", errors="replace"):
+            entry.unlink()
+    elif downloaded:
+        print(f"PhotoCraft stays installed ({downloaded[-1]}); remove it too with --uninstall --with-photocraft.")
     try:
         share_dir().rmdir()
     except OSError:
@@ -407,9 +444,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--get-photocraft", action="store_true", help="download PhotoCraft without asking")
     parser.add_argument("--separate-icon", action="store_true", help="add a separate menu entry instead")
     parser.add_argument("--uninstall", action="store_true", help="remove OpenFill for PhotoCraft")
+    parser.add_argument(
+        "--with-photocraft", action="store_true", help="with --uninstall: the PhotoCraft it downloaded too"
+    )
     args = parser.parse_args(argv)
     if args.uninstall:
-        return uninstall_windows() if sys.platform == "win32" else uninstall()
+        return uninstall_windows() if sys.platform == "win32" else uninstall(args.with_photocraft)
     return install(args.get_photocraft, args.separate_icon, sys.executable)
 
 
