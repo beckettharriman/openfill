@@ -17,7 +17,6 @@ import json
 import queue
 import sys
 import threading
-import time
 import tkinter as tk
 import webbrowser
 from pathlib import Path
@@ -484,7 +483,7 @@ class Bar:
             logo.pack(side="left", padx=(8, 0), pady=6)
         name = tk.Label(row, text="OpenFill", font=self.bold, fg=TEXT, bg=PANEL)
         name.pack(side="left", padx=(6, 0))
-        self.pill_text = tk.Label(row, fg=DIM, bg=PANEL, font=self.small)
+        self.pill_text = tk.Label(row, fg=DIM, bg=PANEL, font=self.small, width=14, anchor="w")
         self.pill_text.pack(side="left", padx=(8, 10))
         for widget in (row, name, self.pill_text, *([logo] if logo else [])):
             widget.bind("<ButtonPress-1>", self._pill_press)
@@ -532,35 +531,32 @@ class Bar:
         return max(0, min(x, sw - w)), max(0, min(y, sh - h))
 
     def _place_pill(self) -> None:
+        right, bottom = self._pill_corner()
+        self._placing = True
+        self.pill.geometry(f"+{right - self.pill.winfo_reqwidth()}+{bottom - self.pill.winfo_reqheight()}")
+        self._placing = False
+
+    def _place_bar(self) -> None:
+        """The full bar opens from the strip: its bottom right where the strip's is."""
+        self.root.update_idletasks()
+        w, h = max(WIDTH, self.root.winfo_reqwidth()), self.root.winfo_reqheight()
+        right, bottom = self._pill_corner()
+        x, y = self._clamp(right - w, bottom - h, w, h)
+        self._placing = True
+        self.root.geometry(f"+{x}+{y}")
+        self._placing = False
+
+    def _pill_corner(self) -> tuple[int, int]:
+        """The strip's bottom right on screen (where it is, or where it would go)."""
         self.pill.update_idletasks()
         w, h = self.pill.winfo_reqwidth(), self.pill.winfo_reqheight()
         dx, dy = self.prefs.get("pill_off") or self._default_pill_off()
         right, bottom = self._anchor()
         x, y = self._clamp(right - dx - w, bottom - dy - h, w, h)
-        self._placing = True
-        self.pill.geometry(f"+{x}+{y}")
-        self._placing = False
-
-    def _place_bar(self) -> None:
-        """The full bar opens from the strip: its bottom right where the strip's is (or where
-        the user last left it, relative to PhotoCraft)."""
-        self.root.update_idletasks()
-        w, h = max(WIDTH, self.root.winfo_reqwidth()), self.root.winfo_reqheight()
-        right, bottom = self._anchor()
-        if self.prefs.get("bar_off"):
-            dx, dy = self.prefs["bar_off"]  # top right, from the anchor
-            x, y = right - dx - w, bottom - dy
-        else:
-            dx, dy = self.prefs.get("pill_off") or self._default_pill_off()
-            x, y = right - dx - w, bottom - dy - h
-        x, y = self._clamp(x, y, w, h)
-        self._placing = True
-        self.root.geometry(f"+{x}+{y}")
-        self._placing = False
+        return x + w, y + h
 
     def _place(self) -> None:
         self.tied = False
-        self._settle_until = 0.0
         self._pc_rect: tuple[int, int, int, int] | None = None
         self._placing = False
         self.root.bind("<Configure>", self._moved)
@@ -596,12 +592,13 @@ class Bar:
         old, self._pc_rect = self._pc_rect, rect
         if old is None:
             return
-        dx, dy = rect[2] - old[2], rect[3] - old[3]
-        for window, shown in ((self.pill, self.collapsed), (self.root, not self.collapsed)):
-            if shown:
-                self._placing = True
-                window.geometry(f"+{window.winfo_x() + dx}+{window.winfo_y() + dy}")
-                self._placing = False
+        if self.collapsed:
+            self._place_pill()
+        else:
+            dx, dy = rect[2] - old[2], rect[3] - old[3]
+            self._placing = True
+            self.root.geometry(f"+{self.root.winfo_x() + dx}+{self.root.winfo_y() + dy}")
+            self._placing = False
 
     def _keep_on_screen(self) -> None:
         """The bar grows (a job, a view): move it up rather than past the bottom of the screen."""
@@ -616,38 +613,67 @@ class Bar:
             self._placing = False
 
     def _moved(self, event) -> None:
-        if event.widget is not self.root or self._placing or self.collapsed:
-            return
-        if time.monotonic() < self._settle_until:
-            return  # the window being shown and placed, not moved by the user
-        right, bottom = self._anchor()
-        self.prefs["bar_off"] = [right - (self.root.winfo_x() + self.root.winfo_width()), bottom - self.root.winfo_y()]
+        """The bar may be dragged while open; it opens from the strip again next time."""
 
     def _unmapped(self, event) -> None:
         """Minimizing the bar folds it back to the strip (not when PhotoCraft hides it)."""
         if event.widget is self.root and not self.collapsed:
             self.root.after(10, lambda: self.root.state() == "iconic" and self.collapse())
 
+    def _fade(self, window, start: float, end: float, then=None, steps: int = 5, ms: int = 18) -> None:
+        """Fade a window's opacity from ``start`` to ``end`` (a few frames), then ``then()``."""
+
+        def step(i: int) -> None:
+            try:
+                window.attributes("-alpha", start + (end - start) * i / steps)
+            except tk.TclError:
+                pass
+            if i < steps:
+                window.after(ms, step, i + 1)
+            elif then:
+                then()
+
+        step(1)
+
+    def _reveal(self, window, place) -> None:
+        """Show ``window`` already laid out and in place, then fade it in (no jump, no pop-in)."""
+        try:
+            window.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
+        window.deiconify()
+        place()
+        window.update_idletasks()
+        window.update()
+        place()  # Tk may move a window on its first map: put it back while it is still invisible
+        window.lift()
+        self._fade(window, 0.0, 1.0)
+
     def collapse(self) -> None:
+        if self.collapsed and self.pill.winfo_viewable():
+            return
+        was_open = not self.collapsed and self.root.winfo_viewable()
         self.collapsed = True
         self.prefs["collapsed"] = True
-        self.root.withdraw()
-        self.pill.deiconify()
-        self._place_pill()
-        self.root.after(60, self._place_pill)  # again once mapped: Tk may drop it before
-        self.pill.lift()
+
+        def show_strip() -> None:
+            self.root.withdraw()
+            self._reveal(self.pill, self._place_pill)
+
+        if was_open:
+            self._fade(self.root, 1.0, 0.0, show_strip, steps=3)
+        else:
+            show_strip()
 
     def expand(self) -> None:
-        was = self.collapsed
-        self._settle_until = time.monotonic() + 1.0
+        if not self.collapsed and self.root.winfo_viewable():
+            self.root.lift()
+            return
         self.collapsed = False
         self.prefs["collapsed"] = False
+        self._update()  # lay the contents out before it shows
         self.pill.withdraw()
-        self.root.deiconify()
-        if was or not self.root.winfo_viewable():
-            self._place_bar()
-            self.root.after(60, self._place_bar)  # again once mapped: Tk may drop it before
-        self.root.lift()
+        self._reveal(self.root, self._place_bar)
 
     # actions ------------------------------------------------------------------------
 
