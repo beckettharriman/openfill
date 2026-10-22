@@ -333,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         for name in args.files:
             try:
-                client.call("app.open", path=os.path.relpath(Path(name).resolve(), read_root))
+                client.call("app.open", path=os.path.relpath(Path(name).resolve(), read_root).replace(os.sep, "/"))
             except (ControlError, ValueError) as err:
                 print(f"could not open {name}: {err}")
     else:

@@ -196,7 +196,7 @@ class PhotoCraftBridge:
 
     def _open_path(self, rel: str) -> str:
         """``rel`` (in the exchange folder) as app.open wants it: relative to the read root."""
-        return os.path.relpath(self.exchange / rel, self.read_root)
+        return os.path.relpath(self.exchange / rel, self.read_root).replace(os.sep, "/")  # PhotoCraft wants /
 
     def open_file(self, path: str) -> dict:
         """Open an image the user picked (inside the read root) in PhotoCraft."""
@@ -206,7 +206,7 @@ class PhotoCraftBridge:
             rel = ".."
         if rel.startswith(".."):
             raise BridgeError(f"PhotoCraft may only open files in {self.read_root} for OpenFill")
-        return self.client.call("app.open", path=rel) or {}
+        return self.client.call("app.open", path=rel.replace(os.sep, "/")) or {}
 
     def _forget(self, rel: str) -> None:
         try:

@@ -227,6 +227,12 @@ class Service:
             raise RuntimeError("A job is already running.")
         with self.state.lock:
             self.state.state, self.state.kind, self.state.message, self.state.text = "running", kind, "", "Starting..."
+            self.state.title = {
+                "fill": "Remove object" if params.get("remove") else "Generative Fill",
+                "expand": "Generative Expand",
+                "txt2img": "Text to Image",
+            }.get(kind, kind)
+            self.state.model = ""
             self.state.fraction, self.state.started, self.state.finished = 0.0, time.time(), 0.0
             self.state.cancel_requested, self.state.variations, self.state.shown = False, [], 0
             self.state.preview, self.state.preview_seq = b"", self.state.preview_seq + 1

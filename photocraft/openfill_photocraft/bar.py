@@ -390,7 +390,7 @@ class Bar:
         self.job_title.pack(anchor="w")
         self.progress = ttk.Progressbar(self.job, mode="determinate", maximum=1000, style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", pady=(6, 2))
-        self.job_text = ttk.Label(self.job, style="Dim.TLabel")
+        self.job_text = ttk.Label(self.job, style="Dim.TLabel", wraplength=WIDTH - 44, justify="left")
         self.job_text.pack(anchor="w")
         self.preview = tk.Label(self.job, bg=BG, bd=0)
         self.thumbs = ttk.Frame(self.job)

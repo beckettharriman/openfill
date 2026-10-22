@@ -420,6 +420,10 @@ class BridgeTests(unittest.TestCase):
         self.bridge.finish(self.image)
         self.assertEqual(self.target["history"], ["Open"])
 
+    def test_paths_for_photocraft_use_forward_slashes(self):
+        bridge = PhotoCraftBridge(self.pc, self.exchange, Path(self.tmp.name), read_root=Path(self.tmp.name))
+        self.assertEqual(bridge._open_path("a b.png"), "exchange/a b.png")  # never a backslash on Windows
+
     def test_open_file_only_inside_the_read_root(self):
         bridge = PhotoCraftBridge(self.pc, self.exchange, Path(self.tmp.name), read_root=Path(self.tmp.name))
         picture = Path(self.tmp.name) / "holiday.png"
