@@ -274,14 +274,15 @@ def tell(title: str, text: str, ask: bool = False) -> bool:
         return False
     try:
         import tkinter as tk
-        from tkinter import messagebox
 
-        root = tk.Tk()
+        from openfill_photocraft import ui
+
+        root = tk.Tk(className="OpenFill")
         root.withdraw()
         try:
             if ask:
-                return bool(messagebox.askokcancel(title, text, parent=root))
-            messagebox.showinfo(title, text, parent=root)
+                return ui.ask(root, text, "OK", "warn")
+            ui.message(root, text, "info")
         finally:
             root.destroy()
     except Exception:  # noqa: BLE001 - no Tk (ComfyUI's embedded Python on Windows)
