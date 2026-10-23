@@ -1,12 +1,14 @@
 # OpenFill for PhotoCraft
 # SPDX-License-Identifier: Apache-2.0
-"""The OpenFill bar: a small window that stays on top of PhotoCraft, like Photoshop's
-contextual task bar. Prompt, Generate, progress with a live preview, and the
-variations picker. Models and settings stay on the web page (the "Models and
-settings" button opens it).
+"""The OpenFill panel: a window without a title bar that stays on top of PhotoCraft, like
+Photoshop's contextual task bar. Its header (OpenFill and the engine's status, the gear for
+Models and settings, and the collapse control) is the drag handle. Below it: the mode
+(Fill, Remove, Expand, Create), the prompt and options, the job card with the live preview
+and the variations, and the action buttons at the bottom. Collapsed, it is a small strip
+in PhotoCraft's corner.
 
 Tk runs on the main thread; the job runs in the service's worker thread, and slower
-look-ups (models on disk, ComfyUI) in a refresher thread. The bar only reads their
+look-ups (models on disk, ComfyUI) in a refresher thread. The panel only reads their
 results.
 """
 
@@ -15,86 +17,41 @@ from __future__ import annotations
 import io
 import json
 import queue
-import sys
 import threading
 import tkinter as tk
 import webbrowser
 from pathlib import Path
-from tkinter import font as tkfont
-from tkinter import ttk
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
+from . import ui
 from .menu import Watcher
+from .modelinfo import hardware_line, needed_by
 from .service import Service
+from .ui import ACCENT, BAD, BG, CW, DIM, LABEL_W, LINE, OK, PAD, PANEL, TEXT, WARN, W, photo
 
-BG, PANEL, LINE, TEXT, DIM, ACCENT, BAD, OK, WARN = (
-    "#1e1f22",
-    "#2b2d31",
-    "#3a3c42",
-    "#e8e8ea",
-    "#9a9ba2",
-    "#4a8ef0",
-    "#e5534b",
-    "#3fb950",
-    "#e8a33d",
-)
-WIDTH = 420
-PREVIEW_MAX = (WIDTH - 32, 230)
-THUMB = 64
-
-
-def photo(image: Image.Image) -> tk.PhotoImage:
-    """A Tk image from a Pillow one, through PNG (Tk reads PNG itself; no ImageTk needed)."""
-    buf = io.BytesIO()
-    image.save(buf, "PNG")
-    return tk.PhotoImage(data=buf.getvalue())
-
+WIDTH = W
+PREVIEW_MAX = (CW - 24, 230)
+THUMB_H = 72
 
 TABS = (("fill", "Fill"), ("remove", "Remove"), ("expand", "Expand"), ("txt2img", "Create"))
 CREATE_SIZES = (("Square", 1024, 1024), ("Landscape", 1216, 832), ("Portrait", 832, 1216))
 STARTER = ("lama-big", "dreamshaper-8-inpainting")
+GO = {"fill": "Generate", "remove": "Remove", "expand": "Expand", "txt2img": "Create"}
+PLACEHOLDERS = {
+    "fill": "Describe what to add, or leave it empty to fill from the surroundings.",
+    "expand": "Optional: describe what the new area shows.",
+    "txt2img": "Describe the image you want.",
+}
+NO_SELECTION = "Select an area first: Marquee, Lasso or Object Selection."
+NO_MODELS = "No models installed"
+STATUS_COLOR = {"Ready": OK, "Not set up": WARN, "Checking...": DIM, "Starting the AI engine...": WARN}
 
 
 def icon_image(size: int = 64) -> Image.Image:
     """OpenFill's window icon: a white four-point sparkle on a blue rounded square."""
-    from PIL import ImageDraw
-
-    scale = 4
-    big = size * scale
-    im = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    d.rounded_rectangle((0, 0, big - 1, big - 1), radius=big // 5, fill=(74, 142, 240, 255))
-    c, r, w = big / 2, big * 0.36, big * 0.09
-    d.polygon(
-        [
-            (c, c - r),
-            (c + w, c - w),
-            (c + r, c),
-            (c + w, c + w),
-            (c, c + r),
-            (c - w, c + w),
-            (c - r, c),
-            (c - w, c - w),
-        ],
-        fill="white",
-    )
-    sc, sr, sw = big * 0.76, big * 0.12, big * 0.035
-    d.polygon(
-        [
-            (sc, sc - sr - big * 0.48),
-            (sc + sw, sc - sw - big * 0.48),
-            (sc + sr, sc - big * 0.48),
-            (sc + sw, sc + sw - big * 0.48),
-            (sc, sc + sr - big * 0.48),
-            (sc - sw, sc + sw - big * 0.48),
-            (sc - sr, sc - big * 0.48),
-            (sc - sw, sc - sw - big * 0.48),
-        ],
-        fill="white",
-    )
-    return im.resize((size, size), Image.LANCZOS)
+    return ui.app_icon_image(size)
 
 
 def primary_monitor() -> tuple[int, int, int, int] | None:
@@ -163,7 +120,7 @@ def expand_margins(width: int, height: int, preset: tuple[int, int] | None) -> t
 
 
 class Refresher:
-    """Slow facts for the bar, looked up off the UI thread every few seconds."""
+    """Slow facts for the panel, looked up off the UI thread every few seconds."""
 
     def __init__(self, service: Service) -> None:
         self.service = service
@@ -181,7 +138,7 @@ class Refresher:
         while True:
             try:
                 facts = self.look()
-            except Exception as err:  # noqa: BLE001 - shown on the bar
+            except Exception as err:  # noqa: BLE001 - shown on the panel
                 facts = {"error": str(err)}
             with self.lock:
                 self.facts = facts
@@ -215,27 +172,69 @@ class Refresher:
             active=active,
             active_name=next((r["name"] for r in rows if r["id"] == active), ""),
             downloading="",
+            current=current,
+            pending=pending,
         )
         busy = [r for r in rows if r["id"] == current.get("model_id") or r["id"] in pending]
         if busy:
             facts["downloading"] = "; ".join(f"{r['name']}: {cat.row_status(r, current, pending)}" for r in busy)
+        names = {r["id"]: r["name"] for r in rows}
+        if current.get("type") == "download" and current.get("model_id") in names:
+            total = current.get("total") or 0
+            facts["download"] = {
+                "id": current["model_id"],
+                "name": names[current["model_id"]],
+                "fraction": (current.get("done") or 0) / total if total else 0.0,
+            }
+        else:
+            waiting = [
+                t for t in app.server.pending_tasks() if t.get("type") == "download" and t.get("model_id") in names
+            ]
+            if waiting:
+                facts["download"] = {
+                    "id": waiting[0]["model_id"],
+                    "name": names[waiting[0]["model_id"]],
+                    "fraction": 0.0,
+                }
         facts["starter_missing"] = [r["id"] for r in rows if r["id"] in STARTER and not r["installed"]]
         for row in rows:
             row["statusText"] = cat.row_status(row, current, pending)
+            if not row["runnable"]:
+                row["neededBy"] = needed_by(list(app.catalog), row["id"])
         facts["rows"] = rows
         if self._hardware is None:
             try:
                 from openfill import hardware
 
-                self._hardware = hardware.detect(app.models_root, app.server.url()).summary()
+                self._hardware = hardware_line(hardware.detect(app.models_root, app.server.url()))
             except Exception:  # noqa: BLE001 - only shown in the Models view
                 self._hardware = ""
         facts["hardware"] = self._hardware
         return facts
 
 
+def cover(image: Image.Image, width: int, height: int, radius: int = 0, bg: str = PANEL) -> Image.Image:
+    """``image`` scaled to cover ``width`` x ``height`` (cropped in the middle), corners rounded on ``bg``."""
+    im = image.convert("RGB")
+    scale = max(width / im.width, height / im.height)
+    w, h = max(1, round(im.width * scale)), max(1, round(im.height * scale))
+    im = im.resize((w, h), Image.LANCZOS)
+    left, top = (w - width) // 2, (h - height) // 2
+    im = im.crop((left, top, left + width, top + height))
+    return rounded(im, radius, bg) if radius else im
+
+
+def rounded(im: Image.Image, radius: int, bg: str) -> Image.Image:
+    mask = Image.new("L", (im.width * 4, im.height * 4), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, im.width * 4 - 1, im.height * 4 - 1), radius=radius * 4, fill=255)
+    mask = mask.resize(im.size, Image.BOX)
+    base = Image.new("RGB", im.size, bg)
+    base.paste(im, (0, 0), mask)
+    return base
+
+
 class Bar:
-    """The window. ``show(action)`` is what the Filter > Plug-ins entries call."""
+    """The window. ``show(action)`` is what the Filter > Plug-ins entry calls."""
 
     def __init__(self, service: Service, watcher: Watcher, page_url: str, profile: Path) -> None:
         self.service, self.watcher, self.page_url, self.profile = service, watcher, page_url, profile
@@ -243,32 +242,31 @@ class Bar:
         self.prefs = self._load_prefs()
         self.calls: queue.Queue = queue.Queue()  # actions from other threads
         self.refresher = Refresher(service)
-        self.wrap = WIDTH - 44
-        self.colors = {"BG": BG, "OK": OK, "BAD": BAD, "DIM": DIM, "TEXT": TEXT}
-        self.view = ""  # "", "models" or "settings"
+        self.wrap = CW
+        self.colors = {"BG": BG, "OK": OK, "BAD": BAD, "DIM": DIM, "TEXT": TEXT, "WARN": WARN}
+        self.view = ""  # "" (the tools) or "settings" (Models and settings)
         self.root = tk.Tk(className="OpenFill")
         self.root.title("OpenFill")
         self.root.configure(bg=BG)
         self.root.resizable(False, False)
-        self.root.minsize(WIDTH, 120)
-        self.root.maxsize(WIDTH, 4000)  # a fixed width; long texts wrap
+        self.frameless = ui.make_borderless(self.root)  # before it is tied to PhotoCraft or shown
         self.root.attributes("-topmost", True)  # dropped when tied to PhotoCraft (Windows)
         self.root.protocol("WM_DELETE_WINDOW", self.collapse)  # closing folds it back to the strip
         self.root.bind("<Unmap>", self._unmapped)
-        self._small_icon = None
+        self.fonts = ui.fonts(self.root)
+        self.small = self.fonts.small
+        self.bold = self.fonts.bold
         try:
             self._icon = photo(icon_image())
             self.root.iconphoto(True, self._icon)
-            self._small_icon = photo(icon_image(18))
         except Exception:  # noqa: BLE001 - the window works without an icon
             pass
         from .tether import Tether
 
         self.tether = Tether()
-        self._style()
         self.tab = tk.StringVar(value="fill")
-        self.variations = tk.IntVar(value=int(self.prefs.get("variations", 1)))
-        self.model_choice = tk.StringVar(value="Active model")
+        self.variations = tk.IntVar(value=max(1, min(5, int(self.prefs.get("variations", 1)))))
+        self.model_choice = tk.StringVar(value="")
         self.target = tk.StringVar(value="image")
         self.size_name = tk.StringVar(value="Square")
         self._preview_seq = -1
@@ -276,6 +274,8 @@ class Bar:
         self._thumbs_for: tuple = ()
         self._model_ids: dict[str, str] = {}
         self._last_state = ""
+        self._note: tuple[str, str, str] | None = None  # (text, colour, the context it replaced)
+        self._shown: dict[str, Any] = {}  # what each part last showed, so a tick changes only what changed
         self._build()
         self._place()
         self.root.after(150, self._tick)
@@ -294,203 +294,214 @@ class Bar:
         except OSError:
             pass
 
-    def _style(self) -> None:
-        for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont"):
-            f = tkfont.nametofont(name)
-            families = set(tkfont.families(self.root))
-            for family in ("Inter", "Noto Sans", "Segoe UI", "SF Pro Text", "Helvetica Neue", "DejaVu Sans"):
-                if family in families:
-                    f.configure(family=family)
-                    break
-            f.configure(size=10)
-        self.bold = tkfont.nametofont("TkDefaultFont").copy()
-        self.bold.configure(weight="bold")
-        self.small = tkfont.nametofont("TkDefaultFont").copy()
-        self.small.configure(size=9)
-        s = ttk.Style(self.root)
-        s.theme_use("clam")
-        s.configure(
-            ".",
-            background=BG,
-            foreground=TEXT,
-            fieldbackground=PANEL,
-            bordercolor=LINE,
-            lightcolor=PANEL,
-            darkcolor=PANEL,
-            troughcolor=PANEL,
-            focuscolor=ACCENT,
-            insertcolor=TEXT,
-        )
-        s.configure("TFrame", background=BG)
-        s.configure("TLabel", background=BG, foreground=TEXT)
-        s.configure("Dim.TLabel", foreground=DIM, font=self.small)
-        s.configure("Bad.TLabel", foreground=BAD)
-        s.configure("Ok.TLabel", foreground=OK)
-        s.configure("Warn.TLabel", foreground=WARN)
-        s.configure("TButton", background=PANEL, foreground=TEXT, padding=(10, 5), borderwidth=1, relief="flat")
-        s.map("TButton", background=[("active", LINE), ("disabled", BG)], foreground=[("disabled", DIM)])
-        s.configure("Accent.TButton", background=ACCENT, foreground="#ffffff", font=self.bold)
-        s.map("Accent.TButton", background=[("active", "#5d9cf5"), ("disabled", LINE)])
-        s.configure("Tab.TButton", background=BG, foreground=DIM, padding=(14, 6), width=0)
-        s.configure("TabOn.TButton", background=PANEL, foreground=TEXT, padding=(14, 6), font=self.bold, width=0)
-        s.map("Tab.TButton", background=[("active", PANEL)])
-        s.configure("Chip.TButton", padding=(8, 3), font=self.small, width=0)
-        s.configure("ChipOn.TButton", padding=(8, 3), font=self.small, background=ACCENT, foreground="#ffffff", width=0)
-        s.configure("TEntry", padding=6)
-        s.configure("TCheckbutton", background=BG, foreground=TEXT, indicatorbackground=PANEL, indicatorforeground=TEXT)
-        s.map("TCheckbutton", background=[("active", BG)], indicatorbackground=[("selected", ACCENT)])
-        s.configure("Vertical.TScrollbar", background=PANEL, troughcolor=BG, arrowcolor=DIM, bordercolor=BG)
-        s.configure("TCombobox", padding=4, arrowcolor=TEXT)
-        s.map("TCombobox", fieldbackground=[("readonly", PANEL)], foreground=[("readonly", TEXT)])
-        s.configure("Horizontal.TProgressbar", background=ACCENT, troughcolor=PANEL, borderwidth=0, thickness=6)
-        self.root.option_add("*TCombobox*Listbox.background", PANEL)
-        self.root.option_add("*TCombobox*Listbox.foreground", TEXT)
-        self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
-
     def _build(self) -> None:
-        pad = {"padx": 14}
-        top = self.top = ttk.Frame(self.root)
-        top.pack(fill="x", pady=(10, 0), **pad)
-        self.tab_buttons = {}
-        for key, label in TABS:
-            b = ttk.Button(top, text=label, style="Tab.TButton", command=lambda k=key: self.select_tab(k))
-            b.pack(side="left")
-            self.tab_buttons[key] = b
-        ttk.Button(top, text="\u2013", style="Tab.TButton", command=self.collapse).pack(side="right")
-        self._build_pill()
-        self.main = ttk.Frame(self.root)
-        self.main.pack(fill="x", **pad)
-        self.context = ttk.Label(self.main, style="Dim.TLabel", wraplength=WIDTH - 44, justify="left")
-        self.context.pack(fill="x", pady=(8, 0))
+        root, f = self.root, self.fonts
+        self._build_header()
+        ui.divider(root).pack(fill="x")
+        # The body scrolls as a whole when the screen is too short for it (no scroll bar).
+        self.scroller = tk.Canvas(root, width=W, height=10, bg=BG, bd=0, highlightthickness=0, yscrollincrement=1)
+        self.scroller.pack(fill="x")
+        self.inner = ui.frame(self.scroller)
+        self._inner_item = self.scroller.create_window(0, 0, window=self.inner, anchor="nw", width=W)
+        self.inner.bind("<Configure>", lambda _e: self._fit_height())
+        root.bind_all("<MouseWheel>", self._wheel, add="+")
+        root.bind_all("<Button-4>", self._wheel, add="+")
+        root.bind_all("<Button-5>", self._wheel, add="+")
+        self.main = ui.frame(self.inner)
+        self.main.pack(fill="x", padx=PAD)
+        self.bottom_gap = ui.gap(self.inner, 16)
+        self.bottom_gap.pack(fill="x")
 
-        self.body = ttk.Frame(self.main)
-        self.body.pack(fill="x", pady=(6, 0))
+        m = self.main
+        self.modes = ui.Seg(m, TABS, self.select_tab, CW, 13)
+        self.tab_buttons = {key: _SegKey(self.modes, key) for key, _label in TABS}
+        self.context_row = ui.frame(m)
+        self.context_icon = tk.Label(self.context_row, bg=BG, bd=0, highlightthickness=0)
+        self.context_icon.pack(side="left", anchor="n", pady=(1, 0))
+        self.context = ui.small(self.context_row, "", wrap=CW - 20)
+        self.context.pack(side="left", padx=(6, 0), fill="x")
+        self.remove_line = ui.small(m, "Erases what you selected and fills in the background around it.")
 
-        # Fill and Create: the prompt
-        self.prompt_row = ttk.Frame(self.body)
-        self.prompt = ttk.Entry(self.prompt_row, width=14)
-        self.prompt.pack(side="left", fill="x", expand=True)
-        self.prompt.bind("<Return>", lambda _e: self.generate())
-        self.prompt.bind("<KP_Enter>", lambda _e: self.generate())
-        self.prompt.bind("<Up>", lambda _e: self._recall(1))
-        self.prompt.bind("<Down>", lambda _e: self._recall(-1))
-        self._recall_at = -1
-        self.go = ttk.Button(self.prompt_row, text="Generate", style="Accent.TButton", command=self.generate)
-        self.go.pack(side="left", padx=(8, 0))
-        self.hint = ttk.Label(self.body, style="Dim.TLabel", wraplength=WIDTH - 44, justify="left")
-
-        # Expand: the GIMP plug-in's drag editor
         from .expand_view import ExpandView
 
-        self.expand_view = ExpandView(self, self.body)
+        self.expand_view = ExpandView(self, m)
         self._thumb_busy = False
+        self.prompt = ui.PromptBox(m, self.generate, self._recall)
+        self._recall_at = -1
 
         # Create: size and destination
-        self.create_row = ttk.Frame(self.body)
-        self.size_buttons = {}
-        for label, _w, _h in CREATE_SIZES:
-            b = ttk.Button(
-                self.create_row, text=label, style="Chip.TButton", command=lambda lab=label: self.pick_size(lab)
-            )
-            b.pack(side="left", padx=(0, 4))
-            self.size_buttons[label] = b
-        self.target_row = ttk.Frame(self.body)
-        ttk.Label(self.target_row, text="Result as", style="Dim.TLabel").pack(side="left")
-        self.target_buttons = {}
-        for value, label in (("image", "New image"), ("layer", "Layer in this image")):
-            b = ttk.Button(
-                self.target_row, text=label, style="Chip.TButton", command=lambda v=value: self.pick_target(v)
-            )
-            b.pack(side="left", padx=(6, 0))
-            self.target_buttons[value] = b
+        self.create_rows = ui.frame(m)
+        self.size_seg = ui.Seg(
+            self._row(self.create_rows, "Size"),
+            [(label, label) for label, _w, _h in CREATE_SIZES],
+            self.pick_size,
+            ui.FIELD_W,
+            12,
+        )
+        self.size_seg.pack(side="left")
+        self.size_buttons = {label: _SegKey(self.size_seg, label) for label, _w, _h in CREATE_SIZES}
+        self.size_px = ui.small(self.create_rows, "", wrap=ui.FIELD_W, anchor="center")
+        self.size_px.pack(fill="x", padx=(LABEL_W + 12, 0), pady=(4, 0))
+        self.target_seg = ui.Seg(
+            self._row(self.create_rows, "Result as", pady=(8, 0)),
+            (("image", "New image"), ("layer", "Layer in this image")),
+            self.pick_target,
+            ui.FIELD_W,
+            12,
+        )
+        self.target_seg.pack(side="left")
+        self.target_buttons = {key: _SegKey(self.target_seg, key) for key in ("image", "layer")}
 
         # Options: variations and model
-        self.options = ttk.Frame(self.body)
-        ttk.Label(self.options, text="Variations", style="Dim.TLabel").pack(side="left")
-        self.var_buttons = []
-        for n in (1, 2, 3, 4):
-            b = ttk.Button(
-                self.options, text=str(n), width=2, style="Chip.TButton", command=lambda k=n: self.pick_variations(k)
-            )
-            b.pack(side="left", padx=(4 if n == 1 else 2, 0))
-            self.var_buttons.append(b)
-        self.model_row = ttk.Frame(self.body)
-        ttk.Label(self.model_row, text="Model", style="Dim.TLabel").pack(side="left")
-        self.model_box = ttk.Combobox(self.model_row, textvariable=self.model_choice, state="readonly", width=12)
-        self.model_box.pack(side="left", padx=(16, 0), fill="x", expand=True)
-
-        # Progress and result
-        self.job = ttk.Frame(self.root)
-        self.job_title = ttk.Label(self.job, font=self.bold)
-        self.job_title.pack(anchor="w")
-        self.progress = ttk.Progressbar(self.job, mode="determinate", maximum=1000, style="Horizontal.TProgressbar")
-        self.progress.pack(fill="x", pady=(6, 2))
-        self.job_text = ttk.Label(self.job, style="Dim.TLabel", wraplength=WIDTH - 44, justify="left")
-        self.job_text.pack(anchor="w")
-        self.preview = tk.Label(self.job, bg=BG, bd=0)
-        self.thumbs = ttk.Frame(self.job)
-        self.job_buttons = ttk.Frame(self.job)
-        self.cancel_button = ttk.Button(self.job_buttons, text="Cancel", command=self.service.cancel)
-        self.discard_button = ttk.Button(self.job_buttons, text="Discard", command=lambda: self.keep("none"))
-        self.keep_all_button = ttk.Button(self.job_buttons, text="Keep all", command=lambda: self.keep("all"))
-        self.keep_button = ttk.Button(
-            self.job_buttons, text="Keep", style="Accent.TButton", command=lambda: self.keep("selected")
+        self.options = ui.frame(m)
+        self.var_seg = ui.Seg(
+            self._row(self.options, "Variations"),
+            [(n, str(n)) for n in range(1, 6)],
+            self.pick_variations,
+            ui.FIELD_W,
+            12,
         )
-        self.message = ttk.Label(self.root, wraplength=WIDTH - 44, justify="left")
+        self.var_seg.pack(side="left")
+        self.var_buttons = [_SegKey(self.var_seg, n) for n in range(1, 6)]
+        self.model_box = ui.Select(
+            self._row(self.options, "Model", pady=(8, 0)),
+            ui.FIELD_W,
+            command=self._model_picked,
+            manage=lambda: self.select_view("models"),
+        )
+        self.model_box.pack(side="left")
 
-        # Setup banner and footer
-        self.setup = ttk.Frame(self.root)
-        self.setup_text = ttk.Label(self.setup, style="Warn.TLabel", wraplength=WIDTH - 44, justify="left")
-        self.setup_text.pack(anchor="w")
-        self.setup_buttons = ttk.Frame(self.setup)
-        self.setup_button = ttk.Button(self.setup_buttons, style="Accent.TButton", command=self._setup_action)
-        self.setup_button.pack(side="left")
-        self.setup_help = ttk.Button(self.setup_buttons, text="How to install ComfyUI", command=self._comfy_help)
-        self.footer = ttk.Frame(self.root)
-        self.footer.pack(side="bottom", fill="x", pady=(10, 10), **pad)
-        self.status = ttk.Label(self.footer, style="Dim.TLabel")
-        self.status.pack(side="left")
-        self.view_buttons = {}
-        for key, label in (("settings", "Settings"), ("models", "Models")):
-            b = ttk.Button(self.footer, text=label, style="Chip.TButton", command=lambda k=key: self.select_view(k))
-            b.pack(side="right", padx=(6, 0))
-            self.view_buttons[key] = b
-        from .panels import ModelsView, SettingsView
+        # The setup card (ComfyUI missing, no models, a download) and the job card
+        self.setup = ui.Card(m)
+        self._setup_key: tuple = ()
+        self.job = ui.Card(m)
+        j = self.job.inner
+        head = ui.frame(j, PANEL)
+        head.pack(fill="x")
+        self.job_title = ui.text(head, "", f.bold, bg=PANEL)
+        self.job_title.pack(side="left")
+        self.job_model = ui.small(head, "", bg=PANEL, wrap=0)
+        self.job_model.pack(side="right")
+        self.progress = ui.Progress(j, CW - 24)
+        self.progress.pack(fill="x", pady=(8, 0))
+        self.job_text = ui.text(j, "", f.small, DIM, PANEL, CW - 24)
+        self.job_text.pack(fill="x", pady=(8, 0))
+        self.preview = tk.Label(j, bg=PANEL, bd=0, highlightthickness=0)
+        self.thumbs = ui.frame(j, PANEL)
+        ui.caption(self.thumbs, "Pick a variation", PANEL).pack(anchor="w")
+        self.thumb_row = ui.frame(self.thumbs, PANEL)
+        self.thumb_row.pack(fill="x", pady=(8, 0))
+        self.thumb_cells: list[tk.Canvas] = []
 
-        self.models_view = ModelsView(self)
-        self.settings_view = SettingsView(self)
+        # Models and settings, behind the gear
+        from .panels import GearView
 
-        self.root.bind("<Escape>", lambda _e: self.service.cancel() if self.service.busy() else None)
+        self.gear = GearView(self, self.inner)
+        self.models_view = self.gear.models
+        self.settings_view = self.gear
+
+        # The action bar at the bottom
+        self.footer = ui.frame(root)
+        self.footer.pack(fill="x")
+        ui.divider(self.footer).pack(fill="x")
+        self.actions = ui.frame(self.footer)
+        self.actions.pack(fill="x", padx=PAD, pady=(12, PAD))
+        third = (CW - 16) // 3
+        self.go = ui.Button(self.actions, "Generate", self.generate, "primary", CW)
+        self.cancel_button = ui.Button(self.actions, "Cancel", self.service.cancel, "secondary", CW, 36)
+        self.discard_button = ui.Button(self.actions, "Discard", lambda: self.keep("none"), "secondary", third, 36)
+        self.keep_all_button = ui.Button(self.actions, "Keep all", lambda: self.keep("all"), "secondary", third, 36)
+        self.keep_button = ui.Button(
+            self.actions, "Keep", lambda: self.keep("selected"), "primary", CW - 2 * third - 16
+        )
+        self.save_button = ui.Button(self.actions, "Save", self.gear.save, "primary", CW)
+        self._footer_key: tuple = ()
+
+        self._build_pill()
+        root.bind("<Escape>", lambda _e: self.service.cancel() if self.service.busy() else None)
         self.select_tab("fill")
         self.pick_variations(self.variations.get())
         self.pick_size("Square")
         self._update_target()
 
+    def _row(self, parent: tk.Misc, label: str, pady=(0, 0)) -> tk.Frame:
+        """A form row: an 84 px grey label, then the control (packed into the returned frame)."""
+        row = ui.frame(parent)
+        row.pack(fill="x", pady=pady)
+        cell = ui.frame(row, width=LABEL_W, height=32)
+        cell.pack_propagate(False)
+        cell.pack(side="left")
+        ui.small(cell, label, wrap=0).pack(side="left")
+        holder = ui.frame(row)
+        holder.pack(side="left", padx=(12, 0))
+        return holder
+
+    def _build_header(self) -> None:
+        f = self.fonts
+        head = self.header = ui.frame(self.root, width=W, height=44)
+        head.pack_propagate(False)
+        head.pack(fill="x")
+        self.collapse_button = ui.IconButton(head, "collapse", self.collapse)
+        self.collapse_button.pack(side="right", padx=(2, 10))
+        self.gear_button = ui.IconButton(head, "gear", self.toggle_gear)
+        self.gear_button.pack(side="right")
+        self.head_tools = ui.frame(head)
+        logo = tk.Label(self.head_tools, image=ui.app_icon(18, BG), bg=BG, bd=0, highlightthickness=0)
+        logo.pack(side="left")
+        name = ui.text(self.head_tools, "OpenFill", f.bold)
+        name.pack(side="left", padx=(8, 0))
+        self.status_dot = tk.Label(self.head_tools, bg=BG, bd=0, highlightthickness=0)
+        self.status_dot.pack(side="left", padx=(12, 0))
+        self.status = ui.small(self.head_tools, "Checking...", wrap=0)
+        self.status.pack(side="left", padx=(6, 0))
+        self.head_view = ui.frame(head)
+        ui.IconButton(self.head_view, "back", lambda: self.select_tab(self.tab.get())).pack(side="left")
+        view_title = ui.text(self.head_view, "Models and settings", f.bold)
+        view_title.pack(side="left", padx=(0, 0))
+        self.head_tools.pack(side="left", padx=(PAD, 0), fill="y")
+        ui.drag_handle(
+            (head, self.head_tools, logo, name, self.status_dot, self.status, self.head_view, view_title), self.root
+        )
+
     def _build_pill(self) -> None:
-        """The collapsed bar: a small strip in a corner of PhotoCraft; a click opens the bar."""
+        """The collapsed panel: a small strip in a corner of PhotoCraft; a click opens the panel."""
         self.pill = tk.Toplevel(self.root, bg=PANEL)
         self.pill.title("OpenFill")
         self.pill.resizable(False, False)
         self.pill.protocol("WM_DELETE_WINDOW", self.hide)
+        ui.make_borderless(self.pill)  # a chip, not a window: it is tied to PhotoCraft's
         self.pill.attributes("-topmost", True)  # dropped when tied to PhotoCraft (Windows)
-        if sys.platform == "win32":
-            self.pill.overrideredirect(True)  # a chip, not a window: it is tied to PhotoCraft's
         self.pill.withdraw()
-        row = tk.Frame(self.pill, bg=PANEL, cursor="hand2")
-        row.pack(fill="both", padx=1, pady=1)
-        logo = tk.Label(row, image=self._small_icon, bg=PANEL) if self._small_icon else None
-        if logo is not None:
-            logo.pack(side="left", padx=(8, 0), pady=6)
-        name = tk.Label(row, text="OpenFill", font=self.bold, fg=TEXT, bg=PANEL)
-        name.pack(side="left", padx=(6, 0))
-        self.pill_text = tk.Label(row, fg=DIM, bg=PANEL, font=self.small, width=14, anchor="w")
-        self.pill_text.pack(side="left", padx=(8, 10))
-        for widget in (row, name, self.pill_text, *([logo] if logo else [])):
-            widget.bind("<ButtonPress-1>", self._pill_press)
-            widget.bind("<B1-Motion>", self._pill_drag)
-            widget.bind("<ButtonRelease-1>", self._pill_release)
+        self.pill_canvas = tk.Canvas(
+            self.pill, width=236, height=36, bg=PANEL, bd=0, highlightthickness=0, cursor="hand2"
+        )
+        self.pill_canvas.pack()
+        self.pill_canvas.bind("<ButtonPress-1>", self._pill_press)
+        self.pill_canvas.bind("<B1-Motion>", self._pill_drag)
+        self.pill_canvas.bind("<ButtonRelease-1>", self._pill_release)
         self.collapsed = False
         self._pill_grab: tuple[int, int, int, int] | None = None
+        self._pill_shown: tuple = ()
+        self._draw_pill("Checking...", DIM, None)
+
+    def _draw_pill(self, status: str, color: str, fraction: float | None) -> None:
+        key = (status, color, None if fraction is None else round(fraction, 3))
+        if key == self._pill_shown:
+            return
+        self._pill_shown = key
+        c, f = self.pill_canvas, self.fonts
+        c.delete("all")
+        c.create_rectangle(0, 0, 235, 35, outline=LINE, fill=PANEL)
+        c.create_image(11, 9, image=ui.app_icon(18, PANEL), anchor="nw")
+        x = 11 + 18 + 8
+        c.create_text(x, 18, text="OpenFill", font=f.bold, fill=TEXT, anchor="w")
+        x += f.bold.measure("OpenFill") + 8
+        c.create_image(x, 15, image=ui.dot(color, PANEL), anchor="nw")
+        x += 6 + 8
+        c.create_text(x, 18, text=ui.ellipsize(status, f.small, 236 - 13 - x), font=f.small, fill=DIM, anchor="w")
+        if fraction is not None:
+            c.create_rectangle(1, 33, 1 + round(234 * fraction), 35, outline="", fill=ACCENT)
+        self.pill_text = status
 
     def _pill_press(self, event) -> None:
         self._pill_grab = (event.x_root, event.y_root, self.pill.winfo_x(), self.pill.winfo_y())
@@ -511,6 +522,32 @@ class Bar:
             right - (self.pill.winfo_x() + self.pill.winfo_width()),
             bottom - (self.pill.winfo_y() + self.pill.winfo_height()),
         ]
+
+    # scrolling -----------------------------------------------------------------------
+
+    def _max_body(self) -> int:
+        other = 45 + (self.footer.winfo_reqheight() if self.footer.winfo_manager() else 0)
+        return max(200, self.root.winfo_screenheight() - other - 64)
+
+    def _fit_height(self) -> None:
+        want = self.inner.winfo_reqheight()
+        height = min(want, self._max_body())
+        if int(self.scroller.cget("height")) != height:
+            self.scroller.configure(height=height)
+        self.scroller.configure(scrollregion=(0, 0, W, want))
+        if want <= height:
+            self.scroller.yview_moveto(0)
+
+    def _wheel(self, event) -> None:
+        try:
+            if event.widget.winfo_toplevel() is not self.root:
+                return
+        except (KeyError, AttributeError, tk.TclError):
+            return
+        if self.inner.winfo_reqheight() <= int(self.scroller.cget("height")):
+            return
+        step = -1 if (getattr(event, "num", 0) == 4 or getattr(event, "delta", 0) > 0) else 1
+        self.scroller.yview_scroll(step * 48, "units")
 
     # where the windows go -------------------------------------------------------------
 
@@ -537,7 +574,7 @@ class Bar:
         self._placing = False
 
     def _place_bar(self) -> None:
-        """The full bar opens from the strip: its bottom right where the strip's is."""
+        """The full panel opens from the strip: its bottom right where the strip's is."""
         self.root.update_idletasks()
         w, h = max(WIDTH, self.root.winfo_reqwidth()), self.root.winfo_reqheight()
         right, bottom = self._pill_corner()
@@ -601,7 +638,7 @@ class Bar:
             self._placing = False
 
     def _keep_on_screen(self) -> None:
-        """The bar grows (a job, a view): move it up rather than past the bottom of the screen."""
+        """The panel grows (a job, a view): move it up rather than past the bottom of the screen."""
         if self.collapsed or not self.root.winfo_viewable():
             return
         sh = self.root.winfo_screenheight()
@@ -613,10 +650,10 @@ class Bar:
             self._placing = False
 
     def _moved(self, event) -> None:
-        """The bar may be dragged while open; it opens from the strip again next time."""
+        """The panel may be dragged by its header while open; it opens from the strip again next time."""
 
     def _unmapped(self, event) -> None:
-        """Minimizing the bar folds it back to the strip (not when PhotoCraft hides it)."""
+        """Minimizing the panel folds it back to the strip (not when PhotoCraft hides it)."""
         if event.widget is self.root and not self.collapsed:
             self.root.after(10, lambda: self.root.state() == "iconic" and self.collapse())
 
@@ -652,6 +689,7 @@ class Bar:
     def collapse(self) -> None:
         if self.collapsed and self.pill.winfo_viewable():
             return
+        self.model_box.close()
         was_open = not self.collapsed and self.root.winfo_viewable()
         self.collapsed = True
         self.prefs["collapsed"] = True
@@ -682,7 +720,7 @@ class Bar:
         self.calls.put((fn, args))
 
     def show(self, action: str = "") -> None:
-        """Bring the bar up; a menu action also picks its tab (Remove starts at once)."""
+        """Bring the panel up; a menu action also picks its mode (Remove starts at once)."""
         self.expand()
         if action in dict(TABS):
             self.select_tab(action)
@@ -690,10 +728,10 @@ class Bar:
             self.select_tab(self.tab.get())
         if action == "remove":
             self.generate()
-        elif action in ("fill", "txt2img", "", "panel"):
+        elif action in ("fill", "txt2img", "expand", "", "panel"):
             self.root.focus_force()
-            self.prompt.focus_set()
-            self.prompt.select_range(0, "end")
+            self.prompt.focus()
+            self.prompt.select_all()
 
     def hide(self) -> None:
         self._save_prefs()
@@ -703,91 +741,121 @@ class Bar:
         if not self.prefs.get("told_reopen"):
             self.prefs["told_reopen"] = True
             self._save_prefs()
-            from tkinter import messagebox
-
-            messagebox.showinfo(
-                "OpenFill",
+            ui.message(
+                self.root,
                 "OpenFill keeps running while PhotoCraft is open.\n\n"
-                "To bring this window back, use Filter > Plug-ins > OpenFill Panel in PhotoCraft "
-                "(or any OpenFill entry there).",
+                "To bring it back, use Filter > Plug-ins > OpenFill in PhotoCraft.",
             )
 
+    def toggle_gear(self) -> None:
+        if self.view:
+            self.select_tab(self.tab.get())
+        else:
+            self.select_view(self.gear.section)
+
     def select_view(self, view: str) -> None:
-        """Models or Settings in place of the tab's controls (the same button again goes back)."""
-        if self.view == view:
+        """Models and settings in place of the tools: ``view`` is its section (models, engine,
+        generation; "settings" is the engine). The same section again goes back."""
+        section = {"settings": "engine"}.get(view, view)
+        if self.view and self.gear.section == section and view == self._last_view:
             self.select_tab(self.tab.get())
             return
-        self.view = view
+        self._last_view = view
+        self.model_box.close()
+        self.view = "settings"
         self.main.pack_forget()
-        for name, frame in (("models", self.models_view), ("settings", self.settings_view)):
-            frame.pack_forget()
-            self.view_buttons[name].configure(style="ChipOn.TButton" if name == view else "Chip.TButton")
-        for b in self.tab_buttons.values():
-            b.configure(style="Tab.TButton")
-        frame = self.models_view if view == "models" else self.settings_view
-        if view == "settings":
-            self.settings_view.load()
-        else:
-            self.models_view.update_view(self.refresher.get())
-            self.refresher.wake.set()
-        frame.pack(fill="both", expand=True, padx=14, pady=(10, 0), after=self.top)
+        self.gear.pack(fill="x", padx=PAD, before=self.bottom_gap)
+        self.head_tools.pack_forget()
+        self.head_view.pack(side="left", padx=(PAD, 0), fill="y")
+        self.gear_button.set_active(True)
+        self.gear.show_section(section)
+        self.refresher.wake.set()
+        self._layout_footer()
+        self.scroller.yview_moveto(0)
+
+    _last_view = ""
 
     def select_tab(self, key: str) -> None:
+        self.model_box.close()
         if self.view:
             self.view = ""
-            for name, frame in (("models", self.models_view), ("settings", self.settings_view)):
-                frame.pack_forget()
-                self.view_buttons[name].configure(style="Chip.TButton")
-            self.main.pack(fill="x", padx=14, after=self.top)
+            self._last_view = ""
+            self.gear.pack_forget()
+            self.main.pack(fill="x", padx=PAD, before=self.bottom_gap)
+            self.head_view.pack_forget()
+            self.head_tools.pack(side="left", padx=(PAD, 0), fill="y")
+            self.gear_button.set_active(False)
+        if key != self.tab.get():
+            self._note = None
         self.tab.set(key)
-        for k, b in self.tab_buttons.items():
-            b.configure(style="TabOn.TButton" if k == key else "Tab.TButton")
-        for w in (
-            self.prompt_row,
-            self.hint,
-            self.expand_view,
-            self.create_row,
-            self.options,
-            self.model_row,
-            self.target_row,
-        ):
-            w.pack_forget()
-        if key in ("fill", "txt2img", "expand"):
-            if key == "expand":
-                self.expand_view.pack(fill="x", pady=(0, 8))
-            self.prompt_row.pack(fill="x")
-            if key == "txt2img":
-                self.create_row.pack(fill="x", pady=(8, 0))
-                self.target_row.pack(fill="x", pady=(6, 0))
-        self.go.configure(text={"fill": "Generate", "remove": "Remove", "expand": "Expand", "txt2img": "Generate"}[key])
-        if key == "remove":
-            self.prompt_row.pack(fill="x")
-            self.prompt.pack_forget()
-            self.go.pack_forget()
-            self.go.pack(side="left")
-            self.hint.configure(text="Erases what you selected and fills in the background around it.")
-            self.hint.pack(anchor="w", pady=(6, 0))
-        else:
-            self.go.pack_forget()
-            self.prompt.pack(side="left", fill="x", expand=True)
-            self.go.pack(side="left", padx=(8, 0))
-            placeholder = {
-                "fill": "Describe what to add, or leave empty to fill from the surroundings",
-                "expand": "Optional: describe what the new area shows",
-                "txt2img": "Describe the image you want",
-            }[key]
-            self.hint.configure(text=placeholder)
-            self.hint.pack(anchor="w", pady=(4, 0), after=self.prompt_row)
-        self.options.pack(fill="x", pady=(8, 0))
-        self.model_row.pack(fill="x", pady=(6, 0))
+        self.modes.set(key)
+        if key in PLACEHOLDERS:
+            self.prompt.set_placeholder(PLACEHOLDERS[key])
+        self.go.set(label=GO[key])
+        self._layout_main()
         self._fill_models()
         self._update_context()
+        self._layout_footer()
+        self.scroller.yview_moveto(0)
+
+    def _layout_main(self) -> None:
+        """Pack the tool view's parts for the current mode (12 px apart)."""
+        key = self.tab.get()
+        parts: list[tk.Misc] = [self.modes, self.context_row]
+        if key == "remove":
+            parts.append(self.remove_line)
+        if key == "expand":
+            parts.append(self.expand_view)
+        if key in ("fill", "expand", "txt2img"):
+            parts.append(self.prompt)
+        if key == "txt2img":
+            parts.append(self.create_rows)
+        parts.append(self.options)
+        if self._shown.get("setup"):
+            parts.append(self.setup)
+        if self._shown.get("job"):
+            parts.append(self.job)
+        if parts == self._shown.get("parts"):
+            return
+        self._shown["parts"] = parts
+        for w in self.main.pack_slaves():
+            w.pack_forget()
+        for w in parts:
+            w.pack(fill="x", pady=(12, 0), anchor="w")
+        for card in (self.setup, self.job):
+            card.lift_corners()
+
+    def _layout_footer(self) -> None:
+        if self.view:
+            section = self.gear.section
+            buttons = [] if section == "models" else [self.save_button]
+        else:
+            st = self.service.state.snapshot()
+            if st["state"] == "running":
+                buttons = [self.cancel_button]
+            elif st["state"] == "done" and len(st["variations"]) > 1:
+                buttons = [self.discard_button, self.keep_all_button, self.keep_button]
+            else:
+                buttons = [self.go]
+        key = tuple(id(b) for b in buttons)
+        if key == self._footer_key:
+            return
+        self._footer_key = key
+        for b in self.actions.pack_slaves():
+            b.pack_forget()
+        if not buttons:
+            self.footer.pack_forget()
+        else:
+            if not self.footer.winfo_manager():
+                self.footer.pack(fill="x")
+            for i, b in enumerate(buttons):
+                b.pack(side="left", padx=(8 if i else 0, 0))
+        self._fit_height()
 
     def pick_variations(self, n: int) -> None:
         self.variations.set(n)
+        self.var_seg.set(n)
         self.prefs["variations"] = n
-        for i, b in enumerate(self.var_buttons, start=1):
-            b.configure(style="ChipOn.TButton" if i == n else "Chip.TButton")
 
     def _fetch_thumbnail(self, key: tuple) -> None:
         """The image for the Expand editor, read once per document size (off the UI thread)."""
@@ -811,8 +879,9 @@ class Bar:
 
     def pick_size(self, label: str) -> None:
         self.size_name.set(label)
-        for k, b in self.size_buttons.items():
-            b.configure(style="ChipOn.TButton" if k == label else "Chip.TButton")
+        self.size_seg.set(label)
+        _, w, h = next(s for s in CREATE_SIZES if s[0] == label)
+        self.size_px.configure(text=f"{w} x {h} px")
 
     def pick_target(self, value: str) -> None:
         self.target.set(value)
@@ -822,21 +891,35 @@ class Bar:
         self.pick_target("layer" if self.target.get() == "image" else "image")
 
     def _update_target(self) -> None:
-        for value, b in self.target_buttons.items():
-            b.configure(style="ChipOn.TButton" if value == self.target.get() else "Chip.TButton")
+        self.target_seg.set(self.target.get())
 
     def _model(self) -> str:
         return self._model_ids.get(self.model_choice.get(), "active")
 
+    def _model_picked(self, label: str) -> None:
+        """The Model select: the model picked becomes the active one (Remove keeps its own choice)."""
+        self.model_choice.set(label)
+        if self.tab.get() == "remove":
+            self.prefs["removal"] = label
+            return
+        model_id = self._model_ids.get(label)
+        if model_id and model_id != self.refresher.get().get("active"):
+
+            def activate() -> None:
+                self.service.app.set_active(model_id)
+                self.refresher.wake.set()
+
+            threading.Thread(target=self._safe, args=(activate,), daemon=True).start()
+
     def generate(self) -> None:
-        if self.service.busy():
+        if self.service.busy() or self.go.disabled:
             return
         kind, prompt = self.tab.get(), self.prompt.get().strip()
         body: dict[str, Any] = {"variations": self.variations.get(), "seed": -1, "model": self._model()}
         try:
             if kind in ("fill", "remove"):
                 if not (self.watcher.snapshot().get("selection")):
-                    self._say("Select an area first: Marquee, Lasso or Object Selection.", BAD)
+                    self._say(NO_SELECTION, BAD)
                     return
                 body.update(
                     prompt="" if kind == "remove" else prompt, remove=kind == "remove", strength=1.0, negative=""
@@ -873,6 +956,7 @@ class Bar:
         self._thumbs_for = ()
         self._remember(prompt)
         self._save_prefs()
+        self._update()
 
     def _remember(self, prompt: str) -> None:
         if prompt:
@@ -886,9 +970,7 @@ class Bar:
         if not past:
             return "break"
         self._recall_at = max(-1, min(len(past) - 1, self._recall_at + step))
-        self.prompt.delete(0, "end")
-        if self._recall_at >= 0:
-            self.prompt.insert(0, past[self._recall_at])
+        self.prompt.set(past[self._recall_at] if self._recall_at >= 0 else "")
         return "break"
 
     def keep(self, which: str) -> None:
@@ -905,19 +987,6 @@ class Bar:
 
     def open_page(self) -> None:
         self.select_view("models")
-
-    def _setup_action(self) -> None:
-        facts = self.refresher.get()
-        if not facts.get("comfy_ok"):
-            self.choose_comfy()
-            return
-
-        def queue_starters() -> None:
-            for model_id in facts.get("starter_missing") or []:
-                self.service.app.queue_download(model_id)
-            self.refresher.wake.set()
-
-        threading.Thread(target=self._safe, args=(queue_starters,), daemon=True).start()
 
     def choose_comfy(self) -> None:
         """Ask for the ComfyUI folder and use it."""
@@ -942,55 +1011,85 @@ class Bar:
     # updates ----------------------------------------------------------------------
 
     def _say(self, text: str, color: str = OK) -> None:
-        if not text:
-            self.message.pack_forget()
+        """A message: in the open settings section, or in place of the context line (red with
+        an error mark for a problem) until what it was about changes."""
+        if self.view and text:
+            self.gear.say(text, color)
             return
-        self.message.configure(text=text, foreground=color)
-        self.message.pack(fill="x", padx=14, pady=(8, 0), before=self.footer)
+        if not text:
+            self._note = None
+        else:
+            self._note = (text, color, self._context_base()[0])
+        self._update_context()
 
     def _fill_models(self) -> None:
         facts = self.refresher.get()
         tab = self.tab.get()
-        active = facts.get("active_name") or ""
+        models = facts.get("models") or {}
         if tab == "remove":
-            self._model_ids = removal_choices(facts)
-            names = list(self._model_ids)
-            first = names[0]
+            has_any = bool(models.get("remove") or models.get("fill"))
+            choices = removal_choices(facts) if has_any else {}
+            wanted = self.prefs.get("removal", "")
         else:
-            entries = (facts.get("models") or {}).get(tab, [])
-            first = f"{active} (active)" if active else "The active model"
-            names = [first] + [name for _id, name in entries]
-            self._model_ids = {first: "active", **{name: model_id for model_id, name in entries}}
-        if list(self.model_box["values"]) != names:
-            self.model_box["values"] = names
-        if self.model_choice.get() not in names:
-            self.model_choice.set(first)
+            choices = {name: model_id for model_id, name in models.get(tab, [])}
+            wanted = facts.get("active_name") or ""
+        self._model_ids = choices
+        names = list(choices)
+        if self.model_box.values != names:
+            self.model_box.set_values(names)
+        current = self.model_choice.get()
+        if current not in names:
+            current = wanted if wanted in names else (names[0] if names else "")
+            self.model_choice.set(current)
+        if not facts:
+            shown = "Checking..."
+        elif not names:
+            shown = NO_MODELS
+        else:
+            shown = current
+        self.model_box.set(shown)
+        busy = self.service.busy()
+        self.go.set(disabled=busy or (bool(facts) and not names))
 
-    def _update_context(self) -> None:
+    def _context_base(self) -> tuple[str, str, str]:
+        """(text, colour, icon) for the line under the modes."""
         snap = self.watcher.snapshot()
         doc, sel, tab = snap.get("document"), snap.get("selection"), self.tab.get()
         if not snap.get("connected"):
-            text = "Waiting for PhotoCraft..."
-        elif snap.get("waiting"):
-            text = "PhotoCraft is not answering. If its window is minimized or covered, bring it into view."
-        elif tab == "txt2img":
-            text = "Makes a new image" + (f", or a layer in {doc['name']}." if doc else ".")
-        elif not doc:
-            text = "Open an image in PhotoCraft."
-        elif tab in ("fill", "remove"):
-            text = (
-                f"{doc['name']}: selection {sel[2]} x {sel[3]} px"
-                if sel
-                else "Select an area first: Marquee, Lasso or Object Selection."
+            return "Waiting for PhotoCraft...", DIM, "info"
+        if snap.get("waiting"):
+            return (
+                "PhotoCraft is not answering. If its window is minimized or covered, bring it into view.",
+                WARN,
+                "warn",
             )
-        else:
-            if not self.expand_view.job_active:  # the canvas grows round by round while it runs
-                self.expand_view.set_image(doc["name"], int(doc["width"]), int(doc["height"]))
-            if self.expand_view.needs_thumbnail and not self._thumb_busy and not self.service.busy():
-                self._fetch_thumbnail(self.expand_view.image_key)
-            text = f"{doc['name']}: drag the frame to the new canvas size."
-        if self.context.cget("text") != text:
-            self.context.configure(text=text)
+        if tab == "txt2img":
+            return "Makes a new image" + (f", or a layer in {doc['name']}" if doc else ""), DIM, "image"
+        if not doc:
+            return "Open an image in PhotoCraft.", DIM, "image"
+        if tab in ("fill", "remove"):
+            if sel:
+                return f"{doc['name']} · selection {sel[2]} x {sel[3]} px", DIM, "selection"
+            return NO_SELECTION, DIM, "selection"
+        if not self.expand_view.job_active:  # the canvas grows round by round while it runs
+            self.expand_view.set_image(doc["name"], int(doc["width"]), int(doc["height"]))
+        if self.expand_view.needs_thumbnail and not self._thumb_busy and not self.service.busy():
+            self._fetch_thumbnail(self.expand_view.image_key)
+        return f"{doc['name']} · drag the frame to the new canvas size", DIM, "image"
+
+    def _update_context(self) -> None:
+        text, color, mark = self._context_base()
+        if self._note is not None:
+            if self._note[2] != text:
+                self._note = None  # what it was about changed (a selection was made, ...)
+            else:
+                text, color = self._note[0], self._note[1]
+                mark = {BAD: "error", OK: "check", WARN: "warn"}.get(color, "info")
+        key = (text, color, mark)
+        if self._shown.get("context") != key:
+            self._shown["context"] = key
+            self.context.configure(text=text, fg=color)
+            self.context_icon.configure(image=ui.icon(mark, color, 14, BG))
 
     def _tick(self) -> None:
         try:
@@ -1006,98 +1105,144 @@ class Bar:
         finally:
             self.root.after(250, self._tick)
 
-    def _update(self) -> None:
-        self._update_context()
-        facts = self.refresher.get()
-        self._fill_models()
-        # setup banner
-        problem = ""
-        if facts and not facts.get("comfy_ok", True):
-            problem, button = (
-                "OpenFill runs on ComfyUI, the free AI engine, and did not find it on this computer. "
-                "If you have it, choose its folder (the one with main.py).",
-                "Choose ComfyUI folder",
-            )
-        elif facts.get("downloading"):
-            problem, button = f"Downloading: {facts['downloading']}", ""
-        elif facts.get("comfy_ok") and not (facts.get("models") or {}).get("fill"):
-            problem, button = (
-                "OpenFill needs a model to start: LaMa for removing things (0.2 GB) and "
-                "DreamShaper 8 for filling and expanding (2 GB).",
-                "Download them (2.2 GB)",
-            )
-        if problem:
-            self.setup_text.configure(text=problem)
-            if button:
-                self.setup_button.configure(text=button)
-                self.setup_buttons.pack(anchor="w", pady=(6, 0), fill="x")
-                if facts.get("comfy_ok", True):
-                    self.setup_help.pack_forget()
-                else:
-                    self.setup_help.pack(side="left", padx=(6, 0))
-            else:
-                self.setup_buttons.pack_forget()
-            self.setup.pack(fill="x", padx=14, pady=(10, 0), before=self.footer)
-        else:
-            self.setup.pack_forget()
-        if self.view == "models":
-            self.models_view.update_view(facts)
+    def _engine_status(self, facts: dict[str, Any]) -> str:
         engine = self.service.engine
         if not facts:
-            status = "Checking..."
-        elif not facts.get("comfy_ok"):
-            status = "Not set up"
-        elif engine == "starting":
-            status = "Starting the AI engine..."
-        elif engine in ("", "ready"):
-            status = "Ready"
-        else:
-            status = "AI engine: " + engine[:60]
-        self.status.configure(text=status)
+            return "Checking..."
+        if not facts.get("comfy_ok"):
+            return "Not set up"
+        if engine == "starting":
+            return "Starting the AI engine..."
+        if engine in ("", "ready"):
+            return "Ready"
+        return "AI engine: " + engine[:60]
+
+    def _update(self) -> None:
+        facts = self.refresher.get()
+        if not self.view:
+            self._update_context()
+            self._fill_models()
+        status = self._engine_status(facts)
+        if self._shown.get("status") != status:
+            self._shown["status"] = status
+            self.status.configure(text=ui.ellipsize(status, self.small, 200))
+            self.status_dot.configure(image=ui.dot(STATUS_COLOR.get(status, DIM), BG))
+        self._update_setup(facts)
+        if self.view:
+            self.gear.update_view(facts)
 
         st = self.service.state.snapshot()
-        busy = self.service.busy()
         if self.collapsed:
             if st["state"] == "running":
-                self.pill_text.configure(
-                    text=f"{ {'fill': 'Fill', 'expand': 'Expand', 'txt2img': 'Create'}.get(st['kind'], 'Working') }: {int(st['fraction'] * 100)}%"
-                )
+                kind = "Remove" if (st["title"] or "").startswith(("Remove", "Object")) else None
+                kind = kind or {"fill": "Fill", "expand": "Expand", "txt2img": "Create"}.get(st["kind"], "Working")
+                self._draw_pill(f"{kind}: {int(st['fraction'] * 100)}%", ACCENT, st["fraction"])
             elif st["state"] == "done" and len(st["variations"]) > 1:
                 self.expand()  # pick a variation
             else:
-                self.pill_text.configure(text=status)
-        self.go.state(["disabled"] if busy else ["!disabled"])
-        if st["state"] == "idle":
-            self.job.pack_forget()
-            return
-        self.job.pack(fill="x", padx=14, pady=(12, 0), before=self.footer)
-        title = st["title"] or st["kind"]
-        self.job_title.configure(text=title + (f"  ({st['model']})" if st["model"] else ""))
-        self.progress["value"] = int(st["fraction"] * 1000)
-        elapsed = int(st["elapsed"])
-        clock = f"{elapsed // 60}:{elapsed % 60:02d}"
-        if st["state"] == "running":
-            self.job_text.configure(text=f"{st['text']}  {clock}", style="Dim.TLabel")
-        elif st["state"] == "done":
-            several = len(st["variations"]) > 1
-            done = f"Done in {clock}." + (" Click a variation to see it, then Keep." if several else "")
-            self.job_text.configure(text=done, style="Ok.TLabel")
-        else:
-            self.job_text.configure(text=st["message"], style="Bad.TLabel")
-        self._update_preview(st)
-        self._update_variations(st)
-        for b in (self.cancel_button, self.discard_button, self.keep_all_button, self.keep_button):
-            b.pack_forget()
-        if st["state"] == "running":
-            self.cancel_button.pack(side="right")
-        elif len(st["variations"]) > 1:
-            self.keep_button.pack(side="right")
-            self.keep_all_button.pack(side="right", padx=(0, 6))
-            self.discard_button.pack(side="right", padx=(0, 6))
-        self.job_buttons.pack(fill="x", pady=(8, 0))
+                self._draw_pill(status, STATUS_COLOR.get(status, DIM), None)
+        self._update_job(st)
+        self._layout_footer()
         if st["state"] != self._last_state and st["state"] in ("done", "error"):
             self.refresher.wake.set()
         self._last_state = st["state"]
+
+    def _update_setup(self, facts: dict[str, Any]) -> None:
+        """The setup card: ComfyUI not found, a download running, or no models yet."""
+        key: tuple = ()
+        if facts and not facts.get("comfy_ok", True):
+            key = (
+                "comfy",
+                "warn",
+                WARN,
+                "AI engine not found",
+                "OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it.",
+                (("Choose folder", "accent", self.choose_comfy), ("How to install", "secondary", self._comfy_help)),
+            )
+        elif facts.get("download"):
+            d = facts["download"]
+            key = ("download", "download", ACCENT, f"Downloading {short_name(d['name'])}", "You can keep working.", ())
+        elif facts.get("comfy_ok") and not (facts.get("models") or {}).get("fill"):
+            key = (
+                "models",
+                "warn",
+                WARN,
+                "No models installed",
+                "Install at least one model to start. LaMa and DreamShaper 8 (2.2 GB) cover every tool.",
+                (("Open model manager", "accent", lambda: self.select_view("models")),),
+            )
+        shown_key = (*key[:5], tuple(b[0] for b in key[5])) if key else ()
+        if shown_key != self._setup_key:
+            self._setup_key = shown_key
+            self._build_setup(key)
+        if key and key[0] == "download":
+            fraction = facts["download"]["fraction"]
+            self.setup_percent.configure(text=f"{int(fraction * 100)}%")
+            self.setup_bar.set(fraction)
+        was = self._shown.get("setup")
+        self._shown["setup"] = bool(key)
+        if was != bool(key) and not self.view:
+            self._layout_main()
+
+    def _build_setup(self, key: tuple) -> None:
+        inner = self.setup.inner
+        for child in inner.winfo_children():
+            child.destroy()
+        if not key:
+            return
+        kind, mark, color, title, line, buttons = key
+        f = self.fonts
+        head = ui.frame(inner, PANEL)
+        head.pack(fill="x")
+        tk.Label(head, image=ui.icon(mark, color, 16, PANEL), bg=PANEL, bd=0).pack(side="left")
+        ui.text(head, title, f.bold, bg=PANEL).pack(side="left", padx=(8, 0))
+        self.setup_percent = ui.small(head, "", bg=PANEL, wrap=0)
+        self.setup_percent.pack(side="right")
+        if kind == "download":
+            self.setup_bar = ui.Progress(inner, CW - 24)
+            self.setup_bar.pack(fill="x", pady=(8, 0))
+        ui.small(inner, line, bg=PANEL, wrap=CW - 24).pack(fill="x", pady=(8, 0))
+        if buttons:
+            row = ui.frame(inner, PANEL)
+            row.pack(fill="x", pady=(8, 0))
+            n = len(buttons)
+            width = (CW - 24 - 8 * (n - 1)) // n
+            for i, (label, style, command) in enumerate(buttons):
+                w = width if i < n - 1 else CW - 24 - (width + 8) * (n - 1)
+                ui.Button(row, label, command, style, w, 32, PANEL).pack(side="left", padx=(8 if i else 0, 0))
+        self.setup.lift_corners()
+
+    def _update_job(self, st: dict[str, Any]) -> None:
+        shown = st["state"] != "idle"
+        if self._shown.get("job") != shown:
+            self._shown["job"] = shown
+            if not self.view:
+                self._layout_main()
+        if not shown:
+            self._update_preview(st)
+            return
+        title = st["title"] or st["kind"]
+        if self.job_title.cget("text") != title:
+            self.job_title.configure(text=title)
+        model = short_name(st["model"] or "")
+        if self.job_model.cget("text") != model:
+            self.job_model.configure(text=model)
+        elapsed = int(st["elapsed"])
+        clock = f"{elapsed // 60}:{elapsed % 60:02d}"
+        several = len(st["variations"]) > 1
+        if st["state"] == "running":
+            text, color, font = f"{st['text']} · {clock}", DIM, self.small
+        elif st["state"] == "done":
+            text, color, font = f"Done in {clock}." + (" Pick one, then Keep." if several else ""), OK, self.fonts.body
+        elif st["state"] == "cancelled":
+            text, color, font = st["message"], DIM, self.fonts.body
+        else:
+            text, color, font = st["message"], BAD, self.fonts.body
+        if (self.job_text.cget("text"), str(self.job_text.cget("fg"))) != (text, color):
+            self.job_text.configure(text=text, fg=color, font=font)
+        self.progress.set(st["fraction"], OK if st["state"] == "done" else ACCENT)
+        self._update_preview(st)
+        self._update_variations(st)
 
     def _update_preview(self, st: dict[str, Any]) -> None:
         in_editor = self.expand_view.job_active
@@ -1127,14 +1272,14 @@ class Bar:
             with Image.open(io.BytesIO(data)) as im:
                 im = im.convert("RGB")
                 im.thumbnail(PREVIEW_MAX)
-                frame = photo(im)
+                frame = photo(rounded(im, 4, PANEL))
         except Exception:  # noqa: BLE001 - a bad frame is skipped
             return
         self._images = [frame, *[i for i in self._images if i is not frame][:8]]
         self.preview.configure(image=frame)
         if not self.preview.winfo_ismapped():
-            where = {"before": self.job_buttons} if self.job_buttons.winfo_manager() else {}
-            self.preview.pack(pady=(8, 0), **where)
+            self.preview.pack(pady=(12, 0))
+            self.job.lift_corners()
 
     def _update_variations(self, st: dict[str, Any]) -> None:
         names = st["variations"]
@@ -1146,37 +1291,36 @@ class Bar:
         if key == self._thumbs_for:
             return
         self._thumbs_for = key
-        for child in self.thumbs.winfo_children():
+        for child in self.thumb_row.winfo_children():
             child.destroy()
-        ttk.Label(self.thumbs, text="Pick a variation:", style="Dim.TLabel").pack(anchor="w")
-        row = ttk.Frame(self.thumbs)
-        row.pack(anchor="w", pady=(4, 0))
+        n = len(names)
+        inner = CW - 24
+        width = (inner - 8 * (n - 1)) / n
         photos = []
-        for index, layer in enumerate(self.service.layers[: len(names)]):
+        self.thumb_cells = []
+        f = self.fonts
+        for index, layer in enumerate(self.service.layers[:n]):
+            x0 = round(index * (width + 8))
+            cw = round((index + 1) * (width + 8) - 8) - x0
+            on = index == st["shown"]
+            cell = tk.Canvas(self.thumb_row, width=cw, height=100, bg=PANEL, bd=0, highlightthickness=0, cursor="hand2")
+            cell.pack(side="left", padx=(8 if index else 0, 0))
+            if on:
+                cell.create_image(0, 0, image=ui.rrect(cw, 80, 4, PANEL, PANEL, ACCENT, 2), anchor="nw")
             try:
-                im = Image.frombytes("RGBA", (layer.origin.width, layer.origin.height), layer.rgba).convert("RGB")
-                im.thumbnail((THUMB * 2, THUMB))
-                thumb = photo(im)
+                im = Image.frombytes("RGBA", (layer.origin.width, layer.origin.height), layer.rgba)
+                thumb = photo(cover(im, cw - 8, THUMB_H, 2))
+                cell.create_image(4, 4, image=thumb, anchor="nw")
+                photos.append(thumb)
             except Exception:  # noqa: BLE001
-                thumb = None
-            border = ACCENT if index == st["shown"] else BG
-            cell = tk.Label(
-                row,
-                image=thumb,
-                text=str(index + 1),
-                compound="top",
-                fg=TEXT,
-                bg=border,
-                bd=0,
-                padx=2,
-                pady=2,
-                cursor="hand2",
-            )
-            cell.pack(side="left", padx=(0, 6))
+                pass
+            cell.create_text(cw / 2, 92, text=str(index + 1), font=f.small, fill=TEXT if on else DIM, anchor="center")
             cell.bind("<Button-1>", lambda _e, i=index: self.pick_variation(i))
-            photos.append(thumb)
+            self.thumb_cells.append(cell)
         self._images = photos + self._images[:4]
-        self.thumbs.pack(fill="x", pady=(8, 0), before=self.job_buttons)
+        if not self.thumbs.winfo_ismapped():
+            self.thumbs.pack(fill="x", pady=(12, 0))
+            self.job.lift_corners()
 
     def run(self, alive) -> None:
         """Tk's loop until ``alive()`` turns false (PhotoCraft closed)."""
@@ -1193,8 +1337,18 @@ class Bar:
         self._save_prefs()
 
 
+class _SegKey:
+    """One choice of a segmented control, with ``invoke()`` (as a button had)."""
+
+    def __init__(self, seg: ui.Seg, key: Any) -> None:
+        self.seg, self.key = seg, key
+
+    def invoke(self) -> None:
+        self.seg.invoke(self.key)
+
+
 def tk_available() -> bool:
-    """True when Tk can open a window here (Python built with Tk, and a display)."""
+    """True when Tk can open a window here (Python has Tk, and there is a display)."""
     try:
         root = tk.Tk()
         root.destroy()

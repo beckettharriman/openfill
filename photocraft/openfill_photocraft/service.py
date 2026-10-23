@@ -236,7 +236,7 @@ class Service:
         with self.state.lock:
             self.state.state, self.state.kind, self.state.message, self.state.text = "running", kind, "", "Starting..."
             self.state.title = {
-                "fill": "Remove object" if params.get("remove") else "Generative Fill",
+                "fill": "Object Removal" if params.get("remove") else "Generative Fill",
                 "expand": "Generative Expand",
                 "txt2img": "Text to Image",
             }.get(kind, kind)

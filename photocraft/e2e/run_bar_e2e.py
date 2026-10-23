@@ -30,6 +30,7 @@ from openfill_photocraft.bar import Bar  # noqa: E402
 from openfill_photocraft.bridge import PhotoCraftBridge, default_profile  # noqa: E402
 from openfill_photocraft.control import ControlClient  # noqa: E402
 from openfill_photocraft.service import Service  # noqa: E402
+from openfill_photocraft.ui import BAD  # noqa: E402
 
 PROFILE = default_profile()
 report: list[dict] = []
@@ -118,6 +119,7 @@ class Scenario:
     def run(self) -> None:
         for step in (
             self.open_image,
+            self.panel_layout,
             self.fill_from_menu,
             self.pick_and_keep,
             self.remove_from_menu,
@@ -125,6 +127,7 @@ class Scenario:
             self.expand_preset,
             self.create_image,
             self.hide_and_panel,
+            self.strip_and_header,
         ):
             self.case = step.__name__
             try:
@@ -158,8 +161,7 @@ class Scenario:
         self.shot("fill-menu-opened")
 
         def type_and_go() -> None:
-            self.bar.prompt.delete(0, "end")
-            self.bar.prompt.insert(0, "a red and yellow hot air balloon")
+            self.bar.prompt.set("a red and yellow hot air balloon")
             self.bar.var_buttons[2].invoke()  # 3 variations
             self.bar.go.invoke()
 
@@ -167,7 +169,8 @@ class Scenario:
         st = self.wait_job()
         added = self.history()[len(before) :]
         self.shot("fill-done")
-        thumbs = self.ui(lambda: len(self.bar.thumbs.winfo_children()) > 0 and self.bar.thumbs.winfo_ismapped())
+        thumbs = self.ui(lambda: len(self.bar.thumb_cells) == 3 and self.bar.thumbs.winfo_ismapped())
+        footer = self.ui(lambda: [b.label for b in self.bar.actions.pack_slaves()])
         record(
             "fill_from_menu",
             shown and no_step and st["state"] == "done" and added == ["Duplicate Layer"] and len(st["variations"]) == 3,
@@ -179,13 +182,12 @@ class Scenario:
             history_added=added,
             variations=len(st["variations"]),
             thumbnails_shown=thumbs,
+            footer=footer,
         )
 
     def pick_and_keep(self) -> None:
         def click_second() -> None:
-            row = self.bar.thumbs.winfo_children()[1]
-            cells = row.winfo_children()
-            cells[1].event_generate("<Button-1>")
+            self.bar.thumb_cells[1].event_generate("<Button-1>", x=10, y=10)
 
         self.ui(click_second)
         names = self.bar.service.state.snapshot()["variations"]
@@ -218,16 +220,23 @@ class Scenario:
         self.pc.run("select.deselect")
         self.wait_for(lambda: self.bar.watcher.snapshot().get("selection") is None)
         self.ui(lambda: (self.bar.select_tab("fill"), self.bar.go.invoke()))
-        text = self.ui(lambda: self.bar.message.cget("text"))
-        record("fill_needs_selection", "Select an area" in text and not self.bar.service.busy(), message=text)
+        text, color = self.ui(lambda: (self.bar.context.cget("text"), self.bar.context.cget("fg")))
+        record(
+            "fill_needs_selection",
+            "Select an area" in text and color == BAD and not self.bar.service.busy(),
+            message=text,
+            color=color,
+        )
 
     def expand_preset(self) -> None:
         d = self.pc.run("document.inspect")
         w, h = d["width"], d["height"]
         self.menu_pick("expand")
         self.wait_for(lambda: self.ui(lambda: self.bar.tab.get() == "expand"))
-        self.ui(lambda: (self.bar.prompt.delete(0, "end"), self.bar.expand_view._ratio("16:9")))
+        self.ui(lambda: (self.bar.prompt.set(""), self.bar.expand_view.ratio_buttons["16:9"].invoke()))
         size_text = self.ui(lambda: self.bar.expand_view.size.cget("text"))
+        # the editor's thumbnail is read through a short-lived copy of the document: wait for it
+        self.wait_for(lambda: not self.bar._thumb_busy and not self.bar.expand_view.needs_thumbnail, 30)
         before = self.history()
         self.ui(lambda: self.bar.go.invoke())
         st = self.wait_job()
@@ -252,8 +261,7 @@ class Scenario:
         self.wait_for(lambda: self.ui(lambda: self.bar.tab.get() == "txt2img"))
 
         def go() -> None:
-            self.bar.prompt.delete(0, "end")
-            self.bar.prompt.insert(0, "a lighthouse on a cliff at sunset, photo")
+            self.bar.prompt.set("a lighthouse on a cliff at sunset, photo")
             self.bar.size_buttons["Portrait"].invoke()
             self.bar.var_buttons[0].invoke()
             if self.bar.target.get() != "image":
@@ -283,6 +291,71 @@ class Scenario:
         self.menu_pick("panel")
         back = self.wait_for(lambda: self.ui(lambda: self.bar.root.state()) == "normal")
         record("hide_and_panel", hidden == "withdrawn" and back, hidden=hidden)
+
+    def panel_layout(self) -> None:
+        """The redesigned panel: no footer chips, one Model select without "(active)", 1 to 5
+        variations, the action at the bottom, and Models and settings behind the gear."""
+
+        def look() -> dict:
+            bar = self.bar
+            bar.select_tab("fill")
+            out = {
+                "status": bar.status.cget("text"),
+                "variations": [k for k, _label in bar.var_seg.items],
+                "models": list(bar.model_box.values),
+                "footer": [b.label for b in bar.actions.pack_slaves()],
+                "title_bar": bar.frameless,
+            }
+            bar.select_view("models")
+            bar.root.update_idletasks()
+            out["gear"] = (bar.view, bar.gear.section, bar.gear_button.active, bar.footer.winfo_manager() == "")
+            bar.select_view("engine")
+            out["engine_footer"] = [b.label for b in bar.actions.pack_slaves()]
+            bar.select_tab("fill")
+            out["back"] = (bar.view, bar.gear_button.active)
+            return out
+
+        self.wait_for(lambda: bool(self.bar.refresher.get().get("models")), 30)
+        got = self.ui(look)
+        ok = (
+            got["variations"] == [1, 2, 3, 4, 5]
+            and got["models"]
+            and not any("(active)" in m for m in got["models"])
+            and got["footer"] == ["Generate"]
+            and got["gear"] == ("settings", "models", True, True)
+            and got["engine_footer"] == ["Save"]
+            and got["back"] == ("", False)
+        )
+        record("panel_layout", ok, **got)
+
+    def strip_and_header(self) -> None:
+        """Collapse to the strip and open it again; drag the panel by its header."""
+        self.ui(self.bar.collapse)
+        collapsed = self.wait_for(
+            lambda: self.ui(lambda: self.bar.pill.winfo_viewable() and not self.bar.root.winfo_viewable())
+        )
+        strip = self.ui(lambda: (self.bar.pill.winfo_width(), self.bar.pill.winfo_height(), self.bar.pill_text))
+        self.shot("strip")
+        self.ui(self.bar.expand)
+        opened = self.wait_for(lambda: self.ui(lambda: self.bar.root.winfo_viewable()))
+
+        def drag() -> tuple:
+            bar = self.bar
+            x0, y0 = bar.root.winfo_x(), bar.root.winfo_y()
+            hx, hy = bar.header.winfo_rootx() + 200, bar.header.winfo_rooty() + 20
+            bar.header.event_generate("<ButtonPress-1>", x=200, y=20, rootx=hx, rooty=hy)
+            bar.header.event_generate("<B1-Motion>", x=160, y=0, rootx=hx - 40, rooty=hy - 20)
+            bar.header.event_generate("<ButtonRelease-1>", x=160, y=0, rootx=hx - 40, rooty=hy - 20)
+            bar.root.update()
+            return x0, y0, bar.root.winfo_x(), bar.root.winfo_y()
+
+        x0, y0, x1, y1 = self.ui(drag)
+        record(
+            "strip_and_header",
+            collapsed and opened and strip[:2] == (236, 36) and (x0 - x1, y0 - y1) == (40, 20),
+            strip=list(strip),
+            moved=[x1 - x0, y1 - y0],
+        )
 
 
 def main() -> int:

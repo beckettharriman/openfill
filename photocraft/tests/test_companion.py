@@ -590,6 +590,100 @@ class BarLogicTests(unittest.TestCase):
         self.assertEqual(expand_margins(100, 80, None), (25, 20, 25, 20))
 
 
+class ModelInfoTests(unittest.TestCase):
+    def test_hardware_line(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.modelinfo import hardware_line
+
+        gb = 1024**3
+        hw = SimpleNamespace(
+            gpu_name="NVIDIA GeForce RTX 4070 Laptop GPU",
+            vram_bytes=8 * gb,
+            ram_bytes=32 * gb,
+            disk_free_bytes=328 * gb,
+        )
+        self.assertEqual(hardware_line(hw), "RTX 4070 Laptop · 8 GB VRAM · 32 GB RAM · 328 GB free")
+        none = SimpleNamespace(gpu_name=None, vram_bytes=0, ram_bytes=16 * gb, disk_free_bytes=None)
+        self.assertEqual(hardware_line(none), "No graphics card found · 16 GB RAM")
+
+    def test_model_detail_and_needed_by(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.modelinfo import model_detail, needed_by
+
+        row = {"capabilities": ["fill", "expand", "txt2img"], "size": "6.5 GB"}
+        self.assertEqual(model_detail(row), "Fill, expand, create · 6.5 GB")
+        self.assertEqual(model_detail({"capabilities": ["remove"], "size": "196.1 MB"}), "Remove · 196.1 MB")
+        entries = [
+            SimpleNamespace(id="realvisxl-v5", arch="sdxl", requires_models=("fooocus-inpaint-patch",)),
+            SimpleNamespace(id="juggernaut-xl-v9", arch="sdxl", requires_models=("fooocus-inpaint-patch",)),
+            SimpleNamespace(id="fooocus-inpaint-patch", arch="sdxl", requires_models=()),
+        ]
+        users = needed_by(entries, "fooocus-inpaint-patch")
+        self.assertEqual(users, "Needed by the SDXL models")
+        patch = {"capabilities": ["patch"], "size": "1.2 GB"}
+        self.assertEqual(model_detail(patch, users), "Needed by the SDXL models · 1.2 GB")
+
+
+class LookTests(unittest.TestCase):
+    """The panel's drawing helpers (no window needed) and its text inputs (with a display)."""
+
+    def test_svg_paths_become_polylines(self):
+        try:
+            from openfill_photocraft import ui
+        except ImportError:
+            self.skipTest("no tkinter")
+        ((points, closed),) = ui.path_polylines("M6 9l6 6 6-6")
+        self.assertEqual((points, closed), ([(6, 9), (12, 15), (18, 9)], False))
+        ((ring, closed),) = ui.path_polylines("M2 12a10 10 0 1 1 20 0a10 10 0 1 1-20 0z")
+        self.assertTrue(closed)
+        self.assertTrue(all(abs(((x - 12) ** 2 + (y - 12) ** 2) ** 0.5 - 10) < 1e-6 for x, y in ring))
+        for name in ui.ICONS:
+            self.assertEqual(ui.icon_image(name, "#ffffff", 16).size, (16, 16))
+
+    def test_rounded_rectangle_keeps_its_border(self):
+        try:
+            from openfill_photocraft import ui
+        except ImportError:
+            self.skipTest("no tkinter")
+        im = ui.rrect_image(40, 32, 4, "#2b2d31", "#1e1f22", "#3a3c42")
+        self.assertEqual(im.getpixel((20, 0)), (0x3A, 0x3C, 0x42))  # 1 px border
+        self.assertEqual(im.getpixel((20, 16)), (0x2B, 0x2D, 0x31))
+        self.assertEqual(im.getpixel((0, 0)), (0x1E, 0x1F, 0x22))  # outside the rounded corner
+
+    def test_placeholders_are_not_text(self):
+        try:
+            import tkinter as tk
+
+            from openfill_photocraft import ui
+
+            root = tk.Tk()
+        except Exception:  # noqa: BLE001 - no Tk or no display
+            self.skipTest("no display")
+        try:
+            sent = []
+            box = ui.PromptBox(root, lambda: sent.append(box.get()), lambda step: "break")
+            box.set_placeholder("Describe the image you want.")
+            self.assertEqual(box.get(), "")
+            self.assertTrue(box.showing_placeholder)
+            box.set("a lighthouse\non a cliff")
+            self.assertEqual(box.get(), "a lighthouse\non a cliff")
+            box.set("")
+            self.assertEqual((box.get(), box.showing_placeholder), ("", True))
+            field = ui.Field(root, 200, "hf_...", secret=True)
+            self.assertEqual(field.get(), "")
+            field.set("hf_abc")
+            self.assertEqual((field.get(), field.entry.cget("show")), ("hf_abc", "*"))
+            para = ui.small(root, "one two three four five six seven", wrap=60)
+            self.assertGreater(int(para.cget("height")), 16)  # wrapped onto more than one 16 px line
+            self.assertEqual(
+                ui.ellipsize("RealVisXL V5.0 (fp16, with Fooocus inpaint patch)", ui.fonts(root).body, 120)[-3:], "..."
+            )
+        finally:
+            root.destroy()
+
+
 class ServiceModelTests(unittest.TestCase):
     """Uninstall and Stop downloading, against a stand-in for OpenFill's App and task queue."""
 

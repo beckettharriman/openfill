@@ -1,207 +1,124 @@
 # OpenFill for PhotoCraft
 # SPDX-License-Identifier: Apache-2.0
-"""The bar's Models and Settings views: what the web page's tabs did, inside the bar.
+"""Models and settings, behind the panel's gear: three sections.
 
-Both only read the refresher's facts and the settings on the UI thread; downloads,
-checks and saves run in a worker thread and report back through ``Bar.call_soon``.
+- Models: this computer in one line, the installed models (each with a trash button that
+  uninstalls it), the ones to download (Download, Resume, or the progress and a button that
+  stops it), and the Hugging Face key FLUX needs.
+- Engine: ComfyUI's folder, when it starts and stops, extra options, and Check, Stop engine
+  and Logs.
+- Generation: steps, prompt strictness, repaint margin and edge softness.
+
+The views only read the refresher's facts and the settings on the UI thread; downloads,
+removals, checks and saves run in a worker thread and report back through ``Bar.call_soon``.
 """
 
 from __future__ import annotations
 
 import threading
 import tkinter as tk
-from tkinter import ttk
 from typing import TYPE_CHECKING, Any
+
+from . import ui
+from .ui import BAD, BG, CW, DIM, OK
 
 if TYPE_CHECKING:
     from .bar import Bar
 
-# Settings the bar edits: (key, label, kind). The rest stay in config.json.
+# Settings the gear view edits: (key, label, kind). The rest stay in config.json.
 SETTINGS = (
     ("autostart", "Start the AI engine with PhotoCraft", bool),
-    ("idle_timeout_minutes", "Stop the AI engine after idle (minutes, 0 = never)", int),
+    ("idle_timeout_minutes", "Stop after idle", int),
     ("steps", "Steps", int),
     ("cfg", "Prompt strictness (CFG)", float),
-    ("grow_percent", "Repaint margin (% of the selection)", float),
+    ("grow_percent", "Repaint margin (%)", float),
     ("feather_percent", "Edge softness (%)", float),
-    ("extra_server_args", "Extra ComfyUI options (for example --lowvram)", str),
+    ("extra_server_args", "Extra ComfyUI options", str),
 )
+SECTIONS = (("models", "Models"), ("engine", "Engine"), ("generation", "Generation"))
+BUSY = ("Downloading", "Waiting", "Installing", "Removing", "Working")
 
 
-class ModelsView(ttk.Frame):
-    """Installed and downloadable models: Set active, Download or Resume, and progress."""
+def field(parent: tk.Misc, label: str, control_factory, gap: int = 6) -> tuple[tk.Frame, Any]:
+    """An uppercase label above a control."""
+    box = ui.frame(parent)
+    ui.caption(box, label).pack(anchor="w")
+    control = control_factory(box)
+    control.pack(anchor="w", pady=(gap, 0))
+    return box, control
 
-    def __init__(self, bar: Bar) -> None:
-        super().__init__(bar.root)
+
+class GearView(tk.Frame):
+    """Models and settings: the section control and the three sections."""
+
+    def __init__(self, bar: Bar, parent: tk.Misc) -> None:
+        super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
         self.bar = bar
-        self.hardware = ttk.Label(self, style="Dim.TLabel", wraplength=bar.wrap, justify="left")
-        self.hardware.pack(fill="x")
-        holder = ttk.Frame(self)
-        holder.pack(fill="both", expand=True, pady=(8, 0))
-        self.canvas = tk.Canvas(holder, height=330, bg=bar.colors["BG"], highlightthickness=0, bd=0)
-        scroll = ttk.Scrollbar(holder, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.rows = ttk.Frame(self.canvas)
-        self._window = self.canvas.create_window((0, 0), window=self.rows, anchor="nw")
-        self.rows.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._window, width=e.width))
-        for widget in (self.canvas, self.rows):
-            widget.bind("<Enter>", lambda _e: self._wheel(True))
-            widget.bind("<Leave>", lambda _e: self._wheel(False))
-        token = ttk.Frame(self)
-        token.pack(fill="x", pady=(10, 0))
-        ttk.Label(token, text="Hugging Face key (for FLUX)", style="Dim.TLabel").pack(side="left")
-        self.token = ttk.Entry(token, show="*", width=12)
-        self.token.pack(side="left", fill="x", expand=True, padx=(8, 6))
-        ttk.Button(token, text="Save", style="Chip.TButton", command=self._save_token).pack(side="left")
-        self._shown: tuple = ()
-        self._buttons: dict[str, ttk.Button] = {}
+        self.section = "models"
+        self.tabs = ui.Seg(self, SECTIONS, self.show_section, CW, 13)
+        self.tabs.pack(anchor="w", pady=(12, 0))
+        self.models = ModelsView(bar, self)
+        self.engine = EngineView(bar, self)
+        self.generation = GenerationView(bar, self)
+        self._loaded = False
 
-    def _wheel(self, on: bool) -> None:
-        if on:
-            self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
-            self.canvas.bind_all("<Button-4>", lambda _e: self.canvas.yview_scroll(-1, "units"))
-            self.canvas.bind_all("<Button-5>", lambda _e: self.canvas.yview_scroll(1, "units"))
+    def show_section(self, section: str) -> None:
+        if section == "settings":
+            section = "engine"
+        self.section = section
+        self.tabs.set(section)
+        for name, view in (("models", self.models), ("engine", self.engine), ("generation", self.generation)):
+            if name == section:
+                view.pack(fill="x", anchor="w")
+            else:
+                view.pack_forget()
+        if section != "models":
+            self.load()
         else:
-            for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-                self.canvas.unbind_all(sequence)
+            self.models.update_view(self.bar.refresher.get())
+        self.bar._layout_footer()
 
     def update_view(self, facts: dict[str, Any]) -> None:
-        hardware = facts.get("hardware") or ""
-        self.hardware.configure(
-            text=("This computer: " + hardware) if hardware else (facts.get("comfy_problem") or "Looking...")
-        )
-        rows = [r for r in facts.get("rows") or [] if r["runnable"] or r["installed"]]
-        rows.sort(key=lambda r: (not r["active"], not r["installed"], r["name"].lower()))
-        shown = tuple((r["id"], r["installed"], r["active"], r["partial"]) for r in rows)
-        if shown != self._shown:
-            self._shown = shown
-            self._build_rows(rows)
-        for row in rows:
-            button = self._buttons.get(row["id"])
-            busy = row["statusText"].startswith(("Downloading", "Waiting", "Installing", "Removing", "Working"))
-            if button is not None and not row["installed"]:
-                if busy:
-                    button.configure(text=row["statusText"], state="disabled")
-                else:
-                    button.configure(text="Resume" if row["partial"] else "Download", state="normal")
+        if self.section == "models":
+            self.models.update_view(facts)
 
-    def _build_rows(self, rows: list[dict[str, Any]]) -> None:
-        for child in self.rows.winfo_children():
-            child.destroy()
-        self._buttons = {}
-        for row in rows:
-            line = ttk.Frame(self.rows)
-            line.pack(fill="x", pady=(0, 8), padx=(0, 6))
-            text = ttk.Frame(line)
-            text.pack(side="left", fill="x", expand=True)
-            ttk.Label(text, text=row["name"], wraplength=self.bar.wrap - 130, justify="left").pack(anchor="w")
-            what = ", ".join(c for c in row["capabilities"] if c != "patch")
-            detail = " · ".join(x for x in (what, row["size"], "installed" if row["installed"] else "") if x)
-            ttk.Label(text, text=detail, style="Dim.TLabel").pack(anchor="w")
-            if row["installed"] and not row["runnable"]:
-                continue  # a part other models use (the Fooocus patch): nothing to press
-            if row["installed"] and row["runnable"]:
-                if row["active"]:
-                    b = ttk.Label(line, text="Active", style="Ok.TLabel")
-                else:
-                    b = ttk.Button(
-                        line, text="Set active", style="Chip.TButton", command=lambda i=row["id"]: self._activate(i)
-                    )
-            else:
-                b = ttk.Button(line, text="Download", style="Chip.TButton", command=lambda i=row["id"]: self._get(i))
-                self._buttons[row["id"]] = b
-            b.pack(side="right", anchor="n")
-            for widget in (line, text, *text.winfo_children()):
-                widget.bind("<Enter>", lambda _e: self._wheel(True), add="+")
+    def say(self, text: str, color: str = OK) -> None:
+        {"models": self.models, "engine": self.engine, "generation": self.generation}[self.section].say(text, color)
 
-    def _run(self, fn, *args, done: str = "") -> None:
-        def work() -> None:
-            try:
-                fn(*args)
-                if done:
-                    self.bar.call_soon(self.bar._say, done, self.bar.colors["OK"])
-            except Exception as err:  # noqa: BLE001 - shown on the bar
-                self.bar.call_soon(self.bar._say, str(err), self.bar.colors["BAD"])
-            self.bar.refresher.wake.set()
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _activate(self, model_id: str) -> None:
-        self._run(self.bar.service.app.set_active, model_id)
-
-    def _get(self, model_id: str) -> None:
-        self._run(self.bar.service.app.queue_download, model_id, done="Downloading. You can keep working.")
-
-    def _save_token(self) -> None:
-        value = self.token.get().strip()
-        self.token.delete(0, "end")
-        self._run(self.bar.service.app.save_token, value, done="Hugging Face key saved.")
-
-
-class SettingsView(ttk.Frame):
-    """ComfyUI's folder, when it starts and stops, and the generation settings."""
-
-    def __init__(self, bar: Bar) -> None:
-        super().__init__(bar.root)
-        self.bar = bar
-        ttk.Label(self, text="ComfyUI folder", style="Dim.TLabel").pack(anchor="w")
-        folder = ttk.Frame(self)
-        folder.pack(fill="x", pady=(2, 8))
-        self.folder = ttk.Entry(folder)
-        self.folder.pack(side="left", fill="x", expand=True)
-        ttk.Button(folder, text="Browse", style="Chip.TButton", command=self._browse).pack(side="left", padx=(6, 0))
-        self.vars: dict[str, tk.Variable] = {}
-        for key, label, kind in SETTINGS:
-            if kind is bool:
-                var = tk.BooleanVar()
-                ttk.Checkbutton(self, text=label, variable=var).pack(anchor="w", pady=(0, 6))
-            else:
-                var = tk.StringVar()
-                line = ttk.Frame(self)
-                line.pack(fill="x", pady=(0, 6))
-                width = 26 if kind is str else 7
-                ttk.Entry(line, textvariable=var, width=width).pack(side="right")
-                ttk.Label(line, text=label, style="Dim.TLabel", wraplength=self.bar.wrap - 200).pack(
-                    side="left", anchor="w"
-                )
-            self.vars[key] = var
-        buttons = ttk.Frame(self)
-        buttons.pack(fill="x", pady=(6, 0))
-        ttk.Button(buttons, text="Save", style="Accent.TButton", command=self.save).pack(side="right")
-        ttk.Button(buttons, text="Check", style="Chip.TButton", command=self.check).pack(side="left")
-        ttk.Button(buttons, text="Stop AI engine", style="Chip.TButton", command=self.stop).pack(
-            side="left", padx=(6, 0)
-        )
-        ttk.Button(buttons, text="Logs", style="Chip.TButton", command=self.logs).pack(side="left", padx=(6, 0))
+    # the settings ------------------------------------------------------------------------
 
     def load(self) -> None:
         settings = self.bar.service.app.settings
-        self.folder.delete(0, "end")
-        self.folder.insert(0, settings.comfy_dir or "")
-        for key, _label, kind in SETTINGS:
-            value = getattr(settings, key)
-            self.vars[key].set(bool(value) if kind is bool else str(value))
+        self.engine.folder.set(settings.comfy_dir or "")
+        self.engine.autostart.set(bool(settings.autostart))
+        self.engine.idle.set(str(settings.idle_timeout_minutes))
+        self.engine.extra.set(str(settings.extra_server_args or ""))
+        for key, entry in self.generation.fields.items():
+            entry.set(str(getattr(settings, key)))
 
-    def _browse(self) -> None:
-        from tkinter import filedialog
-
-        folder = filedialog.askdirectory(parent=self.bar.root, title="Choose your ComfyUI folder", mustexist=True)
-        if folder:
-            self.folder.delete(0, "end")
-            self.folder.insert(0, folder)
+    def values(self) -> dict[str, Any]:
+        raw: dict[str, Any] = {
+            "autostart": self.engine.autostart.get(),
+            "idle_timeout_minutes": self.engine.idle.get(),
+            "extra_server_args": self.engine.extra.get(),
+        }
+        raw.update({key: entry.get() for key, entry in self.generation.fields.items()})
+        out = {}
+        for key, label, kind in SETTINGS:
+            try:
+                out[key] = kind(raw[key]) if kind is not bool else bool(raw[key])
+            except ValueError as err:
+                raise ValueError(f"{label}: {raw[key]!r} is not a number.") from err
+        return out
 
     def save(self) -> None:
         app = self.bar.service.app
-        say, colors = self.bar._say, self.bar.colors
         try:
-            values = {key: kind(self.vars[key].get()) for key, _label, kind in SETTINGS}
+            values = self.values()
         except ValueError as err:
-            say(f"A number is not valid: {err}", colors["BAD"])
+            self.say(str(err), BAD)
             return
-        folder = self.folder.get().strip()
+        folder = self.engine.folder.get().strip()
         try:
             if folder != (app.settings.comfy_dir or ""):
                 app.use_comfy_dir(folder)
@@ -212,30 +129,310 @@ class SettingsView(ttk.Frame):
             app.settings.save(app.paths.config)
             app.reload_settings()
         except Exception as err:  # noqa: BLE001 - says what is wrong
-            say(str(err), colors["BAD"])
+            self.say(str(err), BAD)
             return
         self.bar.refresher.wake.set()
-        say("Settings saved.", colors["OK"])
+        self.say("Settings saved.", OK)
+
+
+class ModelsView(tk.Frame):
+    """This computer, the installed models and the ones to download, and the Hugging Face key."""
+
+    def __init__(self, bar: Bar, parent: tk.Misc) -> None:
+        super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
+        self.bar = bar
+        self.hardware = ui.small(self, "Looking...")
+        self.hardware.pack(fill="x", pady=(12, 0))
+        self.note = ui.small(self, "")
+        self.installed_title = ui.caption(self, "Installed")
+        self.installed = ui.Box(self)
+        self.available_title = ui.caption(self, "Available")
+        self.available = ui.Box(self)
+        self.key_box = ui.frame(self)
+        ui.caption(self.key_box, "Hugging Face key (for FLUX)").pack(anchor="w")
+        row = ui.frame(self.key_box)
+        row.pack(fill="x", pady=(6, 0))
+        save = ui.Button(row, "Save", self._save_token)
+        self.token = ui.Field(row, CW - 8 - save.w, "hf_...", secret=True, on_enter=self._save_token)
+        self.token.pack(side="left")
+        save.pack(side="left", padx=(8, 0))
+        self.key_box.pack(fill="x", pady=(12, 0))
+        self._shown: tuple = ()
+        self._rows: dict[str, dict[str, Any]] = {}
+
+    def say(self, text: str, color: str = OK) -> None:
+        if not text:
+            self.note.pack_forget()
+            return
+        self.note.configure(text=text, fg=color)
+        self.note.pack(fill="x", pady=(8, 0), after=self.hardware)
+
+    def update_view(self, facts: dict[str, Any]) -> None:
+        hardware = facts.get("hardware") or ""
+        line = hardware or facts.get("comfy_problem") or ("Looking..." if not facts.get("error") else facts["error"])
+        if self.hardware.cget("text") != line:
+            self.hardware.configure(text=line)
+        rows = [r for r in facts.get("rows") or [] if r["runnable"] or r["installed"]]
+        installed = [r for r in rows if r["installed"]]
+        installed.sort(key=lambda r: (not r["runnable"], not r["active"], r["name"].lower()))
+        available = sorted((r for r in rows if not r["installed"]), key=lambda r: r["name"].lower())
+        shown = tuple(
+            (
+                r["id"],
+                r["installed"],
+                r["partial"],
+                self._mode(r),
+                r.get("missing_models") != [],
+                bool(r.get("missing_nodes")),
+            )
+            for r in installed + available
+        )
+        if shown != self._shown:
+            self._shown = shown
+            self._build(installed, available)
+        current = facts.get("current") or {}
+        for row in installed + available:
+            parts = self._rows.get(row["id"])
+            if not parts:
+                continue
+            status = row.get("statusText", "")
+            if "percent" in parts:
+                pct = status.split()[-1] if status.startswith("Downloading") else ("Waiting" if status else "")
+                if parts["percent"].cget("text") != pct:
+                    parts["percent"].configure(text=pct)
+            if "bar" in parts:
+                total = current.get("total") or 0
+                if current.get("model_id") == row["id"] and total:
+                    parts["bar"].set((current.get("done") or 0) / total)
+
+    @staticmethod
+    def _mode(row: dict[str, Any]) -> str:
+        status = row.get("statusText", "")
+        if status.startswith(("Downloading", "Waiting")) and not row["installed"]:
+            return "busy"
+        if status.startswith(BUSY):
+            return "working"
+        return "idle"
+
+    def _build(self, installed: list[dict[str, Any]], available: list[dict[str, Any]]) -> None:
+        for box in (self.installed, self.available):
+            for child in box.inner.winfo_children():
+                child.destroy()
+        self._rows = {}
+        for title, box, rows in (
+            (self.installed_title, self.installed, installed),
+            (self.available_title, self.available, available),
+        ):
+            title.pack_forget()
+            box.pack_forget()
+            if not rows:
+                continue
+            title.pack(anchor="w", pady=(12, 0), before=self.key_box)
+            box.pack(fill="x", pady=(6, 0), before=self.key_box)
+            for i, row in enumerate(rows):
+                if i:
+                    ui.divider(box.inner).pack(fill="x")
+                self._row(box.inner, row)
+            box.lift_corners()
+        self.bar._fit_height()
+
+    def _row(self, parent: tk.Misc, row: dict[str, Any]) -> None:
+        from .modelinfo import model_detail
+
+        f = ui.fonts(self)
+        line = ui.frame(parent)
+        line.pack(fill="x")
+        body = ui.frame(line)
+        body.pack(fill="x", padx=12, pady=10)
+        top = ui.frame(body)
+        top.pack(fill="x")
+        right = ui.frame(top)
+        right.pack(side="right")
+        parts: dict[str, Any] = {}
+        mode = self._mode(row)
+        status = row.get("statusText", "")
+        detail = model_detail(row, row.get("neededBy", ""))
+        if row["installed"]:
+            if row.get("missing_models"):
+                detail += " · Needs one more download"
+                ui.Button(right, "Download", lambda i=row["id"]: self._get(i)).pack(side="left")
+            elif row.get("missing_nodes"):
+                detail += " · Needs extra parts"
+                ui.Button(right, "Install", lambda i=row["id"]: self._nodes(i)).pack(side="left")
+            elif mode == "working":
+                ui.small(right, status, wrap=0).pack(side="left")
+            elif row["runnable"]:
+                ui.IconButton(right, "trash", lambda r=row: self._uninstall(r)).pack(side="left")
+        elif mode == "busy":
+            parts["percent"] = ui.small(right, "", wrap=0)
+            parts["percent"].pack(side="left", padx=(0, 4))
+            ui.IconButton(right, "close", lambda i=row["id"]: self._stop(i)).pack(side="left")
+            if status.startswith("Downloading"):
+                parts["bar"] = ui.Progress(body, CW - 2 - 24, BG)
+                parts["bar"].pack(fill="x", pady=(8, 0))
+        elif mode == "working":
+            ui.small(right, status, wrap=0).pack(side="left")
+        else:
+            label = "Resume" if row["partial"] else "Download"
+            ui.Button(right, label, lambda i=row["id"]: self._get(i)).pack(side="left")
+        right.update_idletasks()
+        wrap = CW - 2 - 24 - 12 - right.winfo_reqwidth()
+        names = ui.frame(top)
+        names.pack(side="left", fill="x")
+        ui.text(names, row["name"], f.body, wrap=wrap).pack(anchor="w")
+        ui.small(names, detail, wrap=wrap).pack(anchor="w")
+        self._rows[row["id"]] = parts
+
+    def _run(self, fn, *args, done: str = "") -> None:
+        bar = self.bar
+
+        def work() -> None:
+            try:
+                fn(*args)
+                if done:
+                    bar.call_soon(self.say, done, OK)
+            except Exception as err:  # noqa: BLE001 - shown in the view
+                bar.call_soon(self.say, str(err), BAD)
+            bar.refresher.wake.set()
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _get(self, model_id: str) -> None:
+        self.say("")
+        self._run(self.bar.service.app.queue_download, model_id)
+
+    def _nodes(self, model_id: str) -> None:
+        self.say("")
+        self._run(self.bar.service.app.queue_node_install, model_id)
+
+    def _stop(self, model_id: str) -> None:
+        self._run(self.bar.service.stop_download, model_id)
+
+    def _uninstall(self, row: dict[str, Any]) -> None:
+        from .bar import short_name
+
+        if not ui.ask(
+            self.bar.root,
+            f"Uninstall {short_name(row['name'])}?\n\n"
+            f"Its files ({row['size']}) are deleted. Files other models use are kept. You can download it again later.",
+            "Uninstall",
+        ):
+            return
+        self.say("")
+        self._run(self.bar.service.uninstall, row["id"])
+
+    def _save_token(self) -> None:
+        value = self.token.get().strip()
+        self.token.set("")
+        self._run(self.bar.service.app.save_token, value, done="Hugging Face key saved.")
+
+
+class EngineView(tk.Frame):
+    """ComfyUI's folder, starting and stopping it, and its extra options."""
+
+    def __init__(self, bar: Bar, parent: tk.Misc) -> None:
+        super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
+        self.bar = bar
+
+        def folder_row(box):
+            row = ui.frame(box)
+            browse = ui.Button(row, "Browse", self._browse)
+            self.folder = ui.Field(row, CW - 8 - browse.w)
+            self.folder.pack(side="left")
+            browse.pack(side="left", padx=(8, 0))
+            return row
+
+        box, _ = field(self, "ComfyUI folder", folder_row)
+        box.pack(fill="x", pady=(12, 0))
+        self.autostart = ui.Checkbox(self, "Start the AI engine with PhotoCraft")
+        self.autostart.pack(anchor="w", pady=(12, 0))
+
+        def idle_row(box):
+            row = ui.frame(box)
+            self.idle = ui.Field(row, 72)
+            self.idle.pack(side="left")
+            ui.small(row, "minutes, 0 = never", wrap=0).pack(side="left", padx=(8, 0))
+            return row
+
+        box, _ = field(self, "Stop after idle", idle_row)
+        box.pack(fill="x", pady=(12, 0))
+        box, self.extra = field(self, "Extra ComfyUI options", lambda b: ui.Field(b, CW, "for example --lowvram"))
+        box.pack(fill="x", pady=(12, 0))
+        ui.divider(self).pack(fill="x", pady=(12, 0))
+        tools = ui.frame(self)
+        tools.pack(fill="x", pady=(12, 0))
+        ui.caption(tools, "Engine").pack(anchor="w")
+        row = ui.frame(tools)
+        row.pack(anchor="w", pady=(8, 0))
+        for i, (label, command) in enumerate((("Check", self.check), ("Stop engine", self.stop), ("Logs", self.logs))):
+            ui.Button(row, label, command).pack(side="left", padx=(8 if i else 0, 0))
+        self.result = ui.small(tools, "")
+
+    def say(self, text: str, color: str = OK) -> None:
+        if not text:
+            self.result.pack_forget()
+            return
+        self.result.configure(text=text, fg=color)
+        self.result.pack(fill="x", pady=(8, 0))
+
+    def _browse(self) -> None:
+        from tkinter import filedialog
+
+        folder = filedialog.askdirectory(parent=self.bar.root, title="Choose your ComfyUI folder", mustexist=True)
+        if folder:
+            self.folder.set(folder)
 
     def check(self) -> None:
         bar = self.bar
-        bar._say("Checking the AI engine (starting it takes about a minute)...", bar.colors["DIM"])
+        self.say("Checking the AI engine (starting it takes about a minute)...", DIM)
 
         def work() -> None:
             try:
                 health = bar.service.app.check_backend()
                 device = getattr(health, "device", "")
                 text = ("Working: " if health.ok else "Not working: ") + str(health.detail)
-                text += f" (on {device})" if device else ""
-                bar.call_soon(bar._say, text, bar.colors["OK" if health.ok else "BAD"])
+                text += f" on {device}." if device else "."
+                bar.call_soon(self.say, text, OK if health.ok else BAD)
             except Exception as err:  # noqa: BLE001
-                bar.call_soon(bar._say, str(err), bar.colors["BAD"])
+                bar.call_soon(self.say, str(err), BAD)
 
         threading.Thread(target=work, daemon=True).start()
 
     def stop(self) -> None:
-        self.bar._say(self.bar.service.app.stop_backend(), self.bar.colors["DIM"])
+        self.say(self.bar.service.app.stop_backend(), DIM)
         self.bar.service.engine = ""
 
     def logs(self) -> None:
         self.bar.service.app.open_log_folder()
+
+
+class GenerationView(tk.Frame):
+    """Steps, prompt strictness, repaint margin and edge softness."""
+
+    def __init__(self, bar: Bar, parent: tk.Misc) -> None:
+        super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
+        self.bar = bar
+        half = (CW - 12) // 2
+        self.fields: dict[str, ui.Field] = {}
+        keys = (("steps", "cfg"), ("grow_percent", "feather_percent"))
+        labels = {key: label for key, label, _kind in SETTINGS}
+        for pair in keys:
+            row = ui.frame(self)
+            row.pack(fill="x", pady=(12, 0))
+            for i, key in enumerate(pair):
+                box, entry = field(row, labels[key], lambda b: ui.Field(b, half))
+                box.pack(side="left", padx=(12 if i else 0, 0))
+                self.fields[key] = entry
+        ui.small(
+            self,
+            "Steps: more is slower and finer. Strictness: how closely the prompt is followed. "
+            "Margin: how far past the selection the fill may repaint, as a share of its size.",
+        ).pack(fill="x", pady=(12, 0))
+        self.result = ui.small(self, "")
+
+    def say(self, text: str, color: str = OK) -> None:
+        if not text:
+            self.result.pack_forget()
+            return
+        self.result.configure(text=text, fg=color)
+        self.result.pack(fill="x", pady=(8, 0))

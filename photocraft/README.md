@@ -14,7 +14,7 @@ It's the same engine as [OpenFill for GIMP](https://github.com/beckettharriman/g
 2. Open PhotoCraft the usual way: from the app menu, or by opening an image in the file manager. OpenFill comes with it.
 3. The first time, the OpenFill bar asks for what's missing:
    - **ComfyUI**: if you use OpenFill for GIMP, the same ComfyUI is found by itself. Otherwise choose its folder, or follow the [install steps](https://github.com/beckettharriman/gimp-openfill#install).
-   - **Models**: one click downloads LaMa (removing things, 0.2 GB) and DreamShaper 8 Inpainting (fill and expand, 2 GB). More models are under **Models and settings**.
+   - **Models**: **Open model manager** shows what fits your graphics card. LaMa (removing things, 0.2 GB) and DreamShaper 8 Inpainting (fill, expand and create, 2 GB) cover every tool.
 
 To remove it: `openfill-photocraft-uninstall`. Your settings and models stay.
 
@@ -31,11 +31,11 @@ Select an area in PhotoCraft (Marquee, Lasso, Object Selection), then:
 - type what you want in the **OpenFill bar** and press Enter, or
 - pick an entry from **Filter > Plug-ins**: OpenFill Generative Fill, Remove Object (runs right away), Generative Expand, Text to Image, or OpenFill Panel to bring the bar back.
 
-The bar stays on top of PhotoCraft:
+The bar stays on top of PhotoCraft. Drag it by its header; the arrow at the top right folds it into a small strip in PhotoCraft's corner, and a click on the strip opens it again. The gear opens **Models and settings**: install, uninstall and stop downloads under Models, ComfyUI under Engine, and the generation settings under Generation. The Model list in each mode picks the model to use.
 
-| Tab | What it does |
+| Mode | What it does |
 |---|---|
-| Fill | Fills the selection from your prompt, or from the surroundings with no prompt. Up to 4 variations. |
+| Fill | Fills the selection from your prompt, or from the surroundings with no prompt. Up to 5 variations. |
 | Remove | Erases what you selected and continues the background. |
 | Expand | Grows the canvas to +25% or an aspect ratio (1:1, 4:3, 3:2, 16:9, 9:16) and paints the new edges. |
 | Create | Text to Image as a new image or a layer in this one (square, landscape or portrait). |

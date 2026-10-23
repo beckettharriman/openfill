@@ -12,17 +12,19 @@ with the GIMP dialog; this module only draws it and turns pointer events into ca
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
 from typing import TYPE_CHECKING
 
 from PIL import Image
 
 from openfill import ui_expand as ue
 
+from . import ui
+from .ui import BG, CW, LINE, WELL
+
 if TYPE_CHECKING:
     from .bar import Bar
 
-AREA = (392, 250)
+AREA = (CW - 2, 228)  # inside the editor's 1 px border: 368 x 230 in all
 ROOM = 0.45  # the image takes this share of the editor at zoom 1, leaving room to drag outward
 ZOOM_STEP = 1.2
 TK_CURSORS = {
@@ -38,11 +40,11 @@ TK_CURSORS = {
 }
 
 
-class ExpandView(ttk.Frame):
+class ExpandView(tk.Frame):
     """Ratio buttons, the Landscape/Portrait switch and the drag editor for one image."""
 
     def __init__(self, bar: Bar, parent: tk.Misc) -> None:
-        super().__init__(parent)
+        super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
         self.bar = bar
         self.state = ue.ExpandState(1, 1, listener=self._changed)
         self.image_key: tuple = ()  # (document name, width, height) the state is for
@@ -61,39 +63,28 @@ class ExpandView(ttk.Frame):
         self._painted_photos: list[tk.PhotoImage] = []
         self._keep_scale: float | None = None
 
-        ratios = ttk.Frame(self)
-        ratios.pack(fill="x")
-        self.ratio_buttons: dict[str, ttk.Button] = {}
-        for button, label in ue.RATIO_BUTTONS:
-            b = ttk.Button(ratios, text=label, style="Chip.TButton", command=lambda k=button: self._ratio(k))
-            b.pack(side="left", padx=(0, 3))
-            self.ratio_buttons[button] = b
-        turn = ttk.Frame(self)
-        turn.pack(fill="x", pady=(5, 0))
-        self.turn_buttons: dict[bool, ttk.Button] = {}
-        for portrait, label in ((False, "Landscape"), (True, "Portrait")):
-            b = ttk.Button(turn, text=label, style="Chip.TButton", command=lambda p=portrait: self._turn(p))
-            b.pack(side="left", padx=(0, 3))
-            self.turn_buttons[portrait] = b
-        self.size = ttk.Label(turn, style="Dim.TLabel")
-        self.size.pack(side="right")
+        ratios = [(button, label) for button, label in ue.RATIO_BUTTONS]
+        self.ratio_seg = ui.Seg(self, ratios, self._ratio, CW, 12, fit=True)
+        self.ratio_seg.pack(anchor="w")
+        self.ratio_buttons = {button: _Choice(self.ratio_seg, button) for button, _label in ratios}
+        self.turn_seg = ui.Seg(self, ((False, "Landscape"), (True, "Portrait")), self._turn, CW, 12)
+        self.turn_seg.pack(anchor="w", pady=(8, 0))
+        self.turn_buttons = {portrait: _Choice(self.turn_seg, portrait) for portrait in (False, True)}
 
-        self.canvas = tk.Canvas(self, width=AREA[0], height=AREA[1], bg=bar.colors["BG"], highlightthickness=0, bd=0)
-        self.canvas.pack(fill="x", pady=(6, 0))
+        well = tk.Frame(self, bg=LINE, bd=0, highlightthickness=0)
+        well.pack(anchor="w", pady=(8, 0))
+        self.canvas = tk.Canvas(well, width=AREA[0], height=AREA[1], bg=WELL, highlightthickness=0, bd=0)
+        self.canvas.pack(padx=1, pady=1)
+        ui.round_corners(well, 4, WELL, BG, LINE)
         self.canvas.bind("<ButtonPress-1>", self._press)
         self.canvas.bind("<B1-Motion>", self._motion_drag)
         self.canvas.bind("<ButtonRelease-1>", self._release)
         self.canvas.bind("<Motion>", self._hover)
-        self.canvas.bind("<MouseWheel>", lambda e: self._zoom_by(ZOOM_STEP if e.delta > 0 else 1 / ZOOM_STEP))
-        self.canvas.bind("<Button-4>", lambda _e: self._zoom_by(ZOOM_STEP))
-        self.canvas.bind("<Button-5>", lambda _e: self._zoom_by(1 / ZOOM_STEP))
-        self.hint = ttk.Label(
-            self,
-            text="Drag the frame's edges or corners outward, or pick a ratio. Mouse wheel zooms.",
-            style="Dim.TLabel",
-            wraplength=bar.wrap,
-        )
-        self.hint.pack(anchor="w", pady=(4, 0))
+        self.canvas.bind("<MouseWheel>", lambda e: self._wheel(ZOOM_STEP if e.delta > 0 else 1 / ZOOM_STEP))
+        self.canvas.bind("<Button-4>", lambda _e: self._wheel(ZOOM_STEP))
+        self.canvas.bind("<Button-5>", lambda _e: self._wheel(1 / ZOOM_STEP))
+        self.size = ui.small(self, "", anchor="center", justify="center")
+        self.size.pack(fill="x", pady=(8, 0))
         self._changed()
 
     # state ---------------------------------------------------------------------------
@@ -134,16 +125,13 @@ class ExpandView(ttk.Frame):
 
     def _changed(self) -> None:
         s = self.state
-        current = ue.ratio_button(s.preset)
-        for key, b in self.ratio_buttons.items():
-            b.configure(style="ChipOn.TButton" if key == current else "Chip.TButton")
-        for portrait, b in self.turn_buttons.items():
-            b.configure(style="ChipOn.TButton" if portrait == s.portrait else "Chip.TButton")
+        self.ratio_seg.set(ue.ratio_button(s.preset))
+        self.turn_seg.set(bool(s.portrait))
         w, h = s.canvas
         if s.margins.is_empty():
             self.size.configure(text=f"{s.image_w} x {s.image_h} px")
         else:
-            self.size.configure(text=f"{s.image_w} x {s.image_h}  >  {w} x {h} px")
+            self.size.configure(text=f"{s.image_w} x {s.image_h} \u2192 {w} x {h} px")
         self._draw()
 
     # geometry ------------------------------------------------------------------------
@@ -170,6 +158,10 @@ class ExpandView(ttk.Frame):
                 return v  # the image stays under the pointer
             return self._fit(start.scale)  # past the edge: zoom out to follow the frame
         return self._fit(self.base_scale() * self.zoom)
+
+    def _wheel(self, factor: float) -> str:
+        self._zoom_by(factor)
+        return "break"  # the wheel zooms here; it does not scroll the panel
 
     def _zoom_by(self, factor: float) -> None:
         self.zoom = max(0.2, min(5.0, self.zoom * factor))
@@ -293,7 +285,7 @@ class ExpandView(ttk.Frame):
         for x, y, w, h, amount in sides:
             if amount and w > 34 and h > 16:
                 text = f"+{amount}" if amount > 0 else f"-{-amount}"
-                c.create_text(x + w / 2, y + h / 2, text=text, fill="white", font=self.bar.small)
+                c.create_text(x + w / 2, y + h / 2, text=text, fill="white", font=ui.fonts(c).tiny)
         self._painted_photos = []
         for (rx, ry, rw, rh), frame in self.painted.items():
             sx, sy = v.ix + rx * v.scale, v.iy + ry * v.scale
@@ -309,3 +301,13 @@ class ExpandView(ttk.Frame):
         half = ue.HANDLE_PX / 2
         for _name, (hx, hy) in ue.handle_points(v).items():
             c.create_rectangle(hx - half, hy - half, hx + half, hy + half, fill="white", outline="#1a1a1a")
+
+
+class _Choice:
+    """One choice of a segmented control, with ``invoke()`` (as a button had)."""
+
+    def __init__(self, seg: ui.Seg, key) -> None:
+        self.seg, self.key = seg, key
+
+    def invoke(self) -> None:
+        self.seg.invoke(self.key)
