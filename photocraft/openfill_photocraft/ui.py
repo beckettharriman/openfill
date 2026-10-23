@@ -36,6 +36,7 @@ BG, PANEL, LINE, TEXT, DIM, ACCENT, BAD, OK, WARN = (
 )
 SEG_ON = "#45474e"  # the selected segment
 WELL = "#191a1d"  # the Expand editor's background
+PLACEHOLDER_FG = "#757575"  # a text box placeholder, as the browser draws one
 ACCENT_HOVER = "#5d9cf5"
 WHITE = "#ffffff"
 
@@ -878,7 +879,7 @@ class PromptBox(tk.Canvas):
             spacing3=0,
             undo=True,
         )
-        self.text.tag_configure("placeholder", foreground=DIM)
+        self.text.tag_configure("placeholder", foreground=PLACEHOLDER_FG)
         self._bgimg = self.create_image(0, 0, anchor="nw")
         self.create_window(10, 8, window=self.text, anchor="nw", width=width - 20, height=height - 16)
         self.placeholder = ""

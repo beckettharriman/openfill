@@ -18,7 +18,7 @@ def hardware_line(hw: Any) -> str:
     name = str(getattr(hw, "gpu_name", "") or "")
     for word in ("NVIDIA ", "GeForce ", "(R)", "(TM)"):
         name = name.replace(word, "")
-    name = name.removesuffix(" GPU").strip()
+    name = name.removesuffix(" GPU").replace(" with Max-Q Design", " Max-Q").strip()
     if name:
         parts.append(name)
     if getattr(hw, "vram_bytes", 0):
