@@ -590,6 +590,86 @@ class BarLogicTests(unittest.TestCase):
         self.assertEqual(expand_margins(100, 80, None), (25, 20, 25, 20))
 
 
+class ServiceModelTests(unittest.TestCase):
+    """Uninstall and Stop downloading, against a stand-in for OpenFill's App and task queue."""
+
+    def make(self, tmp: Path, current=None, queued=()):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.service import Service
+
+        tasks = tmp / "tasks"
+        tasks.mkdir()
+        for i, (kind, model_id) in enumerate(queued):
+            (tasks / f"{i}-{kind}.json").write_text(json.dumps({"type": kind, "model_id": model_id}))
+        if current:
+            (tasks / "9-download.running.json").write_text(json.dumps({"type": "download", "model_id": current}))
+
+        def entry(model_id, needs=()):
+            return SimpleNamespace(id=model_id, requires_models=tuple(needs))
+
+        catalog = [
+            entry("realvisxl-v5", ["fooocus-inpaint-patch"]),
+            entry("juggernaut-xl-v9", ["fooocus-inpaint-patch"]),
+            entry("fooocus-inpaint-patch"),
+            entry("lama-big"),
+        ]
+        removed = []
+
+        class Server:
+            tasks_dir = tasks
+
+            def pending_tasks(self):
+                return [json.loads(p.read_text()) for p in sorted(tasks.glob("*.json"))]
+
+            def task_status(self):
+                return {"current": {"type": "download", "model_id": current} if current else None}
+
+        settings = SimpleNamespace(active_model="realvisxl-v5", save=lambda path: None)
+        app = SimpleNamespace(
+            server=Server(),
+            catalog=catalog,
+            settings=settings,
+            paths=SimpleNamespace(config=tmp / "config.json"),
+            remove_model=lambda model_id: removed.append(model_id) or "task-1",
+        )
+        service = Service.__new__(Service)
+        service.app = app
+        return service, tasks, removed
+
+    def test_stop_download_drops_the_model_and_its_parts_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, tasks, _ = self.make(
+                Path(tmp),
+                current="fooocus-inpaint-patch",
+                queued=[("download", "realvisxl-v5"), ("download", "lama-big")],
+            )
+            stopped = service.stop_download("realvisxl-v5")
+            self.assertEqual(stopped, ["fooocus-inpaint-patch", "realvisxl-v5"])
+            left = sorted(json.loads(p.read_text())["model_id"] for p in tasks.glob("*.json"))
+            self.assertEqual(left, ["fooocus-inpaint-patch", "lama-big"])  # the running file stays for the worker
+            self.assertTrue((tasks / "cancel").exists())  # the patch download it was waiting for stops
+
+    def test_stop_download_keeps_a_part_another_model_needs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, tasks, _ = self.make(
+                Path(tmp),
+                current="fooocus-inpaint-patch",
+                queued=[("download", "realvisxl-v5"), ("download", "juggernaut-xl-v9")],
+            )
+            self.assertEqual(service.stop_download("realvisxl-v5"), ["realvisxl-v5"])
+            self.assertFalse((tasks / "cancel").exists())
+            left = sorted(json.loads(p.read_text())["model_id"] for p in tasks.glob("*.json"))
+            self.assertEqual(left, ["fooocus-inpaint-patch", "juggernaut-xl-v9"])
+
+    def test_uninstall_queues_the_removal_and_clears_the_active_choice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service, _tasks, removed = self.make(Path(tmp))
+            self.assertEqual(service.uninstall("realvisxl-v5"), "task-1")
+            self.assertEqual(removed, ["realvisxl-v5"])
+            self.assertEqual(service.app.settings.active_model, "")
+
+
 class PageTests(unittest.TestCase):
     def test_key_is_required(self):
         from openfill_photocraft import web

@@ -9,6 +9,7 @@ worker thread and keeps the variations of the last job for the picker.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import traceback
@@ -389,6 +390,56 @@ class Service:
         if image.pending_group:
             image.pending_group = "Object Removal"
         return layers
+
+    # models -----------------------------------------------------------------------------
+
+    def uninstall(self, model_id: str) -> str:
+        """Delete one installed model's files (a task for the download worker). Files another
+        installed model also uses stay; companion entries (the Fooocus patch) are their own
+        entries and stay too. The model set active by hand falls back to the automatic choice."""
+        app = self.app
+        task = app.remove_model(model_id)
+        if app.settings.active_model == model_id:
+            app.settings.active_model = ""
+            app.settings.save(app.paths.config)
+        return task
+
+    def stop_download(self, model_id: str) -> list[str]:
+        """Stop downloading one model: drop its queued tasks and cancel it when it is the one
+        running. Its parts (the Fooocus patch) stop too, unless another queued model needs
+        them. What was downloaded stays on disk, so Download resumes it. Returns the ids
+        stopped."""
+        from openfill import catalog as cat
+
+        server = self.app.server
+        queued = [t for t in server.pending_tasks() if t.get("type") == "download"]
+        try:
+            needs = set(cat.by_id(self.app.catalog, model_id).requires_models)
+        except cat.CatalogError:
+            needs = set()
+        others = {t.get("model_id") for t in queued} - {model_id} - needs
+        for other in others:
+            try:
+                needs -= set(cat.by_id(self.app.catalog, other).requires_models)
+            except cat.CatalogError:
+                pass
+        stop = {model_id} | needs
+        folder = server.tasks_dir
+        if folder.is_dir():
+            for path in folder.glob("*.json"):
+                if path.name.endswith(".running.json"):
+                    continue
+                try:
+                    task = json.loads(path.read_text(encoding="utf-8"))
+                    if task.get("type") == "download" and task.get("model_id") in stop:
+                        path.unlink()
+                except (OSError, ValueError):
+                    pass
+        current = server.task_status().get("current") or {}
+        if current.get("type") == "download" and current.get("model_id") in stop:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "cancel").write_text(str(time.time()), encoding="utf-8")
+        return sorted(stop)
 
     def show_variation(self, index: int) -> None:
         if not self.image or not (0 <= index < len(self.layers)):
