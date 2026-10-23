@@ -17,6 +17,7 @@ from __future__ import annotations
 import io
 import json
 import queue
+import sys
 import threading
 import tkinter as tk
 import webbrowser
@@ -38,6 +39,10 @@ THUMB_H = 72
 TABS = (("fill", "Fill"), ("remove", "Remove"), ("expand", "Expand"), ("txt2img", "Create"))
 CREATE_SIZES = (("Square", 1024, 1024), ("Landscape", 1216, 832), ("Portrait", 832, 1216))
 STARTER = ("lama-big", "dreamshaper-8-inpainting")
+HEAD_H = 45  # the header and its divider
+FOOTER_H = 65  # the action bar: divider, 12 px, a 36 px button, 16 px
+GEAR_BAR_H = 44  # Models and settings' section control: 12 px and 32 px
+CREATE_TOTAL = 474  # the Create tools, as on the board: Models and settings is about this tall
 GO = {"fill": "Generate", "remove": "Remove", "expand": "Expand", "txt2img": "Create"}
 PLACEHOLDERS = {
     "fill": "Describe what to add, or leave it empty to fill from the surroundings.",
@@ -122,13 +127,48 @@ def expand_margins(width: int, height: int, preset: tuple[int, int] | None) -> t
 class Refresher:
     """Slow facts for the panel, looked up off the UI thread every few seconds."""
 
-    def __init__(self, service: Service) -> None:
+    CACHED = ("comfy_ok", "models", "active", "active_name", "rows", "hardware")
+
+    def __init__(self, service: Service, cache: Path | None = None) -> None:
         self.service = service
-        self.facts: dict[str, Any] = {}
-        self._hardware: str | None = None
+        self.cache = cache
+        self.facts: dict[str, Any] = self._load_cache()
+        self._hardware: str | None = self.facts.get("hardware") or None
+        self._saved = ""
         self.lock = threading.Lock()
         self.wake = threading.Event()
         threading.Thread(target=self._loop, name="openfill-bar-refresh", daemon=True).start()
+
+    def _load_cache(self) -> dict[str, Any]:
+        """The facts of the last run, so Models and the model list show at once; the first
+        look replaces them a moment later."""
+        if self.cache is None:
+            return {}
+        try:
+            data = json.loads(self.cache.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict) or not data.get("comfy_ok"):
+            return {}
+        data["models"] = {k: [tuple(m) for m in v] for k, v in (data.get("models") or {}).items()}
+        for row in data.get("rows") or []:
+            if str(row.get("statusText", "")).startswith(
+                ("Downloading", "Waiting", "Removing", "Installing", "Working")
+            ):
+                row["statusText"] = ""
+        data["cached"] = True
+        return data
+
+    def _save_cache(self, facts: dict[str, Any]) -> None:
+        if self.cache is None or not facts.get("rows"):
+            return
+        text = json.dumps({k: facts.get(k) for k in self.CACHED})
+        if text != self._saved:
+            try:
+                self.cache.write_text(text, encoding="utf-8")
+                self._saved = text
+            except OSError:
+                pass
 
     def get(self) -> dict[str, Any]:
         with self.lock:
@@ -142,6 +182,7 @@ class Refresher:
                 facts = {"error": str(err)}
             with self.lock:
                 self.facts = facts
+            self._save_cache(facts)
             self.wake.wait(4.0)
             self.wake.clear()
 
@@ -241,7 +282,7 @@ class Bar:
         self.settings_file = profile / "bar.json"
         self.prefs = self._load_prefs()
         self.calls: queue.Queue = queue.Queue()  # actions from other threads
-        self.refresher = Refresher(service)
+        self.refresher = Refresher(service, profile / "bar-models.json")
         self.wrap = CW
         self.colors = {"BG": BG, "OK": OK, "BAD": BAD, "DIM": DIM, "TEXT": TEXT, "WARN": WARN}
         self.view = ""  # "" (the tools) or "settings" (Models and settings)
@@ -252,7 +293,7 @@ class Bar:
         self.frameless = ui.make_borderless(self.root)  # before it is tied to PhotoCraft or shown
         self.root.attributes("-topmost", True)  # dropped when tied to PhotoCraft (Windows)
         self.root.protocol("WM_DELETE_WINDOW", self.collapse)  # closing folds it back to the strip
-        self.root.bind("<Unmap>", self._unmapped)
+        ui.own_tag(self.root).bind_class(ui.own_tag_name(self.root), "<Unmap>", self._unmapped, add="+")
         self.fonts = ui.fonts(self.root)
         self.small = self.fonts.small
         self.bold = self.fonts.bold
@@ -298,15 +339,26 @@ class Bar:
         root, f = self.root, self.fonts
         self._build_header()
         ui.divider(root).pack(fill="x")
+        self.gear_bar = ui.frame(root)  # Models / Engine / Generation, shown with the gear view
         # The body scrolls as a whole when the screen is too short for it (no scroll bar).
+        # The window's size is set by the panel (one geometry change per switch, see _resize);
+        # the body takes what the header and the action bar leave.
+        self.footer = ui.frame(root)
+        self.footer.pack(side="bottom", fill="x")
         self.scroller = tk.Canvas(root, width=W, height=10, bg=BG, bd=0, highlightthickness=0, yscrollincrement=1)
-        self.scroller.pack(fill="x")
+        self.scroller.pack(fill="both", expand=True)
         self.inner = ui.frame(self.scroller)
         self._inner_item = self.scroller.create_window(0, 0, window=self.inner, anchor="nw", width=W)
-        self.inner.bind("<Configure>", lambda _e: self._fit_height())
+        self.inner.bind("<Configure>", lambda _e: self._inner_changed())
         root.bind_all("<MouseWheel>", self._wheel, add="+")
         root.bind_all("<Button-4>", self._wheel, add="+")
         root.bind_all("<Button-5>", self._wheel, add="+")
+        try:  # Tk 9: precise touchpad scrolling
+            root.bind_all("<TouchpadScroll>", self._wheel, add="+")
+        except tk.TclError:
+            pass
+        self._want: tuple[int, int, int] | None = None  # the geometry last asked for, until it arrives
+        self._resize_soon = False
         self.main = ui.frame(self.inner)
         self.main.pack(fill="x", padx=PAD)
         self.bottom_gap = ui.gap(self.inner, 16)
@@ -401,8 +453,6 @@ class Bar:
         self.settings_view = self.gear
 
         # The action bar at the bottom
-        self.footer = ui.frame(root)
-        self.footer.pack(fill="x")
         ui.divider(self.footer).pack(fill="x")
         self.actions = ui.frame(self.footer)
         self.actions.pack(fill="x", padx=PAD, pady=(12, PAD))
@@ -526,28 +576,90 @@ class Bar:
     # scrolling -----------------------------------------------------------------------
 
     def _max_body(self) -> int:
-        other = 45 + (self.footer.winfo_reqheight() if self.footer.winfo_manager() else 0)
-        return max(200, self.root.winfo_screenheight() - other - 64)
+        return max(200, self.root.winfo_screenheight() - HEAD_H - GEAR_BAR_H - FOOTER_H - 64)
 
-    def _fit_height(self) -> None:
+    def _footer_shown(self) -> bool:
+        return bool(self._footer_key)
+
+    def _body_height(self) -> int:
+        """The body's height: the tools' parts as packed (each part's size is already known,
+        so nothing is laid out again for this), or the gear view's fixed height."""
+        if self.view:
+            return self._gear_total() - HEAD_H - GEAR_BAR_H - (FOOTER_H if self._footer_shown() else 0)
+        parts = self._shown.get("parts") or []
+        return sum(p.winfo_reqheight() + 12 for p in parts) + 16
+
+    def _gear_total(self) -> int:
+        """Models and settings keep one window height for all three sections: as tall as the
+        tallest of Engine and Generation, and at least the Create tools."""
+        if not getattr(self, "_gear_h", 0):
+            self.root.update_idletasks()
+            sections = max(self.gear.engine.winfo_reqheight(), self.gear.generation.winfo_reqheight())
+            settings = HEAD_H + GEAR_BAR_H + sections + 16 + FOOTER_H
+            self._gear_h = max(settings, CREATE_TOTAL)
+        return self._gear_h
+
+    def _target_height(self) -> int:
+        body = min(self._body_height(), self._max_body())
+        return HEAD_H + (GEAR_BAR_H if self.view else 0) + body + (FOOTER_H if self._footer_shown() else 0)
+
+    def _resize(self) -> None:
+        """Give the window its height in one geometry change, keeping its bottom edge (the
+        corner it opened from at the strip) where it is."""
+        self._resize_soon = False
+        h = self._target_height()
+        if getattr(self, "collapsed", True) or not self.root.winfo_viewable():
+            if self._want is None or self._want[2] != h:
+                self.root.geometry(f"{W}x{h}")
+                self._want = None
+            return
+        x, y, cur = self._want or (self.root.winfo_x(), self.root.winfo_y(), self.root.winfo_height())
+        if cur == h:
+            return
+        limit = self.root.winfo_screenheight() - 56  # above a taskbar
+        bottom = min(y + cur, limit)
+        y = max(0, bottom - h)
+        self._want = (x, y, h)
+        self._placing = True
+        self.root.geometry(f"{W}x{h}+{x}+{y}")
+        self._placing = False
+
+    def _inner_changed(self) -> None:
+        """The body's contents changed size (a job card, a wrapped line, the models list)."""
         want = self.inner.winfo_reqheight()
-        height = min(want, self._max_body())
-        if int(self.scroller.cget("height")) != height:
-            self.scroller.configure(height=height)
         self.scroller.configure(scrollregion=(0, 0, W, want))
-        if want <= height:
-            self.scroller.yview_moveto(0)
+        if not self.view and not self._resize_soon:
+            self._resize_soon = True
+            self.root.after_idle(self._resize)
 
-    def _wheel(self, event) -> None:
+    def _wheel(self, event) -> str | None:
         try:
             if event.widget.winfo_toplevel() is not self.root:
-                return
+                return None
         except (KeyError, AttributeError, tk.TclError):
-            return
-        if self.inner.winfo_reqheight() <= int(self.scroller.cget("height")):
-            return
-        step = -1 if (getattr(event, "num", 0) == 4 or getattr(event, "delta", 0) > 0) else 1
-        self.scroller.yview_scroll(step * 48, "units")
+            return None
+        if self.inner.winfo_reqheight() <= self.scroller.winfo_height():
+            return None
+        num, delta = getattr(event, "num", 0), getattr(event, "delta", 0)
+        if num == 4:
+            px = -40
+        elif num == 5:
+            px = 40
+        elif str(event.type) in ("TouchpadScroll", "39"):
+            try:
+                _dx, dy = self.root.tk.splitlist(self.root.tk.call("tk::PreciseScrollDeltas", delta))
+                px = -int(float(dy))
+            except tk.TclError:
+                return None
+        elif sys.platform == "darwin":
+            px = -delta * 8
+        elif delta:  # Windows (and Tk 9 on X11): 120 per notch; a touchpad sends smaller steps
+            px = -round(delta * 40 / 120) or (-1 if delta > 0 else 1)
+        else:
+            return None
+        if px:
+            self.scroller.yview_scroll(px, "units")
+        return None
 
     # where the windows go -------------------------------------------------------------
 
@@ -575,12 +687,12 @@ class Bar:
 
     def _place_bar(self) -> None:
         """The full panel opens from the strip: its bottom right where the strip's is."""
-        self.root.update_idletasks()
-        w, h = max(WIDTH, self.root.winfo_reqwidth()), self.root.winfo_reqheight()
+        w, h = W, self._target_height()
         right, bottom = self._pill_corner()
         x, y = self._clamp(right - w, bottom - h, w, h)
+        self._want = (x, y, h)
         self._placing = True
-        self.root.geometry(f"+{x}+{y}")
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
         self._placing = False
 
     def _pill_corner(self) -> tuple[int, int]:
@@ -596,8 +708,9 @@ class Bar:
         self.tied = False
         self._pc_rect: tuple[int, int, int, int] | None = None
         self._placing = False
-        self.root.bind("<Configure>", self._moved)
+        self.root.bind_class(ui.own_tag_name(self.root), "<Configure>", self._moved, add="+")
         self.root.withdraw()
+        self._gear_total()  # measured once now, while the window is hidden
         self._tie()
         if self.prefs.get("collapsed", True):
             self.collapse()
@@ -639,7 +752,7 @@ class Bar:
 
     def _keep_on_screen(self) -> None:
         """The panel grows (a job, a view): move it up rather than past the bottom of the screen."""
-        if self.collapsed or not self.root.winfo_viewable():
+        if getattr(self, "collapsed", True) or not self.root.winfo_viewable():
             return
         sh = self.root.winfo_screenheight()
         bottom = self.root.winfo_y() + self.root.winfo_height()
@@ -650,7 +763,12 @@ class Bar:
             self._placing = False
 
     def _moved(self, event) -> None:
-        """The panel may be dragged by its header while open; it opens from the strip again next time."""
+        """The panel may be dragged by its header while open; it opens from the strip again next time.
+        Once the window has the geometry last asked for, its real place is used again."""
+        if event.widget is self.root and self._want is not None:
+            x, y, h = self._want
+            if event.height == h and (self.root.winfo_x(), self.root.winfo_y()) == (x, y):
+                self._want = None
 
     def _unmapped(self, event) -> None:
         """Minimizing the panel folds it back to the strip (not when PhotoCraft hides it)."""
@@ -762,16 +880,21 @@ class Bar:
             return
         self._last_view = view
         self.model_box.close()
+        entering = not self.view
         self.view = "settings"
+        if entering:
+            self.gear.load()  # the saved settings, once per visit (switching sections keeps edits)
         self.main.pack_forget()
         self.gear.pack(fill="x", padx=PAD, before=self.bottom_gap)
         self.head_tools.pack_forget()
         self.head_view.pack(side="left", padx=(PAD, 0), fill="y")
+        self.gear_bar.pack(fill="x", before=self.scroller)
         self.gear_button.set_active(True)
         self.gear.show_section(section)
         self.refresher.wake.set()
         self._layout_footer()
         self.scroller.yview_moveto(0)
+        self._resize()
 
     _last_view = ""
 
@@ -783,6 +906,7 @@ class Bar:
             self.gear.pack_forget()
             self.main.pack(fill="x", padx=PAD, before=self.bottom_gap)
             self.head_view.pack_forget()
+            self.gear_bar.pack_forget()
             self.head_tools.pack(side="left", padx=(PAD, 0), fill="y")
             self.gear_button.set_active(False)
         if key != self.tab.get():
@@ -797,6 +921,7 @@ class Bar:
         self._update_context()
         self._layout_footer()
         self.scroller.yview_moveto(0)
+        self._resize()
 
     def _layout_main(self) -> None:
         """Pack the tool view's parts for the current mode (12 px apart)."""
@@ -815,12 +940,16 @@ class Bar:
             parts.append(self.setup)
         if self._shown.get("job"):
             parts.append(self.job)
-        if parts == self._shown.get("parts"):
+        old = self._shown.get("parts") or []
+        if parts == old:
             return
         self._shown["parts"] = parts
-        for w in self.main.pack_slaves():
+        prefix = 0  # the parts that stay where they are
+        while prefix < min(len(old), len(parts)) and old[prefix] is parts[prefix]:
+            prefix += 1
+        for w in old[prefix:]:
             w.pack_forget()
-        for w in parts:
+        for w in parts[prefix:]:
             w.pack(fill="x", pady=(12, 0), anchor="w")
         for card in (self.setup, self.job):
             card.lift_corners()
@@ -847,10 +976,11 @@ class Bar:
             self.footer.pack_forget()
         else:
             if not self.footer.winfo_manager():
-                self.footer.pack(fill="x")
+                self.footer.pack(side="bottom", fill="x", before=self.scroller)
             for i, b in enumerate(buttons):
                 b.pack(side="left", padx=(8 if i else 0, 0))
-        self._fit_height()
+        if not self.view:
+            self._inner_changed()
 
     def pick_variations(self, n: int) -> None:
         self.variations.set(n)
@@ -1128,7 +1258,9 @@ class Bar:
             self.status.configure(text=ui.ellipsize(status, self.small, 200))
             self.status_dot.configure(image=ui.dot(STATUS_COLOR.get(status, DIM), BG))
         self._update_setup(facts)
-        if self.view:
+        if facts.get("rows") is not self._shown.get("rows") or self.view:
+            # new facts (a look every few seconds): the models list follows, shown or not
+            self._shown["rows"] = facts.get("rows")
             self.gear.update_view(facts)
 
         st = self.service.state.snapshot()

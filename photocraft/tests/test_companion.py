@@ -626,6 +626,32 @@ class ModelInfoTests(unittest.TestCase):
         self.assertEqual(model_detail(patch, users), "Needed by the SDXL models · 1.2 GB")
 
 
+class FactsCacheTests(unittest.TestCase):
+    def test_models_show_from_the_last_run_until_the_first_look(self):
+        try:
+            from openfill_photocraft.bar import Refresher
+        except ImportError:
+            self.skipTest("no tkinter")
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "bar-models.json"
+            first = Refresher.__new__(Refresher)  # no lookup thread: only the cache
+            first.cache, first._saved = cache, ""
+            rows = [
+                {"id": "lama-big", "name": "LaMa", "installed": True, "runnable": True, "statusText": "Installed"},
+                {"id": "x", "name": "X", "installed": False, "runnable": True, "statusText": "Downloading 42%"},
+            ]
+            facts = {"comfy_ok": True, "models": {"remove": [("lama-big", "LaMa")]}, "rows": rows, "hardware": "h"}
+            first._save_cache(facts)
+            again = Refresher.__new__(Refresher)
+            again.cache = cache
+            loaded = again._load_cache()
+            self.assertTrue(loaded["cached"])
+            self.assertEqual(loaded["models"]["remove"], [("lama-big", "LaMa")])
+            self.assertEqual([r["statusText"] for r in loaded["rows"]], ["Installed", ""])  # no stale download
+            cache.write_text("{not json")
+            self.assertEqual(again._load_cache(), {})
+
+
 class LookTests(unittest.TestCase):
     """The panel's drawing helpers (no window needed) and its text inputs (with a display)."""
 

@@ -55,8 +55,9 @@ class GearView(tk.Frame):
         super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
         self.bar = bar
         self.section = "models"
-        self.tabs = ui.Seg(self, SECTIONS, self.show_section, CW, 13)
-        self.tabs.pack(anchor="w", pady=(12, 0))
+        # the section control stays under the header; only the section below it scrolls
+        self.tabs = ui.Seg(bar.gear_bar, SECTIONS, self.show_section, CW, 13)
+        self.tabs.pack(anchor="w", padx=16, pady=(12, 0))
         self.models = ModelsView(bar, self)
         self.engine = EngineView(bar, self)
         self.generation = GenerationView(bar, self)
@@ -72,15 +73,13 @@ class GearView(tk.Frame):
                 view.pack(fill="x", anchor="w")
             else:
                 view.pack_forget()
-        if section != "models":
-            self.load()
-        else:
-            self.models.update_view(self.bar.refresher.get())
+        if section == "models":
+            self.models.update_view(self.bar.refresher.get())  # built already: this only updates it
         self.bar._layout_footer()
 
     def update_view(self, facts: dict[str, Any]) -> None:
-        if self.section == "models":
-            self.models.update_view(facts)
+        """Keep the models list current, shown or not, so opening it shows it at once."""
+        self.models.update_view(facts)
 
     def say(self, text: str, color: str = OK) -> None:
         {"models": self.models, "engine": self.engine, "generation": self.generation}[self.section].say(text, color)
@@ -176,20 +175,18 @@ class ModelsView(tk.Frame):
         installed = [r for r in rows if r["installed"]]
         installed.sort(key=lambda r: (not r["runnable"], not r["active"], r["name"].lower()))
         available = sorted((r for r in rows if not r["installed"]), key=lambda r: r["name"].lower())
-        shown = tuple(
-            (
-                r["id"],
-                r["installed"],
-                r["partial"],
-                self._mode(r),
-                r.get("missing_models") != [],
-                bool(r.get("missing_nodes")),
-            )
-            for r in installed + available
-        )
-        if shown != self._shown:
-            self._shown = shown
+        order = (tuple(r["id"] for r in installed), tuple(r["id"] for r in available))
+        if order != self._shown:  # which models are where: lay both lists out again
+            self._shown = order
             self._build(installed, available)
+        else:  # the same rows: rebuild only a row whose buttons change (a download starts, ...)
+            for box, rows in ((self.installed, installed), (self.available, available)):
+                for i, row in enumerate(rows):
+                    if self._rows.get(row["id"], {}).get("key") != self._row_key(row):
+                        old = self._rows[row["id"]]["frame"]
+                        self._row(box.inner, row, first=i == 0, before=old)
+                        old.destroy()
+                box.lift_corners()
         current = facts.get("current") or {}
         for row in installed + available:
             parts = self._rows.get(row["id"])
@@ -214,6 +211,22 @@ class ModelsView(tk.Frame):
             return "working"
         return "idle"
 
+    def _row_key(self, row: dict[str, Any]) -> tuple:
+        """What a row's widgets depend on (not the percent, which changes in place)."""
+        status = row.get("statusText", "")
+        mode = self._mode(row)
+        return (
+            row["name"],
+            row.get("size"),
+            row["installed"],
+            row["partial"],
+            mode,
+            status if mode == "working" else status.startswith("Downloading"),
+            bool(row.get("missing_models")),
+            bool(row.get("missing_nodes")),
+            row.get("neededBy", ""),
+        )
+
     def _build(self, installed: list[dict[str, Any]], available: list[dict[str, Any]]) -> None:
         for box in (self.installed, self.available):
             for child in box.inner.winfo_children():
@@ -230,53 +243,64 @@ class ModelsView(tk.Frame):
             title.pack(anchor="w", pady=(12, 0), before=self.key_box)
             box.pack(fill="x", pady=(6, 0), before=self.key_box)
             for i, row in enumerate(rows):
-                if i:
-                    ui.divider(box.inner).pack(fill="x")
-                self._row(box.inner, row)
+                self._row(box.inner, row, first=i == 0)
             box.lift_corners()
-        self.bar._fit_height()
 
-    def _row(self, parent: tk.Misc, row: dict[str, Any]) -> None:
+    def _row(self, parent: tk.Misc, row: dict[str, Any], first: bool, before: tk.Misc | None = None) -> None:
+        """One model: its name and what it does, and its button(s) on the right. Sizes are
+        worked out from the buttons' known widths, so building a row lays nothing out."""
         from .modelinfo import model_detail
 
         f = ui.fonts(self)
         line = ui.frame(parent)
-        line.pack(fill="x")
+        line.pack(fill="x", **({"before": before} if before is not None else {}))
+        if not first:
+            ui.divider(line).pack(fill="x")
         body = ui.frame(line)
         body.pack(fill="x", padx=12, pady=10)
         top = ui.frame(body)
         top.pack(fill="x")
         right = ui.frame(top)
         right.pack(side="right")
-        parts: dict[str, Any] = {}
+        parts: dict[str, Any] = {"frame": line, "key": self._row_key(row)}
         mode = self._mode(row)
         status = row.get("statusText", "")
         detail = model_detail(row, row.get("neededBy", ""))
+        width = 0
+
+        def add(widget, w: int, padx=(0, 0)) -> None:
+            nonlocal width
+            widget.pack(side="left", padx=padx)
+            width += w + sum(padx)
+
         if row["installed"]:
             if row.get("missing_models"):
                 detail += " · Needs one more download"
-                ui.Button(right, "Download", lambda i=row["id"]: self._get(i)).pack(side="left")
+                b = ui.Button(right, "Download", lambda i=row["id"]: self._get(i))
+                add(b, b.w)
             elif row.get("missing_nodes"):
                 detail += " · Needs extra parts"
-                ui.Button(right, "Install", lambda i=row["id"]: self._nodes(i)).pack(side="left")
+                b = ui.Button(right, "Install", lambda i=row["id"]: self._nodes(i))
+                add(b, b.w)
             elif mode == "working":
-                ui.small(right, status, wrap=0).pack(side="left")
+                t = ui.small(right, status, wrap=0)
+                add(t, f.small.measure(status))
             elif row["runnable"]:
-                ui.IconButton(right, "trash", lambda r=row: self._uninstall(r)).pack(side="left")
+                add(ui.IconButton(right, "trash", lambda r=row: self._uninstall(r)), 28)
         elif mode == "busy":
             parts["percent"] = ui.small(right, "", wrap=0)
-            parts["percent"].pack(side="left", padx=(0, 4))
-            ui.IconButton(right, "close", lambda i=row["id"]: self._stop(i)).pack(side="left")
+            add(parts["percent"], f.small.measure("Waiting"), (0, 4))
+            add(ui.IconButton(right, "close", lambda i=row["id"]: self._stop(i)), 28)
             if status.startswith("Downloading"):
                 parts["bar"] = ui.Progress(body, CW - 2 - 24, BG)
                 parts["bar"].pack(fill="x", pady=(8, 0))
         elif mode == "working":
-            ui.small(right, status, wrap=0).pack(side="left")
+            t = ui.small(right, status, wrap=0)
+            add(t, f.small.measure(status))
         else:
-            label = "Resume" if row["partial"] else "Download"
-            ui.Button(right, label, lambda i=row["id"]: self._get(i)).pack(side="left")
-        right.update_idletasks()
-        wrap = CW - 2 - 24 - 12 - right.winfo_reqwidth()
+            b = ui.Button(right, "Resume" if row["partial"] else "Download", lambda i=row["id"]: self._get(i))
+            add(b, b.w)
+        wrap = CW - 2 - 24 - 12 - width
         names = ui.frame(top)
         names.pack(side="left", fill="x")
         ui.text(names, row["name"], f.body, wrap=wrap).pack(anchor="w")

@@ -1320,10 +1320,25 @@ def _motif_hints(window: tk.Wm) -> bool:
         finally:
             x11.XCloseDisplay(dpy)
 
-    window.bind("<Map>", lambda e: apply() if e.widget is window else None, add="+")
+    own_tag(window).bind_class(own_tag_name(window), "<Map>", lambda _e: apply(), add="+")
     window.update_idletasks()
     apply()
     return True
+
+
+def own_tag_name(window: tk.Misc) -> str:
+    return f"OpenFillTop{id(window)}"
+
+
+def own_tag(window: tk.Misc) -> tk.Misc:
+    """Give a toplevel a bind tag of its own (first in its bindtags), so a <Map> or <Configure>
+    binding fires for the window itself only: a binding on the toplevel's name would run for
+    every widget inside it (each is tagged with its toplevel), dozens of times per view switch."""
+    tag = own_tag_name(window)
+    tags = window.bindtags()
+    if tag not in tags:
+        window.bindtags((tag, *tags))
+    return window
 
 
 def drag_handle(widgets: Sequence[tk.Misc], window: tk.Wm, on_moved: Callable[[], Any] | None = None) -> None:
