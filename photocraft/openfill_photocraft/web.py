@@ -72,16 +72,36 @@ class Api:
         status = app.task_status()
         current = status.get("current") or {}
         pending = [t.get("model_id") for t in app.server.pending_tasks()]
+        from .modelinfo import hardware_line, needed_by
+
         for row in rows:
             row["statusText"] = cat.row_status(row, current, pending)
+            if not row["runnable"]:
+                row["neededBy"] = needed_by(list(app.catalog), row["id"])
         hw = None
         try:
             from openfill import hardware
 
-            hw = hardware.detect(app.models_root, app.server.url()).summary()
+            hw = hardware_line(hardware.detect(app.models_root, app.server.url()))
         except Exception:  # noqa: BLE001
             hw = None
         return {"rows": rows, "current": current, "pending": pending, "hardware": hw}
+
+    def thumbnail(self, index: int) -> bytes:
+        """A small JPEG of variation ``index`` of the last job (for the page's picker)."""
+        layers = self.service.layers
+        if not 0 <= index < len(layers):
+            return b""
+        import io
+
+        from PIL import Image
+
+        layer = layers[index]
+        im = Image.frombytes("RGBA", (layer.origin.width, layer.origin.height), layer.rgba).convert("RGB")
+        im.thumbnail((320, 240))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=85)
+        return buf.getvalue()
 
     def settings(self) -> dict[str, Any]:
         s = self.service.app.settings
@@ -115,7 +135,9 @@ class Api:
             entry = app.set_active(str(body["id"]))
             return {"active": entry.id}
         if path == "/api/models/remove":
-            return {"task": app.remove_model(str(body["id"]))}
+            return {"task": svc.uninstall(str(body["id"]))}
+        if path == "/api/models/stop":
+            return {"stopped": svc.stop_download(str(body["id"]))}
         if path == "/api/models/nodes":
             return {"task": app.queue_node_install(str(body["id"]))}
         if path == "/api/models/token":
@@ -193,6 +215,12 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
                     self._json(200, api.models())
                 elif path == "/api/settings":
                     self._json(200, api.settings())
+                elif path == "/api/thumb":
+                    data = api.thumbnail(int((parse_qs(urlparse(self.path).query).get("i") or ["0"])[0]))
+                    if data:
+                        self._send(200, data, "image/jpeg")
+                    else:
+                        self._send(204, b"", "text/plain")
                 elif path == "/api/preview":
                     st = api.service.state
                     with st.lock:

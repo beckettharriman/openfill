@@ -5,238 +5,360 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenFill for PhotoCraft</title>
 <style>
-:root{--bg:#1e1f22;--panel:#2a2b2f;--line:#3a3b40;--text:#e8e8ea;--dim:#9a9ba2;--accent:#4a8ef0;--warn:#e8a33d;--bad:#e5534b;--ok:#3fb950}
+:root{--bg:#1e1f22;--panel:#2b2d31;--line:#3a3c42;--seg:#45474e;--text:#e8e8ea;--dim:#9a9ba2;--accent:#4a8ef0;--bad:#e5534b;--ok:#3fb950;--warn:#e8a33d;--font:'Segoe UI','Noto Sans',sans-serif}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
-header{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
-header h1{font-size:15px;margin:0;font-weight:600}
-header .doc{margin-left:auto;color:var(--dim);font-size:12px;text-align:right}
-nav{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--line)}
-nav button{background:none;border:0;color:var(--dim);padding:8px 12px;font:inherit;cursor:pointer;border-bottom:2px solid transparent}
-nav button.on{color:var(--text);border-bottom-color:var(--accent)}
-main{padding:14px;max-width:560px}
-section{display:none}section.on{display:block}
-label{display:block;color:var(--dim);font-size:12px;margin:10px 0 4px}
-textarea,input,select{width:100%;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit}
-textarea{min-height:70px;resize:vertical}
-.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}
-.seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-bottom:6px}
-.seg button{flex:1;background:var(--panel);border:0;color:var(--dim);padding:8px;font:inherit;cursor:pointer}
-.seg button.on{background:#3b3d44;color:var(--text)}
-button.primary,button.btn{background:var(--accent);border:0;color:#fff;border-radius:6px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}
-button.btn{background:#3b3d44;font-weight:500}
-button:disabled{opacity:.45;cursor:default}
-.actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
-.hint{color:var(--dim);font-size:12px;margin-top:6px}
-.warn{color:var(--warn);font-size:13px;margin-top:8px}
-details{margin-top:10px}summary{color:var(--dim);cursor:pointer}
-#job{margin-top:16px;border:1px solid var(--line);border-radius:8px;padding:12px;display:none;background:var(--panel)}
-#job .t{font-weight:600}#job .s{color:var(--dim);font-size:12px;margin:4px 0}
-.bar{height:6px;background:#3b3d44;border-radius:3px;overflow:hidden;margin:8px 0}.bar i{display:block;height:100%;background:var(--accent);width:0}
-#preview{max-width:100%;border-radius:6px;margin-top:8px;display:none}
-#jobmsg{margin-top:8px;font-size:13px}#jobmsg.bad{color:var(--bad)}#jobmsg.ok{color:var(--ok)}
-#vars{display:none;margin-top:10px}#vars .row button{flex:0 0 auto}
-table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:7px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-th{color:var(--dim);font-weight:500}td .dim{color:var(--dim);font-size:12px}
-.pill{display:inline-block;white-space:nowrap;padding:1px 7px;border-radius:9px;background:#3b3d44;font-size:11px;color:var(--dim)}
-.pill.on{background:#1f6f3a;color:#fff}
-.notice{background:#3a2f1c;border:1px solid #6b5326;border-radius:6px;padding:8px;margin-top:10px;font-size:13px}
+html,body{margin:0;background:var(--bg);color:var(--text);font:400 13px/18px var(--font);scrollbar-width:none}
+body::-webkit-scrollbar,*::-webkit-scrollbar{display:none}
+*{scrollbar-width:none}
+#app{max-width:480px;min-height:100vh;display:flex;flex-direction:column}
+[hidden]{display:none!important}
+svg{display:block;flex:none}
+button{font:inherit;color:inherit}
+/* header */
+header{height:44px;flex:none;display:flex;align-items:center;gap:2px;padding:0 10px 0 16px;border-bottom:1px solid var(--line)}
+header .left{flex:1;min-width:0;display:flex;align-items:center}
+header .name{margin-left:8px;font-weight:600;white-space:nowrap}
+header .status{margin-left:12px;display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;font-size:12px;color:var(--dim)}
+header .status span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header .title{font-weight:600}
+.dot{width:6px;height:6px;flex:none;border-radius:3px;background:var(--dim)}
+.icon-btn{width:28px;height:28px;flex:none;padding:0;border:0;border-radius:4px;background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--dim)}
+.icon-btn:hover,.icon-btn.on{background:var(--panel);color:var(--text)}
+/* content */
+.content{padding:12px 16px 0;display:flex;flex-direction:column;gap:12px}
+.stack{display:flex;flex-direction:column;gap:8px}
+.small{font-size:12px;line-height:16px;color:var(--dim)}
+.label{font-size:11px;line-height:14px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;color:var(--dim)}
+.context{display:flex;gap:6px;align-items:flex-start;font-size:12px;line-height:16px;color:var(--dim)}
+.context svg{margin-top:1px}
+.seg{height:32px;padding:2px;gap:2px;background:var(--panel);border-radius:4px;display:flex;flex:1;min-width:0}
+.seg button{flex:1;min-width:0;height:28px;padding:0 8px;border:0;border-radius:3px;background:transparent;color:var(--dim);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.seg.s12 button{font-size:12px;padding:0 4px}
+.seg.fit button{flex:1 1 auto}
+.seg button.on{background:var(--seg);color:var(--text);font-weight:600}
+textarea,input[type=text],input[type=number],input[type=password],.select select{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:4px;color:var(--text);font:400 13px var(--font);outline:none}
+textarea{display:block;height:76px;resize:none;overflow:hidden;padding:8px 10px;line-height:18px}
+input[type=text],input[type=number],input[type=password]{height:32px;padding:0 10px}
+input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+input[type=number]{-moz-appearance:textfield}
+textarea:focus,input:focus,.select select:focus{border-color:var(--accent)}
+::placeholder{color:var(--dim)}
+.select{position:relative;flex:1;min-width:0}
+.select select{height:32px;appearance:none;-webkit-appearance:none;padding:0 28px 0 10px;text-overflow:ellipsis;cursor:pointer}
+.select select option{background:var(--panel);color:var(--text)}
+.select svg{position:absolute;right:8px;top:8px;pointer-events:none}
+.row{display:flex;align-items:center;gap:12px;min-height:32px}
+.row>label{width:84px;flex:none;font-size:12px;line-height:16px;color:var(--dim)}
+.under{text-align:center;margin:-4px 0 0 96px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.btn{height:32px;padding:0 12px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--text);white-space:nowrap;cursor:pointer;flex:none}
+.btn:hover{background:var(--seg)}
+.btn.accent{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.btn.flex{flex:1;min-width:0}
+.btn:disabled{background:transparent;color:var(--dim);cursor:default}
+.btn.accent:disabled{background:var(--line);border-color:var(--line)}
+.primary{height:36px;flex:1;min-width:0;padding:0 12px;border:0;border-radius:4px;background:var(--accent);color:#fff;font-weight:600;white-space:nowrap;cursor:pointer}
+.primary:hover{background:#5d9cf5}
+.primary:disabled{background:var(--line);color:var(--dim);cursor:default}
+.actions{margin-top:16px;border-top:1px solid var(--line);padding:12px 16px 16px;display:flex;gap:8px}
+.actions .btn{height:36px;flex:1;min-width:0}
+.check{display:flex;align-items:center;gap:10px;height:32px;cursor:pointer}
+.check input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.check .box{width:16px;height:16px;flex:none;border-radius:3px;background:var(--panel);border:1px solid var(--line);display:flex;align-items:center;justify-content:center}
+.check input:checked+.box{background:var(--accent);border-color:var(--accent)}
+.check input:not(:checked)+.box svg{display:none}
+details summary{cursor:pointer;color:var(--dim);font-size:12px;line-height:16px}
+details .stack{margin-top:8px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+/* cards */
+.card{padding:12px;background:var(--panel);border-radius:4px;display:flex;flex-direction:column;gap:8px}
+.card .head{display:flex;align-items:center;gap:8px}
+.card .head .t{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .head .r{font-size:12px;color:var(--dim);white-space:nowrap}
+.bar{height:4px;border-radius:2px;background:var(--line);overflow:hidden}.bar i{display:block;height:4px;width:0;background:var(--accent)}
+.bar.done i{background:var(--ok)}
+#jtext{overflow-wrap:anywhere}
+#jtext.run{font-size:12px;line-height:16px;color:var(--dim)}#jtext.ok{color:var(--ok)}#jtext.bad{color:var(--bad)}#jtext.dimmed{color:var(--dim)}
+#preview{display:block;max-width:100%;max-height:230px;border-radius:4px;margin:4px auto 0}
+.thumbs{display:flex;gap:8px}
+.thumbs button{flex:1;min-width:0;padding:0;border:0;background:transparent;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:12px;color:var(--dim);cursor:pointer}
+.thumbs button span{display:block;width:100%;padding:2px;border-radius:4px;border:2px solid transparent}
+.thumbs button.on{color:var(--text)}.thumbs button.on span{border-color:var(--accent)}
+.thumbs img{display:block;width:100%;height:72px;object-fit:cover;border-radius:2px;background:var(--line)}
+.list{border:1px solid var(--line);border-radius:4px;display:flex;flex-direction:column}
+.mrow{padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.mrow+.mrow{border-top:1px solid var(--line)}
+.mrow .top{display:flex;align-items:center;gap:12px}
+.mrow .names{flex:1;min-width:0;display:flex;flex-direction:column}
+.mrow .pct{font-size:12px;color:var(--dim);white-space:nowrap}
+.divider{height:1px;background:var(--line)}
+.note{font-size:12px;line-height:16px}
+.note.bad{color:var(--bad)}.note.ok{color:var(--ok)}.note.dim{color:var(--dim)}
+.spacer{flex:1}
+.foot{padding:0 16px 16px}
 </style>
 </head>
 <body>
-<header><h1>OpenFill</h1><span class="pill" id="backend">...</span><div class="doc" id="doc">connecting to PhotoCraft...</div></header>
-<nav id="tabs">
-  <button data-tab="fill" class="on">Generative Fill</button>
-  <button data-tab="expand">Expand</button>
-  <button data-tab="t2i">Text to Image</button>
-  <button data-tab="models">Models</button>
-  <button data-tab="settings">Settings</button>
-</nav>
-<main>
-<div id="setup" class="notice" style="display:none"></div>
+<div id="app">
+<header>
+  <div class="left" id="head-tools">
+    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 18 18"><rect width="18" height="18" rx="3.6" fill="#4a8ef0"/><polygon points="9,2.52 10.44,7.56 15.48,9 10.44,10.44 9,15.48 7.56,10.44 2.52,9 7.56,7.56" fill="#fff"/><polygon points="13.68,3.24 14.31,4.05 15.84,4.68 14.31,5.31 13.68,6.12 13.05,5.31 11.52,4.68 13.05,4.05" fill="#fff"/></svg>
+    <span class="name">OpenFill</span>
+    <span class="status"><span class="dot" id="dot"></span><span id="status">Checking...</span></span>
+  </div>
+  <div class="left" id="head-view" hidden>
+    <button class="icon-btn" id="back" aria-label="Back to the tools" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg></button>
+    <span class="title">Models and settings</span>
+  </div>
+  <button class="icon-btn" id="gear" aria-label="Models and settings" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+</header>
 
-<section id="fill" class="on">
-  <div class="seg"><button id="m-fill" class="on">Fill with a prompt</button><button id="m-remove">Remove object</button></div>
-  <div id="fill-prompt">
-    <textarea id="prompt" placeholder="Describe what should appear in the selection"></textarea>
-    <div class="hint">Enter generates, Shift+Enter adds a line.</div>
+<div id="tools">
+  <div class="content">
+    <div class="seg" id="modes" role="group" aria-label="Mode"><button data-mode="fill" class="on">Fill</button><button data-mode="remove">Remove</button><button data-mode="expand">Expand</button><button data-mode="txt2img">Create</button></div>
+    <div class="context" id="context"><span id="ctx-icon"></span><span id="ctx-text">Connecting to PhotoCraft...</span></div>
+    <div class="small" id="remove-text" hidden>Erases what you selected and fills in the background around it.</div>
+    <div class="stack" id="expand-box" hidden>
+      <div class="seg s12 fit" id="presets" role="group" aria-label="Size"></div>
+      <div class="grid4">
+        <div class="field"><span class="label">Left</span><input id="e-left" type="number" value="0"></div>
+        <div class="field"><span class="label">Top</span><input id="e-top" type="number" value="0"></div>
+        <div class="field"><span class="label">Right</span><input id="e-right" type="number" value="0"></div>
+        <div class="field"><span class="label">Bottom</span><input id="e-bottom" type="number" value="0"></div>
+      </div>
+      <div class="small" id="exp-size" style="text-align:center"></div>
+    </div>
+    <textarea id="prompt" aria-label="Prompt" rows="3"></textarea>
+    <div class="stack" id="create-box" hidden>
+      <div class="row"><label>Size</label><div class="seg s12" id="sizes"><button data-w="1024" data-h="1024" class="on">Square</button><button data-w="1216" data-h="832">Landscape</button><button data-w="832" data-h="1216">Portrait</button></div></div>
+      <div class="small under" id="size-px">1024 x 1024 px</div>
+      <div class="row"><label>Result as</label><div class="seg s12" id="targets"><button data-target="image" class="on">New image</button><button data-target="layer">Layer in this image</button></div></div>
+    </div>
+    <div class="stack">
+      <div class="row"><label>Variations</label><div class="seg s12" id="vars"><button class="on">1</button><button>2</button><button>3</button><button>4</button><button>5</button></div></div>
+      <div class="row"><label>Model</label><div class="select"><select id="model" aria-label="Model"></select><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9a9ba2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></div>
+    </div>
+    <details id="advanced"><summary>More options</summary><div class="stack">
+      <div class="field"><span class="label">Avoid</span><input id="neg" type="text" placeholder="What should not appear"></div>
+      <div class="field"><span class="label">Change amount <span id="str-v">1.00</span></span><input id="strength" type="range" min="0.3" max="1" step="0.05" value="1"></div>
+      <div class="field"><span class="label">Seed (empty = random)</span><input id="seed" type="number"></div>
+    </div></details>
+    <div class="card" id="setup" hidden></div>
+    <div class="card" id="job" hidden>
+      <div class="head"><span class="t" id="jtitle"></span><span class="r" id="jmodel"></span></div>
+      <div class="bar" id="jbarbox"><i id="jbar"></i></div>
+      <div id="jtext"></div>
+      <img id="preview" alt="Live preview" hidden>
+      <div class="stack" id="pick" hidden style="padding-top:4px"><div class="label">Pick a variation</div><div class="thumbs" id="thumbs"></div></div>
+    </div>
+    <div id="notices" class="stack"></div>
   </div>
-  <div id="remove-text" class="hint" style="display:none">Erases the selection and continues the background. No prompt needed.</div>
-  <div class="row">
-    <div><label>Model</label><select id="model-fill"></select></div>
-    <div style="flex:0 0 110px"><label>Variations</label><input id="var-fill" type="number" min="1" max="8" value="1"></div>
+  <div class="actions" id="tool-actions">
+    <button class="primary" id="go">Generate</button>
+    <button class="btn" id="cancel" hidden>Cancel</button>
+    <button class="btn" data-keep="none" hidden>Discard</button><button class="btn" data-keep="all" hidden>Keep all</button><button class="primary" data-keep="selected" hidden>Keep</button>
   </div>
-  <div id="fill-warn" class="warn"></div>
-  <details><summary>Advanced</summary>
-    <label>Avoid</label><input id="neg" placeholder="What should not appear">
-    <label>Change amount <span id="str-v">1.00</span></label><input id="strength" type="range" min="0.3" max="1" step="0.05" value="1">
-    <label>Seed (empty = random)</label><input id="seed-fill" type="number">
-  </details>
-  <div class="actions"><button class="primary" id="go-fill">Generate</button></div>
-</section>
-
-<section id="expand">
-  <div class="hint" id="exp-size"></div>
-  <label>Quick sizes</label>
-  <div class="row" id="presets"></div>
-  <div class="row">
-    <div><label>Left</label><input id="e-left" type="number" value="0"></div>
-    <div><label>Top</label><input id="e-top" type="number" value="0"></div>
-    <div><label>Right</label><input id="e-right" type="number" value="0"></div>
-    <div><label>Bottom</label><input id="e-bottom" type="number" value="0"></div>
-  </div>
-  <div class="hint">Pixels added on each side (negative crops). Over 25% per side gets weaker; OpenFill expands in rounds.</div>
-  <label>Prompt (optional)</label><input id="e-prompt" placeholder="Leave empty to continue the scene">
-  <div class="row">
-    <div><label>Model</label><select id="model-expand"></select></div>
-    <div style="flex:0 0 110px"><label>Variations</label><input id="var-expand" type="number" min="1" max="8" value="1"></div>
-  </div>
-  <div class="actions"><button class="primary" id="go-expand">Expand</button></div>
-</section>
-
-<section id="t2i">
-  <textarea id="t-prompt" placeholder="Describe the image"></textarea>
-  <div class="row">
-    <div><label>Width</label><input id="t-w" type="number" value="1024"></div>
-    <div><label>Height</label><input id="t-h" type="number" value="768"></div>
-    <div><label>Result as</label><select id="t-target"><option value="image">New image</option><option value="layer">New layer</option></select></div>
-  </div>
-  <div class="row">
-    <div><label>Model</label><select id="model-t2i"></select></div>
-    <div style="flex:0 0 110px"><label>Variations</label><input id="var-t2i" type="number" min="1" max="8" value="1"></div>
-  </div>
-  <div class="actions"><button class="primary" id="go-t2i">Generate</button></div>
-</section>
-
-<section id="models">
-  <div class="hint" id="hw"></div>
-  <table><thead><tr><th>Model</th><th>Size</th><th></th></tr></thead><tbody id="mrows"></tbody></table>
-  <details><summary>Hugging Face access key (for gated models such as FLUX)</summary>
-    <div class="row"><input id="token" type="password" placeholder="hf_..."><button class="btn" id="save-token" style="flex:0 0 auto">Save</button></div>
-  </details>
-</section>
-
-<section id="settings">
-  <label>ComfyUI folder (holds main.py and a venv, or the portable build)</label><input id="s-comfy_dir">
-  <div class="row">
-    <div><label>Start ComfyUI automatically</label><select id="s-autostart"><option value="true">Yes</option><option value="false">No</option></select></div>
-    <div><label>Stop after idle (minutes, 0 = never)</label><input id="s-idle_timeout_minutes" type="number"></div>
-  </div>
-  <div class="row">
-    <div><label>Steps</label><input id="s-steps" type="number"></div>
-    <div><label>Prompt strictness (CFG)</label><input id="s-cfg" type="number" step="0.5"></div>
-  </div>
-  <div class="row">
-    <div><label>Repaint margin (% of selection)</label><input id="s-grow_percent" type="number"></div>
-    <div><label>Edge softness (%)</label><input id="s-feather_percent" type="number"></div>
-  </div>
-  <label>Extra ComfyUI options</label><input id="s-extra_server_args" placeholder="for example --lowvram">
-  <div class="actions"><button class="btn" id="logs">Open log folder</button><button class="btn" id="check">Check backend</button><button class="btn" id="stop">Stop AI backend</button><button class="primary" id="save-settings">Save</button></div>
-  <div class="hint" id="check-out"></div>
-</section>
-
-<div id="job">
-  <div class="t" id="jtitle"></div><div class="s" id="jtext"></div>
-  <div class="bar"><i id="jbar"></i></div>
-  <img id="preview" alt="Live preview">
-  <div id="jobmsg"></div>
-  <div id="vars"><div class="hint">Variations: click one to see it in PhotoCraft.</div>
-    <div class="row" id="vbtns" style="margin-top:6px"></div>
-    <div class="actions"><button class="btn" data-keep="none">Discard</button><button class="btn" data-keep="all">Keep all</button><button class="primary" data-keep="selected">Keep selected</button></div>
-  </div>
-  <div class="actions"><button class="btn" id="cancel">Cancel</button></div>
 </div>
-<div id="notices"></div>
-</main>
+
+<div id="gearview" hidden>
+  <div class="content">
+    <div class="seg" id="sections" role="group" aria-label="Settings section"><button data-sec="models" class="on">Models</button><button data-sec="engine">Engine</button><button data-sec="generation">Generation</button></div>
+    <div class="stack" id="sec-models" style="gap:12px">
+      <div class="small" id="hw">Looking...</div>
+      <div class="note" id="mnote" hidden></div>
+      <div class="stack" style="gap:6px" id="inst-box"><div class="label">Installed</div><div class="list" id="installed"></div></div>
+      <div class="stack" style="gap:6px" id="avail-box"><div class="label">Available</div><div class="list" id="available"></div></div>
+      <div class="stack" style="gap:6px"><div class="label">Hugging Face key (for FLUX)</div><div style="display:flex;gap:8px"><input id="token" type="password" placeholder="hf_..." aria-label="Hugging Face key"><button class="btn" id="save-token">Save</button></div></div>
+      <div style="height:4px"></div>
+    </div>
+    <div class="stack" id="sec-engine" style="gap:12px" hidden>
+      <div class="field"><span class="label">ComfyUI folder</span><input id="s-comfy_dir" type="text" aria-label="ComfyUI folder"></div>
+      <label class="check"><input type="checkbox" id="s-autostart"><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span>Start the AI engine with PhotoCraft</span></label>
+      <div class="field"><span class="label">Stop after idle</span><div style="display:flex;gap:8px;align-items:center"><input id="s-idle_timeout_minutes" type="number" style="width:72px" aria-label="Stop after idle, minutes"><span class="small">minutes, 0 = never</span></div></div>
+      <div class="field"><span class="label">Extra ComfyUI options</span><input id="s-extra_server_args" type="text" placeholder="for example --lowvram" aria-label="Extra ComfyUI options"></div>
+      <div class="divider"></div>
+      <div class="stack"><div class="label">Engine</div><div style="display:flex;gap:8px"><button class="btn" id="check">Check</button><button class="btn" id="stop">Stop engine</button><button class="btn" id="logs">Logs</button></div><div class="note dim" id="check-out" hidden></div></div>
+    </div>
+    <div class="stack" id="sec-generation" style="gap:12px" hidden>
+      <div class="grid2"><div class="field"><span class="label">Steps</span><input id="s-steps" type="number"></div><div class="field"><span class="label">Prompt strictness (CFG)</span><input id="s-cfg" type="number" step="0.5"></div></div>
+      <div class="grid2"><div class="field"><span class="label">Repaint margin (%)</span><input id="s-grow_percent" type="number"></div><div class="field"><span class="label">Edge softness (%)</span><input id="s-feather_percent" type="number"></div></div>
+      <div class="small">Steps: more is slower and finer. Strictness: how closely the prompt is followed. Margin: how far past the selection the fill may repaint, as a share of its size.</div>
+      <div class="note" id="gen-out" hidden></div>
+    </div>
+  </div>
+  <div class="actions" id="save-bar" hidden><button class="primary" id="save-settings">Save</button></div>
+</div>
+
+<div class="spacer"></div>
+<div class="foot small">Browser view: the same tools when the panel cannot open a window. Expand uses pixel margins here instead of the drag editor.</div>
+</div>
 <script>
 const KEY = new URLSearchParams(location.search).get("key") || "";
 const H = {"Content-Type":"application/json","X-OpenFill-Key":KEY};
 const $ = id => document.getElementById(id);
 async function get(p){const r=await fetch(p,{headers:H});return r.json()}
 async function post(p,b){const r=await fetch(p,{method:"POST",headers:H,body:JSON.stringify(b||{})});const j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);return j}
-let removeMode=false, doc=null, models=[], lastSeq=-1, busy=false, lastPick=-1;
+const ICON={
+  selection:'<rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="4 3"/>',
+  image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
+  error:'<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  warn:'<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  info:'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  check:'<path d="M20 6L9 17l-5-5"/>',
+  download:'<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/>',
+  trash:'<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>',
+  close:'<path d="M18 6L6 18"/><path d="M6 6l12 12"/>'};
+function svg(name,color,size){size=size||16;return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="${(1.5*24/size).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round">${ICON[name]}</svg>`}
+const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+const short=n=>(n||"").split(" (")[0].trim()||n;
+const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0"};
+const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create"};
+const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
+const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
+let mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
 
-document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{
-  document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on",x===b));
-  document.querySelectorAll("section").forEach(s=>s.classList.toggle("on",s.id===b.dataset.tab));
-  if(b.dataset.tab==="models")loadModels(); if(b.dataset.tab==="settings")loadSettings();
-});
-$("m-fill").onclick=()=>setMode(false); $("m-remove").onclick=()=>setMode(true);
-function setMode(r){removeMode=r;$("m-fill").classList.toggle("on",!r);$("m-remove").classList.toggle("on",r);$("fill-prompt").style.display=r?"none":"";$("remove-text").style.display=r?"":"none";fillWarn()}
+function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
+$("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
+$("vars").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("vars"),b);variations=+b.textContent}};
+$("sizes").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("sizes"),b);size=[+b.dataset.w,+b.dataset.h];$("size-px").textContent=`${size[0]} x ${size[1]} px`}};
+$("targets").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("targets"),b);target=b.dataset.target}};
+$("sections").onclick=e=>{const b=e.target.closest("button");if(b)showSection(b.dataset.sec)};
+$("gear").onclick=()=>gear?showTools():showGear(section);
+$("back").onclick=()=>showTools();
+function setMode(m){mode=m;note=null;segPick($("modes"),$("modes").querySelector(`[data-mode="${m}"]`));
+  $("remove-text").hidden=m!=="remove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove";
+  $("advanced").hidden=m!=="fill";$("prompt").placeholder=PH[m]||"";$("go").textContent=GO[m];fillSelect();context();if(m==="expand")presets()}
+function showTools(){gear=false;$("tools").hidden=false;$("gearview").hidden=true;$("head-tools").hidden=false;$("head-view").hidden=true;$("gear").classList.remove("on")}
+function showGear(s){gear=true;$("tools").hidden=true;$("gearview").hidden=false;$("head-tools").hidden=true;$("head-view").hidden=false;$("gear").classList.add("on");showSection(s||"models")}
+function showSection(s){section=s;segPick($("sections"),$("sections").querySelector(`[data-sec="${s}"]`));
+  ["models","engine","generation"].forEach(n=>$("sec-"+n).hidden=n!==s);$("save-bar").hidden=s==="models";
+  if(s==="models")loadModels();else loadSettings()}
+
+$("prompt").onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();$("go").click()}};
 $("strength").oninput=()=>$("str-v").textContent=(+$("strength").value).toFixed(2);
-$("prompt").onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();$("go-fill").click()}};
-$("model-fill").onchange=fillWarn;
-function fillWarn(){const m=models.find(x=>x.id===($("model-fill").value==="active"?activeId:$("model-fill").value));
-  $("fill-warn").textContent=(!removeMode&&m&&/flux/i.test(m.id))?"FLUX paints everything you name: describe only what goes in the selection.":""}
-let activeId="";
-function seedOf(id){const v=$(id).value.trim();return v===""?-1:parseInt(v)}
-async function start(kind,body){try{await post("/api/"+kind,body);lastSeq=-1}catch(e){showMsg(e.message,true)}}
-$("go-fill").onclick=()=>start("fill",{prompt:removeMode?"":$("prompt").value,negative:$("neg").value,variations:+$("var-fill").value,strength:+$("strength").value,seed:seedOf("seed-fill"),model:$("model-fill").value,remove:removeMode});
-$("go-expand").onclick=()=>start("expand",{prompt:$("e-prompt").value,negative:"",left:+$("e-left").value,top:+$("e-top").value,right:+$("e-right").value,bottom:+$("e-bottom").value,variations:+$("var-expand").value,seed:-1,model:$("model-expand").value});
-$("go-t2i").onclick=()=>start("txt2img",{prompt:$("t-prompt").value,negative:"",width:+$("t-w").value,height:+$("t-h").value,variations:+$("var-t2i").value,seed:-1,model:$("model-t2i").value,target:$("t-target").value});
+$("model").onchange=async()=>{const v=$("model").value;
+  if(v==="__manage"){fillSelect();showGear("models");return}
+  if(mode==="remove"){removal=v;return}
+  if(v&&v!==activeId){try{await post("/api/models/activate",{id:v});activeId=v}catch(e){say(e.message,"bad")}}};
+function seedOf(){const v=$("seed").value.trim();return v===""?-1:parseInt(v)}
+function say(t,kind){note=t?{text:t,kind:kind||"bad",base:baseContext()[0]}:null;context()}
+async function start(kind,body){try{await post("/api/"+kind,body);lastSeq=-1;say("")}catch(e){say(e.message,"bad")}}
+$("go").onclick=()=>{if(busy)return;const prompt=$("prompt").value.trim(),model=$("model").value||"active";
+  if(mode==="fill"||mode==="remove"){if(!sel){say(NO_SEL,"bad");return}
+    const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:mode==="fill"?+$("strength").value:1,seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
+    if(mode==="remove"){b.removal=model;b.model="active";if(model==="lama"||model==="mat")b.variations=1}else b.model=model;
+    start("fill",b)}
+  else if(mode==="expand"){const m=["left","top","right","bottom"].map(k=>+$("e-"+k).value);if(!m.some(Boolean)){say("Enter the pixels to add on each side, or pick a ratio.","bad");return}
+    start("expand",{prompt,negative:"",left:m[0],top:m[1],right:m[2],bottom:m[3],variations,seed:-1,model})}
+  else{if(!prompt){say("Describe the image first.","bad");return}start("txt2img",{prompt,negative:"",width:size[0],height:size[1],variations,seed:-1,model,target})}};
 $("cancel").onclick=()=>post("/api/cancel");
 document.querySelectorAll("[data-keep]").forEach(b=>b.onclick=()=>post("/api/keep",{which:b.dataset.keep}));
 
-function presets(){const p=$("presets");p.innerHTML="";if(!doc)return;const W=doc.width,H0=doc.height;
-  const add=(label,fn)=>{const b=document.createElement("button");b.className="btn";b.textContent=label;b.onclick=()=>{const m=fn();["left","top","right","bottom"].forEach((k,i)=>$("e-"+k).value=m[i])};p.appendChild(b)};
+function presets(){const p=$("presets");if(!doc){p.innerHTML="";return}if(p.dataset.for===doc.name+doc.width+"x"+doc.height)return;p.dataset.for=doc.name+doc.width+"x"+doc.height;p.innerHTML="";const W=doc.width,H0=doc.height;
+  const add=(label,fn)=>{const b=document.createElement("button");b.textContent=label;b.onclick=()=>{segPick(p,b);fn().forEach((v,i)=>$("e-"+["left","top","right","bottom"][i]).value=v);expSize()};p.appendChild(b)};
   const ratio=(rw,rh)=>()=>{let w=W,h=H0;if(W/H0<rw/rh)w=Math.round(H0*rw/rh);else h=Math.round(W*rh/rw);const dx=w-W,dy=h-H0;return[Math.floor(dx/2),Math.floor(dy/2),Math.ceil(dx/2),Math.ceil(dy/2)]};
-  add("+25% all",()=>{const x=Math.round(W*.25),y=Math.round(H0*.25);return[x,y,x,y]});
-  add("1:1",ratio(1,1));add("4:3",ratio(4,3));add("3:4",ratio(3,4));add("16:9",ratio(16,9));add("9:16",ratio(9,16));}
+  add("+25%",()=>{const x=Math.round(W*.25),y=Math.round(H0*.25);return[x,y,x,y]});
+  add("1:1",ratio(1,1));add("4:3",ratio(4,3));add("3:4",ratio(3,4));add("16:9",ratio(16,9));add("9:16",ratio(9,16));expSize()}
+["left","top","right","bottom"].forEach(k=>$("e-"+k).oninput=()=>{segPick($("presets"),null);expSize()});
+function expSize(){if(!doc){$("exp-size").textContent="";return}const m=["left","top","right","bottom"].map(k=>+$("e-"+k).value||0);
+  const w=doc.width+m[0]+m[2],h=doc.height+m[1]+m[3];$("exp-size").textContent=m.some(Boolean)?`${doc.width} x ${doc.height} → ${w} x ${h} px`:`${doc.width} x ${doc.height} px`}
 
-function showMsg(t,bad){$("job").style.display="block";$("jobmsg").textContent=t;$("jobmsg").className=bad?"bad":"ok"}
+function baseContext(){if(!pc.connected)return["Waiting for PhotoCraft...","dim","info"];if(pc.waiting)return["PhotoCraft is not answering. If its window is minimized or covered, bring it into view.","warn","warn"];
+  if(mode==="txt2img")return["Makes a new image"+(doc?`, or a layer in ${doc.name}`:""),"dim","image"];if(!doc)return["Open an image in PhotoCraft.","dim","image"];
+  if(mode==="fill"||mode==="remove")return sel?[`${doc.name} · ${doc.width} x ${doc.height} · selection ${sel[2]} x ${sel[3]} px`,"dim","selection"]:[NO_SEL,"dim","selection"];
+  return[`${doc.name} · ${doc.width} x ${doc.height} · pixels to add on each side`,"dim","image"]}
+function context(){let[t,k,i]=baseContext();if(note){if(note.base!==t)note=null;else{t=note.text;k=note.kind;i={bad:"error",ok:"check",warn:"warn"}[k]||"info"}}
+  $("ctx-icon").innerHTML=svg(i,C[k],14);$("ctx-text").textContent=t;$("context").style.color=C[k]}
+
+function removalChoices(){const inst=models.filter(r=>r.installed&&r.runnable&&!(r.missing_models||[]).length&&!(r.missing_nodes||[]).length);
+  const removers=new Set(inst.filter(r=>(r.capabilities||[]).includes("remove")).map(r=>r.id));
+  const painters=inst.filter(r=>(r.capabilities||[]).includes("fill")&&!removers.has(r.id)).sort((a,b)=>(a.id!==activeId)-(b.id!==activeId));
+  const out=[];if(removers.size){painters.forEach((r,i)=>out.push([`LaMa + ${short(r.name)}`+(i?"":" (best)"),"refine:"+r.id]));
+    if(removers.has("lama-big"))out.push(["LaMa only (fast)","lama"]);if(removers.has("mat-places512"))out.push(["MAT only (fast)","mat"])}
+  painters.forEach(r=>out.push([`${short(r.name)} only`,r.id]));return out}
+function fillSelect(){const s=$("model");let opts;
+  if(mode==="remove")opts=removalChoices();
+  else opts=models.filter(r=>r.installed&&r.runnable&&!(r.missing_models||[]).length&&!(r.missing_nodes||[]).length&&(r.capabilities||[]).includes(mode)).map(r=>[r.name,r.id]);
+  const want=mode==="remove"?(opts.some(o=>o[1]===removal)?removal:(opts[0]||[])[1]):(opts.some(o=>o[1]===activeId)?activeId:(opts[0]||[])[1]);
+  const key=JSON.stringify([opts,want]);if(s.dataset.key===key)return;s.dataset.key=key;
+  s.innerHTML="";if(!opts.length){const o=document.createElement("option");o.value="";o.textContent=models.length||!comfy?"No models installed":"Checking...";s.appendChild(o)}
+  for(const[label,value]of opts){const o=document.createElement("option");o.value=value;o.textContent=label;s.appendChild(o)}
+  s.appendChild(document.createElement("hr"));const m=document.createElement("option");m.value="__manage";m.textContent="Manage models...";s.appendChild(m);
+  s.value=want||"";$("go").disabled=busy||!opts.length}
+
+function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.statusText||"").startsWith("Downloading"))||models.find(r=>r.statusText==="Waiting");
+  if(!s.comfyReady)html=`<div class="head">${svg("warn",C.warn)}<span class="t">AI engine not found</span></div><div class="small">OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it.</div><div style="display:flex;gap:8px"><button class="btn accent flex" id="setup-folder">Choose folder</button><button class="btn flex" id="setup-help">How to install</button></div>`;
+  else if(dl){const pct=dl.statusText.startsWith("Downloading")?parseInt(dl.statusText.split(" ").pop()):0;html=`<div class="head">${svg("download",C.accent)}<span class="t">Downloading ${esc(short(dl.name))}</span><span class="r">${pct}%</span></div><div class="bar"><i style="width:${pct}%"></i></div><div class="small">You can keep working.</div>`}
+  else if(models.length&&!models.some(r=>r.installed&&r.runnable&&(r.capabilities||[]).includes("fill")))html=`<div class="head">${svg("warn",C.warn)}<span class="t">No models installed</span></div><div class="small">Install at least one model to start. LaMa and DreamShaper 8 (2.2 GB) cover every tool.</div><div style="display:flex"><button class="btn accent flex" id="setup-models">Open model manager</button></div>`;
+  if(c.dataset.html!==html){c.dataset.html=html;c.innerHTML=html;c.hidden=!html;
+    if($("setup-folder"))$("setup-folder").onclick=()=>{showGear("engine");$("s-comfy_dir").focus()};if($("setup-help"))$("setup-help").onclick=()=>window.open("https://github.com/beckettharriman/gimp-openfill#install");if($("setup-models"))$("setup-models").onclick=()=>showGear("models")}}
+
 function fmt(s){s=Math.round(s);return Math.floor(s/60)+":"+String(s%60).padStart(2,"0")}
-
 async function tick(){
-  let s; try{s=await get("/api/state")}catch(e){$("doc").textContent="OpenFill stopped";return}
+  let s;try{s=await get("/api/state")}catch(e){$("status").textContent="OpenFill stopped";return}
   if(s.pick){if(lastPick<0)lastPick=s.pick.seq;else if(s.pick.seq!==lastPick){lastPick=s.pick.seq;
-    location.hash="#"+(s.pick.action==="panel"?"fill":s.pick.action);window.focus();
-    const f=s.pick.action==="txt2img"?$("t-prompt"):$("prompt");if(f&&s.pick.action!=="remove")f.focus();if(s.pick.action==="remove"&&!s.busy)$("go-fill").click()}}
-  const pc=s.photocraft;doc=pc&&pc.document;activeId=s.activeModel||"";
-  $("doc").textContent=!pc.connected?"PhotoCraft not connected":doc?`${doc.name} · ${doc.width} x ${doc.height}`+(pc.selection?` · selection ${pc.selection[2]} x ${pc.selection[3]}`:" · no selection"):"no image open";
-  $("exp-size").textContent=doc?`Canvas ${doc.width} x ${doc.height} px`:"Open an image in PhotoCraft.";
-  if(!$("presets").childElementCount)presets();
-  $("backend").textContent=s.comfyReady?"ComfyUI ready":"ComfyUI not set up";$("backend").className="pill"+(s.comfyReady?" on":"");
-  $("setup").style.display=s.comfyReady?"none":"block";$("setup").textContent=s.comfyReady?"":`${s.comfyProblem} Set the ComfyUI folder under Settings.`;
-  const j=s.job;busy=s.busy;
-  ["go-fill","go-expand","go-t2i"].forEach(id=>$(id).disabled=busy);
-  if(j.state!=="idle"){$("job").style.display="block";$("jtitle").textContent=(j.title||j.kind)+(j.model?" · "+j.model:"");
-    $("jtext").textContent=(j.state==="running"?j.text:"")+(j.elapsed?` · ${fmt(j.elapsed)}`:"");$("jbar").style.width=(j.fraction*100).toFixed(1)+"%";
-    $("cancel").style.display=j.state==="running"?"":"none";
-    if(j.state==="running"){$("jobmsg").textContent=""}else{$("jobmsg").textContent=j.message;$("jobmsg").className=j.state==="done"?"ok":"bad"}
-    if(j.previewSeq!==lastSeq){lastSeq=j.previewSeq;const r=await fetch("/api/preview?t="+j.previewSeq,{headers:H});if(r.status===200){$("preview").src=URL.createObjectURL(await r.blob());$("preview").style.display="block"}else $("preview").style.display="none"}
-    const v=$("vars");v.style.display=j.variations.length>1?"block":"none";
-    if(j.variations.length>1){const b=$("vbtns");if(b.childElementCount!==j.variations.length){b.innerHTML="";j.variations.forEach((n,i)=>{const x=document.createElement("button");x.className="btn";x.textContent="Variation "+(i+1);x.onclick=()=>post("/api/variation",{index:i});b.appendChild(x)})}
-      [...$("vbtns").children].forEach((x,i)=>x.className=i===j.shown?"primary":"btn")}
-  }
-  $("notices").innerHTML=(j.notices||[]).map(n=>`<div class="notice">${n.replace(/</g,"&lt;")}</div>`).join("");
+    location.hash="#"+(s.pick.action==="panel"?"fill":s.pick.action);window.focus();if(s.pick.action!=="remove")$("prompt").focus();if(s.pick.action==="remove"&&!s.busy)$("go").click()}}
+  pc=s.photocraft||{};doc=pc.document||null;sel=pc.selection||null;comfy=s.comfyReady;
+  if(s.activeModel!==activeId){activeId=s.activeModel||"";fillSelect()}
+  const st=!comfy?["Not set up","warn"]:["Ready","ok"];$("status").textContent=st[0];$("dot").style.background=C[st[1]];
+  context();if(mode==="expand"){presets();expSize()}setupCard(s);
+  const j=s.job;busy=s.busy;jobState=j.state;
+  $("go").disabled=busy||$("model").value==="";
+  const several=j.state==="done"&&j.variations.length>1;
+  $("go").hidden=j.state==="running"||several;$("cancel").hidden=j.state!=="running";document.querySelectorAll("[data-keep]").forEach(b=>b.hidden=!several);
+  $("job").hidden=j.state==="idle";
+  if(j.state!=="idle"){$("jtitle").textContent=j.title||j.kind;$("jmodel").textContent=short(j.model||"");
+    $("jbar").style.width=(j.fraction*100).toFixed(1)+"%";$("jbarbox").classList.toggle("done",j.state==="done");
+    const t=$("jtext");if(j.state==="running"){t.className="run";t.textContent=`${j.text} · ${fmt(j.elapsed)}`}
+    else if(j.state==="done"){t.className="ok";t.textContent=`Done in ${fmt(j.elapsed)}.`+(several?" Pick one, then Keep.":"")}
+    else{t.className=j.state==="cancelled"?"dimmed":"bad";t.textContent=j.message}
+    if(j.state!=="running")$("preview").hidden=true;
+    else if(j.previewSeq!==lastSeq){lastSeq=j.previewSeq;const r=await fetch("/api/preview?t="+j.previewSeq,{headers:H});if(r.status===200){$("preview").src=URL.createObjectURL(await r.blob());$("preview").hidden=false}else $("preview").hidden=true}
+    $("pick").hidden=!several;
+    if(several){const k=j.variations.join("|")+"#"+j.finished;const b=$("thumbs");if(thumbsFor!==j.variations.join("|")){thumbsFor=j.variations.join("|");b.innerHTML="";
+        for(let i=0;i<j.variations.length;i++){const x=document.createElement("button");x.type="button";x.setAttribute("aria-label","Variation "+(i+1));
+          x.innerHTML=`<span><img alt="Variation ${i+1}"></span>${i+1}`;x.onclick=()=>post("/api/variation",{index:i});b.appendChild(x);
+          fetch(`/api/thumb?i=${i}&key=${encodeURIComponent(KEY)}&t=${Date.now()}`,{headers:H}).then(r=>r.status===200?r.blob():null).then(bl=>{if(bl)x.querySelector("img").src=URL.createObjectURL(bl)})}}
+      [...$("thumbs").children].forEach((x,i)=>x.classList.toggle("on",i===j.shown));void k}
+    else thumbsFor=""}
+  $("notices").innerHTML=(j.notices||[]).map(n=>`<div class="context" style="color:${C.warn}">${svg("warn",C.warn,14)}<span>${esc(n)}</span></div>`).join("");
 }
 
-async function loadModels(){const m=await get("/api/models");models=m.rows||[];$("hw").textContent=m.hardware?"This computer: "+m.hardware:(m.error||"");
-  const tb=$("mrows");tb.innerHTML="";
-  for(const r of models){if(!r.runnable&&!r.installed)continue;const tr=document.createElement("tr");
-    const st=r.statusText||(r.installed?"Installed":"");
-    tr.innerHTML=`<td>${r.name}<div class="dim">${(r.capabilities||[]).join(", ")}${st?" · "+st:""}</div></td><td>${r.size||""}</td><td></td>`;
-    const c=tr.lastChild;
-    if(r.installed&&r.runnable){const b=document.createElement("button");b.className=r.active?"primary":"btn";b.textContent=r.active?"Active":"Set active";b.disabled=r.active;b.onclick=async()=>{await post("/api/models/activate",{id:r.id});loadModels()};c.appendChild(b)}
-    else if(!r.installed){const b=document.createElement("button");b.className="btn";b.textContent=r.partial?"Resume":"Download";b.onclick=async()=>{try{await post("/api/models/download",{id:r.id})}catch(e){alert(e.message)}loadModels()};c.appendChild(b)}
-    tb.appendChild(tr)}
-  fillSelects()}
-function fillSelects(){const map={"model-fill":["fill","remove"],"model-expand":["expand"],"model-t2i":["txt2img"]};
-  for(const[id,caps]of Object.entries(map)){const sel=$(id),keep=sel.value;sel.innerHTML='<option value="active">Active model</option>';
-    for(const r of models)if(r.installed&&r.runnable&&(r.capabilities||[]).some(c=>caps.includes(c))){const o=document.createElement("option");o.value=r.id;o.textContent=r.name;sel.appendChild(o)}
-    if([...sel.options].some(o=>o.value===keep))sel.value=keep}}
-$("save-token").onclick=async()=>{await post("/api/models/token",{token:$("token").value});$("token").value="";alert("Saved.")};
+function detail(r){const words={fill:"fill",expand:"expand",txt2img:"create",remove:"remove",edit:"edit"};
+  const caps=(r.capabilities||[]).filter(c=>c!=="patch").map(c=>words[c]||c);let what=caps.join(", ");what=what.charAt(0).toUpperCase()+what.slice(1);
+  if(!caps.length)what="Needed by other models";return[what,r.size].filter(Boolean).join(" · ")}
+function mnote(t,kind){const n=$("mnote");n.hidden=!t;n.textContent=t||"";n.className="note "+(kind||"bad")}
+async function act(fn){try{await fn();mnote("")}catch(e){mnote(e.message,"bad")}loadModels()}
+async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}models=m.rows||[];$("hw").textContent=m.hardware||m.error||"";
+  fillSelect();if(!gear||section!=="models")return;
+  const inst=models.filter(r=>r.installed).sort((a,b)=>(!a.runnable)-(!b.runnable)||(!a.active)-(!b.active)||a.name.localeCompare(b.name));
+  const avail=models.filter(r=>!r.installed&&r.runnable).sort((a,b)=>a.name.localeCompare(b.name));
+  const row=(r)=>{const st=r.statusText||"";let right="",extra="";const busyRow=/^(Downloading|Waiting)/.test(st);
+    if(r.installed){if((r.missing_models||[]).length)right=`<button class="btn" data-get="${r.id}">Download</button>`;else if(/^(Removing|Installing|Working)/.test(st))right=`<span class="pct">${esc(st)}</span>`;else if(r.runnable)right=`<button class="icon-btn" data-remove="${r.id}" aria-label="Uninstall ${esc(r.name)}">${svg("trash","currentColor")}</button>`}
+    else if(busyRow){const pct=st.startsWith("Downloading")?st.split(" ").pop():"Waiting";right=`<span class="pct">${pct}</span><button class="icon-btn" data-stop="${r.id}" aria-label="Stop downloading">${svg("close","currentColor")}</button>`;if(st.startsWith("Downloading"))extra=`<div class="bar"><i style="width:${parseInt(pct)||0}%"></i></div>`}
+    else right=`<button class="btn" data-get="${r.id}">${r.partial?"Resume":"Download"}</button>`;
+    const det=r.installed&&!r.runnable?[r.neededBy||"Needed by other models",r.size].join(" · "):detail(r)+((r.missing_models||[]).length?" · Needs one more download":"");
+    return `<div class="mrow"><div class="top"><div class="names"><div>${esc(r.name)}</div><div class="small">${esc(det)}</div></div>${right}</div>${extra}</div>`};
+  $("installed").innerHTML=inst.map(row).join("");$("inst-box").hidden=!inst.length;$("available").innerHTML=avail.map(row).join("");$("avail-box").hidden=!avail.length;
+  document.querySelectorAll("[data-get]").forEach(b=>b.onclick=()=>act(()=>post("/api/models/download",{id:b.dataset.get})));
+  document.querySelectorAll("[data-stop]").forEach(b=>b.onclick=()=>act(()=>post("/api/models/stop",{id:b.dataset.stop})));
+  document.querySelectorAll("[data-remove]").forEach(b=>b.onclick=()=>{const r=models.find(x=>x.id===b.dataset.remove);if(confirm(`Uninstall ${short(r.name)}? Its files (${r.size}) are deleted. Files other models use are kept.`))act(()=>post("/api/models/remove",{id:r.id}))})}
+$("save-token").onclick=async()=>{try{await post("/api/models/token",{token:$("token").value});$("token").value="";mnote("Hugging Face key saved.","ok")}catch(e){mnote(e.message,"bad")}};
 
-async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(el)el.value=String(v)}}
-$("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.tagName==="SELECT"?el.value==="true":(el.type==="number"?+el.value:el.value)});try{await post("/api/settings",b);$("check-out").textContent="Saved."}catch(e){$("check-out").textContent=e.message}};
-$("check").onclick=async()=>{$("check-out").textContent="Checking (the first start takes about a minute)...";try{const r=await post("/api/backend/check");$("check-out").textContent=(r.ok?"Backend OK: ":"Not OK: ")+r.detail+(r.device?" · running on "+r.device:"")}catch(e){$("check-out").textContent=e.message}};
-$("stop").onclick=async()=>{const r=await post("/api/backend/stop");$("check-out").textContent=r.message};
+async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el)continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}}
+function settingsNote(t,kind){const n=section==="generation"?$("gen-out"):$("check-out");n.hidden=!t;n.textContent=t;n.className="note "+(kind||"dim")}
+$("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.type==="checkbox"?el.checked:(el.type==="number"?+el.value:el.value)});
+  try{await post("/api/settings",b);settingsNote("Settings saved.","ok")}catch(e){settingsNote(e.message,"bad")}};
+$("check").onclick=async()=>{settingsNote("Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:"."),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};
+$("stop").onclick=async()=>{const r=await post("/api/backend/stop");settingsNote(r.message,"dim")};
 $("logs").onclick=()=>post("/api/logs");
 
-function openTab(){const want={txt2img:"t2i",remove:"fill",panel:"models"}[location.hash.slice(1)]||location.hash.slice(1);
-  const b=document.querySelector(`#tabs button[data-tab="${want}"]`);if(b)b.click();if(location.hash==="#remove")setMode(true)}
-window.addEventListener("hashchange",openTab);openTab();
-loadModels().catch(()=>{});setInterval(tick,700);tick();setInterval(()=>{if(document.querySelector("#tabs .on").dataset.tab==="models")loadModels()},3000);
+function openTab(){const h=location.hash.slice(1);const want={t2i:"txt2img",panel:"fill",models:"models",settings:"engine"}[h]||h;
+  if(want==="models"||want==="engine"||want==="generation")showGear(want);else if(GO[want]){showTools();setMode(want)}}
+window.addEventListener("hashchange",openTab);setMode("fill");openTab();
+loadModels().catch(()=>{});setInterval(tick,700);tick();setInterval(()=>loadModels(),3000);
 </script>
 </body>
 </html>
