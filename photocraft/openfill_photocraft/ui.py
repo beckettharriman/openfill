@@ -1276,17 +1276,42 @@ def _motif_hints(window: tk.Wm) -> bool:
         return False
     x11.XCloseDisplay(display)
 
+    x11.XQueryTree.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.POINTER(ctypes.c_ulong),
+        ctypes.POINTER(ctypes.c_ulong),
+        ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong)),
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+    x11.XFree.argtypes = [ctypes.c_void_p]
+
+    def wrapper(dpy) -> int:
+        """Tk's wrapper window (the parent of the toplevel's own window): the one the window
+        manager manages. ``wm frame`` names the window manager's frame once it has reparented."""
+        root, parent = ctypes.c_ulong(), ctypes.c_ulong()
+        children, count = ctypes.POINTER(ctypes.c_ulong)(), ctypes.c_uint()
+        if not x11.XQueryTree(
+            dpy,
+            window.winfo_id(),
+            ctypes.byref(root),
+            ctypes.byref(parent),
+            ctypes.byref(children),
+            ctypes.byref(count),
+        ):
+            return 0
+        if children:
+            x11.XFree(children)
+        return parent.value if parent.value and parent.value != root.value else window.winfo_id()
+
     def apply(_event=None) -> None:
-        try:
-            frame_id = int(window.wm_frame(), 16)
-        except (ValueError, TypeError, tk.TclError):
-            return
-        if not frame_id:
-            return
         dpy = x11.XOpenDisplay(str(window.winfo_screen()).encode())
         if not dpy:
             return
         try:
+            frame_id = wrapper(dpy)
+            if not frame_id:
+                return
             atom = x11.XInternAtom(dpy, b"_MOTIF_WM_HINTS", 0)
             hints = (ctypes.c_long * 5)(2, 0, 0, 0, 0)  # flags: decorations; decorations: none
             x11.XChangeProperty(dpy, frame_id, atom, atom, 32, 0, ctypes.cast(hints, ctypes.c_void_p), 5)
