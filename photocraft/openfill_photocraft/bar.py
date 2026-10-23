@@ -320,6 +320,7 @@ class Bar:
         self._build()
         self._place()
         self.root.after(150, self._tick)
+        self.root.after(30, self._drain)
 
     # setup ------------------------------------------------------------------------
 
@@ -357,7 +358,7 @@ class Bar:
             root.bind_all("<TouchpadScroll>", self._wheel, add="+")
         except tk.TclError:
             pass
-        self._want: tuple[int, int, int] | None = None  # the geometry last asked for, until it arrives
+        self._bottom: int | None = None  # the bottom edge the panel keeps (where it opened from the strip)
         self._resize_soon = False
         self.main = ui.frame(self.inner)
         self.main.pack(fill="x", padx=PAD)
@@ -510,7 +511,9 @@ class Bar:
         view_title.pack(side="left", padx=(0, 0))
         self.head_tools.pack(side="left", padx=(PAD, 0), fill="y")
         ui.drag_handle(
-            (head, self.head_tools, logo, name, self.status_dot, self.status, self.head_view, view_title), self.root
+            (head, self.head_tools, logo, name, self.status_dot, self.status, self.head_view, view_title),
+            self.root,
+            self._dragged,
         )
 
     def _build_pill(self) -> None:
@@ -609,19 +612,20 @@ class Bar:
         self._resize_soon = False
         h = self._target_height()
         if getattr(self, "collapsed", True) or not self.root.winfo_viewable():
-            if self._want is None or self._want[2] != h:
-                self.root.geometry(f"{W}x{h}")
-                self._want = None
+            self.root.geometry(f"{W}x{h}")
             return
-        x, y, cur = self._want or (self.root.winfo_x(), self.root.winfo_y(), self.root.winfo_height())
-        if cur == h:
-            return
+        x, y, cur = self.root.winfo_x(), self.root.winfo_y(), self.root.winfo_height()
+        if self._bottom is None:
+            self._bottom = y + cur
         limit = self.root.winfo_screenheight() - 56  # above a taskbar
-        bottom = min(y + cur, limit)
-        y = max(0, bottom - h)
-        self._want = (x, y, h)
+        bottom = min(self._bottom, limit)
+        # a mode taller than the room above the anchor (Expand on a short screen) starts at the
+        # top of the screen while it is shown; the next one is back on the anchor
+        new_y = max(0, bottom - h)
+        if (cur, y) == (h, new_y):
+            return
         self._placing = True
-        self.root.geometry(f"{W}x{h}+{x}+{y}")
+        self.root.geometry(f"{W}x{h}+{x}+{new_y}")
         self._placing = False
 
     def _inner_changed(self) -> None:
@@ -690,7 +694,7 @@ class Bar:
         w, h = W, self._target_height()
         right, bottom = self._pill_corner()
         x, y = self._clamp(right - w, bottom - h, w, h)
-        self._want = (x, y, h)
+        self._bottom = bottom
         self._placing = True
         self.root.geometry(f"{w}x{h}+{x}+{y}")
         self._placing = False
@@ -746,6 +750,8 @@ class Bar:
             self._place_pill()
         else:
             dx, dy = rect[2] - old[2], rect[3] - old[3]
+            if self._bottom is not None:
+                self._bottom += dy
             self._placing = True
             self.root.geometry(f"+{self.root.winfo_x() + dx}+{self.root.winfo_y() + dy}")
             self._placing = False
@@ -763,12 +769,11 @@ class Bar:
             self._placing = False
 
     def _moved(self, event) -> None:
-        """The panel may be dragged by its header while open; it opens from the strip again next time.
-        Once the window has the geometry last asked for, its real place is used again."""
-        if event.widget is self.root and self._want is not None:
-            x, y, h = self._want
-            if event.height == h and (self.root.winfo_x(), self.root.winfo_y()) == (x, y):
-                self._want = None
+        """The panel may be dragged by its header while open; it opens from the strip again next time."""
+
+    def _dragged(self) -> None:
+        """Dragged by its header: the panel keeps its new bottom edge from now on."""
+        self._bottom = self.root.winfo_y() + self.root.winfo_height()
 
     def _unmapped(self, event) -> None:
         """Minimizing the panel folds it back to the strip (not when PhotoCraft hides it)."""
@@ -834,8 +839,18 @@ class Bar:
     # actions ------------------------------------------------------------------------
 
     def call_soon(self, fn, *args) -> None:
-        """Run ``fn`` on the UI thread (for other threads)."""
+        """Run ``fn`` on the UI thread (for other threads); picked up within 30 ms."""
         self.calls.put((fn, args))
+
+    def _drain(self) -> None:
+        try:
+            while True:
+                fn, args = self.calls.get_nowait()
+                fn(*args)
+        except queue.Empty:
+            pass
+        finally:
+            self.root.after(30, self._drain)
 
     def show(self, action: str = "") -> None:
         """Bring the panel up; a menu action also picks its mode (Remove starts at once)."""
@@ -872,6 +887,14 @@ class Bar:
             self.select_view(self.gear.section)
 
     def select_view(self, view: str) -> None:
+        with ui.frozen(self.root):
+            self._select_view(view)
+
+    def select_tab(self, key: str) -> None:
+        with ui.frozen(self.root):
+            self._select_tab(key)
+
+    def _select_view(self, view: str) -> None:
         """Models and settings in place of the tools: ``view`` is its section (models, engine,
         generation; "settings" is the engine). The same section again goes back."""
         section = {"settings": "engine"}.get(view, view)
@@ -898,7 +921,7 @@ class Bar:
 
     _last_view = ""
 
-    def select_tab(self, key: str) -> None:
+    def _select_tab(self, key: str) -> None:
         self.model_box.close()
         if self.view:
             self.view = ""

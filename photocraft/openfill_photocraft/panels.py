@@ -56,12 +56,16 @@ class GearView(tk.Frame):
         self.bar = bar
         self.section = "models"
         # the section control stays under the header; only the section below it scrolls
-        self.tabs = ui.Seg(bar.gear_bar, SECTIONS, self.show_section, CW, 13)
+        self.tabs = ui.Seg(bar.gear_bar, SECTIONS, self._section_picked, CW, 13)
         self.tabs.pack(anchor="w", padx=16, pady=(12, 0))
         self.models = ModelsView(bar, self)
         self.engine = EngineView(bar, self)
         self.generation = GenerationView(bar, self)
         self._loaded = False
+
+    def _section_picked(self, section: str) -> None:
+        with ui.frozen(self.bar.root):
+            self.show_section(section)
 
     def show_section(self, section: str) -> None:
         if section == "settings":

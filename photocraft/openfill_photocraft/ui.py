@@ -11,6 +11,7 @@ the size and scaled down, so their edges are smooth; Tk only places them.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import itertools
 import math
@@ -1324,6 +1325,192 @@ def _motif_hints(window: tk.Wm) -> bool:
     window.update_idletasks()
     apply()
     return True
+
+
+_frozen_depth = 0
+
+
+class _Curtain:
+    """A still picture of the screen around a window, shown just above it while it changes
+    (Windows): what is seen stays as it was until the window is completely repainted, then
+    the curtain goes in one step. Click-through, never activated, and placed directly above
+    the window in z-order, so it never covers anything that covers the window."""
+
+    def __init__(self, window: tk.Misc) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        self.ok = False
+        self.ct, self.wt = ctypes, wintypes
+        u, g = ctypes.windll.user32, ctypes.windll.gdi32
+        self.u, self.g = u, g
+        vp = ctypes.c_void_p
+        u.GetDC.restype, u.GetDC.argtypes = vp, [vp]
+        u.ReleaseDC.argtypes = [vp, vp]
+        g.CreateCompatibleDC.restype, g.CreateCompatibleDC.argtypes = vp, [vp]
+        g.CreateCompatibleBitmap.restype, g.CreateCompatibleBitmap.argtypes = vp, [vp, ctypes.c_int, ctypes.c_int]
+        g.SelectObject.restype, g.SelectObject.argtypes = vp, [vp, vp]
+        g.BitBlt.argtypes = [
+            vp,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            vp,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.DWORD,
+        ]
+        g.DeleteObject.argtypes = [vp]
+        g.DeleteDC.argtypes = [vp]
+        u.CreateWindowExW.restype = vp
+        u.CreateWindowExW.argtypes = (
+            [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD] + [ctypes.c_int] * 4 + [vp, vp, vp, vp]
+        )
+        u.DestroyWindow.argtypes = [vp]
+        u.GetWindowRect.argtypes = [vp, ctypes.POINTER(wintypes.RECT)]
+        u.GetWindow.restype, u.GetWindow.argtypes = vp, [vp, wintypes.UINT]
+        u.GetAncestor.restype, u.GetAncestor.argtypes = vp, [vp, wintypes.UINT]
+        u.SetWindowPos.argtypes = [vp, vp, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        u.UpdateLayeredWindow.argtypes = [vp, vp, vp, vp, vp, vp, wintypes.DWORD, vp, wintypes.DWORD]
+        self.hwnd = self.mem = None
+        try:
+            self.old_ctx = u.SetThreadDpiAwarenessContext(vp(-4))  # per-monitor aware: real pixels
+        except (AttributeError, OSError):
+            self.old_ctx = None
+        try:
+            self._show(window)
+        except Exception:
+            self.release()  # never leave a picture standing over the panel
+            raise
+        finally:
+            if self.old_ctx:
+                u.SetThreadDpiAwarenessContext(self.old_ctx)
+        if self.ok:
+            # a safety net: the curtain goes after 400 ms even if the change never finishes
+            # (a nested event loop, an error that skips the normal path)
+            window.after(400, self.release)
+
+    def _show(self, window: tk.Misc) -> None:
+        ctypes, wintypes, u, g, vp = self.ct, self.wt, self.u, self.g, self.ct.c_void_p
+        frame = u.GetAncestor(vp(window.winfo_id()), 2)  # GA_ROOT: the window Windows manages
+        r = wintypes.RECT()
+        u.GetWindowRect(frame, ctypes.byref(r))
+        sh = u.GetSystemMetrics(1)
+        # the window's column, top to bottom of the screen: its new size is not known yet
+        # (it keeps its bottom edge and grows upward, or starts at the top of the screen)
+        x, y, w, h = r.left, 0, r.right - r.left, sh
+        if w <= 0 or h <= 0:
+            return
+        self.frame = frame
+        screen = u.GetDC(None)
+        self.mem = g.CreateCompatibleDC(screen)
+        self.bmp = g.CreateCompatibleBitmap(screen, w, h)
+        self.old = g.SelectObject(self.mem, self.bmp)
+        g.BitBlt(self.mem, 0, 0, w, h, screen, x, y, 0x00CC0020 | 0x40000000)  # SRCCOPY | CAPTUREBLT
+        u.ReleaseDC(None, screen)
+        # WS_POPUP; WS_EX_LAYERED | TRANSPARENT | TOOLWINDOW | NOACTIVATE
+        self.hwnd = u.CreateWindowExW(
+            0x00080000 | 0x00000020 | 0x00000080 | 0x08000000,
+            "Static",
+            "OpenFill curtain",
+            0x80000000,
+            x,
+            y,
+            w,
+            h,
+            None,
+            None,
+            None,
+            None,
+        )
+        if not self.hwnd:
+            self.release()
+            return
+        pos, size, src = wintypes.POINT(x, y), wintypes.SIZE(w, h), wintypes.POINT(0, 0)
+        shown = u.UpdateLayeredWindow(
+            self.hwnd, None, ctypes.byref(pos), ctypes.byref(size), self.mem, ctypes.byref(src), 0, None, 0x00000004
+        )  # ULW_OPAQUE
+        above = u.GetWindow(frame, 3)  # GW_HWNDPREV: the window right above the panel
+        # just above the panel: SWP_NOMOVE | NOSIZE | NOACTIVATE | SHOWWINDOW
+        u.SetWindowPos(self.hwnd, above or vp(0), 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010 | 0x0040)
+        if above:
+            u.SetWindowPos(self.hwnd, above, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010)
+        self.ok = bool(shown)
+        if not self.ok:
+            self.release()
+
+    def release(self) -> None:
+        """Take the curtain away (again is harmless)."""
+        u, g = self.u, self.g
+        if getattr(self, "hwnd", None):
+            hwnd, self.hwnd = self.hwnd, None
+            try:
+                self.ct.windll.dwmapi.DwmFlush()  # the repainted window has been composed once
+            except OSError:
+                pass
+            u.DestroyWindow(hwnd)
+        if getattr(self, "mem", None):
+            g.SelectObject(self.mem, self.old)
+            g.DeleteObject(self.bmp)
+            g.DeleteDC(self.mem)
+            self.mem = None
+
+
+@contextlib.contextmanager
+def frozen(window: tk.Misc):
+    """Change a window's contents and size as one visible step (Windows).
+
+    Every Tk widget is a child window on Windows and repaints on its own, and a resize
+    first shows the window's old pixels moved, or black where it grew. So a switch showed
+    several partial states. A curtain (a still picture of what is on screen there) is put
+    just above the window; drawing is suspended on Tk's own window (WM_SETREDRAW, always
+    turned back on) while the contents and size change, so the layout pass is quick; then
+    the whole window is repainted in one pass under the curtain, and the curtain goes once
+    the new picture has been composed: one visible change. Without a curtain (it could
+    not be made) the suspended drawing alone still keeps most partial states out of
+    sight. The toplevel's frame is never touched: Tk reads its visibility as the window's
+    state. Elsewhere this only runs the body."""
+    global _frozen_depth
+    if sys.platform != "win32" or _frozen_depth or not window.winfo_viewable():
+        _frozen_depth += 1
+        try:
+            yield
+        finally:
+            _frozen_depth -= 1
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.RedrawWindow.argtypes = [wintypes.HWND, ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    _frozen_depth += 1
+    curtain = None
+    try:
+        curtain = _Curtain(window)
+    except Exception:  # noqa: BLE001 - without it, suspended drawing alone
+        curtain = None
+    inner = window.winfo_id()  # Tk's toplevel window, inside the frame Windows manages
+    suspended = bool(inner) and bool(user32.IsWindowVisible(inner))
+    if suspended:
+        user32.SendMessageW(inner, 0x000B, 0, 0)  # WM_SETREDRAW off
+    try:
+        yield
+        window.update_idletasks()  # layout and the new geometry
+    finally:
+        _frozen_depth -= 1
+        if suspended:
+            user32.SendMessageW(inner, 0x000B, 1, 0)  # WM_SETREDRAW on (always)
+            # RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW
+            user32.RedrawWindow(inner, None, None, 0x0001 | 0x0004 | 0x0080 | 0x0100)
+        try:
+            window.update()  # Tk repaints every widget now, before the curtain goes
+        except tk.TclError:
+            pass
+        if curtain is not None:
+            curtain.release()
 
 
 def own_tag_name(window: tk.Misc) -> str:
