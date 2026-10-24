@@ -252,7 +252,7 @@ $("go").onclick=()=>{if(busy)return;const prompt=$("prompt").value.trim(),model=
     start("fill",b)}
   else if(mode==="expand"){const m=["left","top","right","bottom"].map(k=>+$("e-"+k).value);if(!m.some(Boolean)){say("Enter the pixels to add on each side, or pick a ratio.","bad");return}
     start("expand",{prompt,negative:"",left:m[0],top:m[1],right:m[2],bottom:m[3],variations,seed:-1,model})}
-  else{if(!prompt){say("Describe the image first.","bad");return}start("txt2img",{prompt,negative:"",width:size[0],height:size[1],variations,seed:-1,model,target})}};
+  else{if(!prompt){say("Describe the image first.","bad");return}const onSel=target==="layer"&&sel;start("txt2img",{prompt,negative:"",width:onSel?0:size[0],height:onSel?0:size[1],variations,seed:-1,model,target})}};
 $("cancel").onclick=()=>post("/api/cancel");
 document.querySelectorAll("[data-keep]").forEach(b=>b.onclick=()=>post("/api/keep",{which:b.dataset.keep}));
 
@@ -266,6 +266,7 @@ function expSize(){if(!doc){$("exp-size").textContent="";return}const m=["left",
   const w=doc.width+m[0]+m[2],h=doc.height+m[1]+m[3];$("exp-size").textContent=m.some(Boolean)?`${doc.width} x ${doc.height} → ${w} x ${h} px`:`${doc.width} x ${doc.height} px`}
 
 function baseContext(){if(!pc.connected)return["Waiting for PhotoCraft...","dim","info"];if(pc.waiting)return["PhotoCraft is not answering. If its window is minimized or covered, bring it into view.","warn","warn"];
+  if(mode==="txt2img"&&doc&&sel&&target==="layer")return[`A layer in ${doc.name}, on the selection (${sel[2]} x ${sel[3]} px)`,"dim","selection"];
   if(mode==="txt2img")return["Makes a new image"+(doc?`, or a layer in ${doc.name}`:""),"dim","image"];if(!doc)return["Open an image in PhotoCraft.","dim","image"];
   if(mode==="fill"||mode==="remove")return sel?[`${doc.name} · ${doc.width} x ${doc.height} · selection ${sel[2]} x ${sel[3]} px`,"dim","selection"]:[NO_SEL,"dim","selection"];
   return[`${doc.name} · ${doc.width} x ${doc.height} · pixels to add on each side`,"dim","image"]}

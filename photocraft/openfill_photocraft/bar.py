@@ -1124,6 +1124,8 @@ class Bar:
                     self._say("Describe the image first.", BAD)
                     return
                 _, w, h = next(s for s in CREATE_SIZES if s[0] == self.size_name.get())
+                if self.target.get() == "layer" and self.watcher.snapshot().get("selection"):
+                    w = h = 0  # a layer sized to the selection and placed on it, as in OpenFill for GIMP
                 body.update(prompt=prompt, negative="", width=w, height=h, target=self.target.get())
                 self.service.start("txt2img", body)
         except Exception as err:  # noqa: BLE001
@@ -1241,6 +1243,8 @@ class Bar:
                 "warn",
             )
         if tab == "txt2img":
+            if doc and sel and self.target.get() == "layer":
+                return f"A layer in {doc['name']}, on the selection ({sel[2]} x {sel[3]} px)", DIM, "selection"
             return "Makes a new image" + (f", or a layer in {doc['name']}" if doc else ""), DIM, "image"
         if not doc:
             return "Open an image in PhotoCraft.", DIM, "image"
