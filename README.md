@@ -1,3 +1,6 @@
+> [!NOTE]
+> **Looking for OpenFill for PhotoCraft?** This repository holds it next to the GIMP plug-in it shares its engine with. Its README, install steps and download are in **[photocraft/README.md](photocraft/README.md)**. The rest of this page is about OpenFill for GIMP.
+
 <div align="center">
 
 # OpenFill
