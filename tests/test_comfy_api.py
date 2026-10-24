@@ -20,6 +20,7 @@ class StubState:
         self.fail_prompt: dict | None = None
         self.history_error = False
         self.history_calls = 0
+        self.history_drop = 0  # this many /history requests get no answer (connection closed)
         self.interrupted = False
 
 
@@ -58,6 +59,9 @@ class Handler(BaseHTTPRequestHandler):
             )
         elif self.path.startswith("/object_info/"):
             self._send(404, {"error": "not found"})
+        elif self.path.startswith("/history/") and STATE.history_drop > 0:
+            STATE.history_drop -= 1
+            self.close_connection = True  # no response at all: the client is not answered
         elif self.path.startswith("/history/"):
             STATE.history_calls += 1
             pid = self.path.rsplit("/", 1)[1]
@@ -167,6 +171,15 @@ class ComfyClientTests(unittest.TestCase):
         images = self.client.output_images(entry, "save")
         self.assertEqual(len(images), 1)
         self.assertTrue(images[0].startswith(b"PNGDATA:/view?filename=out.png"))
+
+    def test_wait_rides_out_a_server_that_does_not_answer_for_a_moment(self):
+        STATE.history_drop = 3
+        entry = self.client.wait_for("pid-1", 10, time.monotonic() + 20, poll_interval=0.05)
+        self.assertEqual(entry["status"]["status_str"], "success")
+        STATE.history_drop = 10**6  # gone for good: fails once the grace is over
+        self.client.HISTORY_GRACE_S = 0.2
+        with self.assertRaises(ComfyApiError):
+            self.client.wait_for("pid-1", 10, time.monotonic() + 20, poll_interval=0.05)
 
     def test_wait_reports_execution_error(self):
         STATE.history_error = True

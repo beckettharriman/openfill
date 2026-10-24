@@ -217,6 +217,26 @@ class ComfyClient:
             )
         return info["prompt_id"]
 
+    # How long the server may stay unreachable while OpenFill waits for a result before the job
+    # fails. A busy ComfyUI on Windows (a model loading, a large file being written) sometimes
+    # lets a loopback connection time out once although it is still running the job.
+    HISTORY_GRACE_S = 90.0
+
+    def _history_patiently(self, prompt_id: str, unreachable: dict[str, float]) -> dict | None:
+        """:meth:`history`, but a server that is not reached (no HTTP answer at all) counts as
+        "no entry yet" until it has been unreachable for ``HISTORY_GRACE_S``."""
+        try:
+            entry = self.history(prompt_id)
+        except ComfyApiError as err:
+            if err.status:
+                raise
+            since = unreachable.setdefault("since", time.monotonic())
+            if time.monotonic() - since > self.HISTORY_GRACE_S:
+                raise
+            return None
+        unreachable.clear()
+        return entry
+
     def history(self, prompt_id: str) -> dict | None:
         """The /history entry of ``prompt_id``, or None while it has none."""
         info = self._json("GET", f"/history/{prompt_id}")
@@ -292,6 +312,7 @@ class ComfyClient:
         except (WebSocketError, OSError):
             ws = None
         done_steps = 0
+        unreachable: dict[str, float] = {}  # since when /history has not answered
         queued_text = "Waiting for the AI backend..."
         if progress:
             progress(0.0, queued_text)
@@ -356,7 +377,7 @@ class ComfyClient:
                     last_poll = now
                     if ws is None:
                         time.sleep(poll_interval)
-                    entry = self.history(prompt_id)
+                    entry = self._history_patiently(prompt_id, unreachable)
                     if entry:
                         status = entry.get("status", {})
                         if status.get("status_str") == "error":
@@ -367,7 +388,7 @@ class ComfyClient:
                 ws.close()
         entry = None
         for _ in range(30):
-            entry = self.history(prompt_id)
+            entry = self._history_patiently(prompt_id, unreachable)
             if entry:
                 break
             time.sleep(0.5)
