@@ -196,6 +196,29 @@ class EraserTests(unittest.TestCase):
         self.assertTrue(spec.eraser)
         self.assertFalse(spec.prompt_free)
 
+    def test_flux_eraser_runs_on_any_installed_flux_fill(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def put(entry_id):
+                for f in cat.by_id(self.entries, entry_id).files:
+                    if f.role != cat.PREVIEW_ROLE:
+                        (root / f.dest).parent.mkdir(parents=True, exist_ok=True)
+                        with open(root / f.dest, "wb") as out:
+                            out.truncate(f.size or 1)  # sparse: the catalog size, no real bytes
+
+            put("flux1-fill-object-removal-lora")
+            status = cat.install_status(self.flux, root, None, self.entries)
+            self.assertEqual(status.missing_models, ["flux1-fill-dev-gguf-q4"])  # no FLUX.1 Fill at all
+            put("flux1-fill-dev-gguf-q6")  # the Q6_K one, not the Q4_0 the LoRA names
+            self.assertEqual(cat.install_status(self.flux, root, None, self.entries).missing_models, [])
+            spec = cat.model_spec_for(self.flux, self.entries, root)
+            q6 = cat.model_spec_for(cat.by_id(self.entries, "flux1-fill-dev-gguf-q6"), self.entries)
+            self.assertEqual(spec.unet, q6.unet)
+            self.assertEqual(spec.lora, "objectRemovalv1_r32.safetensors")
+
     def _graph(self, entry, plan):
         spec = cat.model_spec_for(entry, self.entries)
         prompt, negative = w.ERASER_PROMPTS[spec.effective_template]

@@ -269,7 +269,7 @@ class App:
                 "press Install nodes in the Models tab."
             )
         self._fetch_missing_previews(entry)
-        return entry, cat.model_spec_for(entry, self.catalog)
+        return entry, cat.model_spec_for(entry, self.catalog, self.models_root)
 
     def _fetch_missing_previews(self, entry: cat.ModelEntry) -> None:
         """Queue the model's live-preview decoder (a few MB) when it is missing, e.g. for a model
@@ -458,8 +458,7 @@ class App:
         ids = []
         if include_dependencies:
             for dep in entry.requires_models:
-                dep_entry = cat.by_id(self.catalog, dep)
-                if not cat.install_status(dep_entry, self.models_root, None).installed:
+                if cat.installed_stand_in(entry, dep, self.catalog, self.models_root) is None:
                     ids += self.queue_download(dep, include_dependencies=False)
         task = {
             "type": "download",

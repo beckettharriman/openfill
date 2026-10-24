@@ -657,12 +657,7 @@ def install_status(
     missing_models = []
     catalog = list(catalog)
     for dep in entry.requires_models:
-        try:
-            dep_entry = by_id(catalog, dep)
-        except CatalogError:
-            missing_models.append(dep)
-            continue
-        if any(not file_installed(models_root, f) for f in dep_entry.files if f.role != PREVIEW_ROLE):
+        if installed_stand_in(entry, dep, catalog, models_root) is None:
             missing_models.append(dep)
     seen = None
     if server_files is not None:
@@ -670,6 +665,29 @@ def install_status(
         names = {n.replace("\\", "/") for n in names}
         seen = all(f.loader_name in names for f in entry.files if f.role in ("checkpoint", "unet"))
     return InstallStatus(not missing, missing, partial, missing_nodes, missing_models, seen)
+
+
+def stand_ins(entry: ModelEntry, dep: str, catalog: Iterable[ModelEntry]) -> list[ModelEntry]:
+    """The entries that can serve as ``entry``'s companion model ``dep``: ``dep`` itself
+    first; for the FLUX.1 Fill removal LoRA, also any other FLUX.1 Fill (the Q6_K GGUF, the
+    full model, or the user's own file), since the LoRA runs on any of them."""
+    catalog = list(catalog)
+    out = [e for e in catalog if e.id == dep]
+    if entry.template == "flux_eraser":
+        out += [e for e in catalog if e.template == "flux_fill" and e.id != dep]
+    return out
+
+
+def installed_stand_in(
+    entry: ModelEntry, dep: str, catalog: Iterable[ModelEntry], models_root: Path | None
+) -> ModelEntry | None:
+    """The first of :func:`stand_ins` whose files are all there (None when none is)."""
+    if models_root is None:
+        return None
+    for candidate in stand_ins(entry, dep, catalog):
+        if all(file_installed(models_root, f) for f in candidate.files if f.role != PREVIEW_ROLE):
+            return candidate
+    return None
 
 
 def runnable_installed(
@@ -819,8 +837,9 @@ def suggest_active(installed: list[ModelEntry], active_id: str) -> str | None:
 # -------------------------------------------------------------- model spec ----
 
 
-def model_spec_for(entry: ModelEntry, catalog: Iterable[ModelEntry] = ()) -> ModelSpec:
-    """Translate a catalog entry into the backend's ModelSpec."""
+def model_spec_for(entry: ModelEntry, catalog: Iterable[ModelEntry] = (), models_root: Path | None = None) -> ModelSpec:
+    """Translate a catalog entry into the backend's ModelSpec (``models_root`` lets the FLUX
+    eraser run on whichever FLUX.1 Fill is installed)."""
     if not entry.runnable:
         raise CatalogError(f"model '{entry.id}' is not a runnable model")
     names = {f.role: f.loader_name for f in entry.files}
@@ -833,7 +852,10 @@ def model_spec_for(entry: ModelEntry, catalog: Iterable[ModelEntry] = ()) -> Mod
     spec.lora = names.get("lora", "")
     if entry.template == "flux_eraser":
         # The LoRA runs on the FLUX.1 Fill entry it requires: its UNet, text encoders and VAE.
-        base = model_spec_for(by_id(list(catalog), entry.requires_models[0]), catalog)
+        catalog = list(catalog)
+        dep = entry.requires_models[0]
+        base_entry = installed_stand_in(entry, dep, catalog, models_root) or by_id(catalog, dep)
+        base = model_spec_for(base_entry, catalog)
         spec.unet, spec.clip1, spec.clip2, spec.vae = base.unet, base.clip1, base.clip2, base.vae
     if entry.template == "sdxl_fooocus":
         for dep in entry.requires_models:

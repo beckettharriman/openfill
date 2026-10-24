@@ -258,7 +258,7 @@
     },
     {
       "id": "flux1-fill-object-removal-lora",
-      "name": "FLUX.1 Fill object removal LoRA v1 (on FLUX.1 Fill GGUF Q4_0) - object removal",
+      "name": "FLUX.1 Fill object removal LoRA v1 (on FLUX.1 Fill) - object removal",
       "tier": "removal",
       "capabilities": ["remove"],
       "arch": "flux",
