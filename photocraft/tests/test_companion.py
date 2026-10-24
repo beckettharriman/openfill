@@ -216,11 +216,28 @@ class FakePhotoCraft:
         if command in self.EDITS:  # what each history step started from, for history.deleteState
             edited = self.docs[params["document"]] if command == "layer.copyToDocument" else doc
             edited.setdefault("before", {})[len(edited["history"])] = json.loads(json.dumps(edited["layers"]))
+            edited.setdefault("sizes", {})[len(edited["history"])] = edited["size"]
         if command == "history.deleteState":
             doc["layers"] = doc["before"][params["state"]]
+            doc["size"] = doc.setdefault("sizes", {}).get(params["state"], doc["size"])
             del doc["history"][params["state"] :]
             doc["revision"] += 1
             return {"states": len(doc["history"])}
+        if command == "history.newSnapshot":
+            snaps = doc.setdefault("snapshots", {})
+            snaps[len(snaps) + 1] = (params["name"], json.loads(json.dumps(doc["layers"])), doc["size"])
+            return {"snapshot": len(snaps), "name": params["name"]}
+        if command == "history.selectSnapshot":
+            name, saved, size = doc["snapshots"][params["snapshot"]]
+            doc.setdefault("before", {})[len(doc["history"])] = json.loads(json.dumps(doc["layers"]))
+            doc.setdefault("sizes", {})[len(doc["history"])] = doc["size"]
+            doc["layers"], doc["size"] = json.loads(json.dumps(saved)), size
+            doc["history"].append(name)
+            doc["revision"] += 1
+            return {"snapshot": params["snapshot"], "name": name}
+        if command == "history.deleteSnapshot":
+            del doc["snapshots"][params["snapshot"]]
+            return {}
         if command == "document.inspect":
             return {
                 "width": doc["size"][0],
@@ -389,6 +406,7 @@ class BridgeTests(unittest.TestCase):
         from openfill_photocraft.service import JobState, Service
 
         def fill():
+            base = self.bridge.history(self.image)
             self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
             layers = self.bridge.insert_results(
                 self.image,
@@ -403,7 +421,8 @@ class BridgeTests(unittest.TestCase):
             service.bridge, service.client, service.image, service.layers = self.bridge, self.pc, self.image, layers
             service.state = JobState()
             service.app = SimpleNamespace(log=SimpleNamespace(warning=lambda *a: None))
-            service._result_history = service._expected_history = self.bridge.history(self.image)
+            service._collapsed = False
+            service._one_step(self.image, base)
             return service, layers
 
         service, _layers = fill()
@@ -429,6 +448,43 @@ class BridgeTests(unittest.TestCase):
         service.keep("selected")
         self.assertEqual(self.target["history"][:3], ["Open", "Duplicate Layer", "Layer Properties"])
         self.assertEqual(len(self.target["layers"][0]["children"]), 1)
+
+    def test_an_expand_is_one_step_and_keep_leaves_it_one(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.service import JobState, Service
+
+        service = Service.__new__(Service)
+        service.bridge, service.client, service.image = self.bridge, self.pc, self.image
+        service.state = JobState(title="Generative Expand")
+        service.app = SimpleNamespace(log=SimpleNamespace(warning=lambda *a: None))
+        service._collapsed = False
+        base = self.bridge.history(self.image)
+        self.bridge.resize_canvas(self.image, 84, 48, 10, 0)  # round 1: crop, then its layer
+        self.bridge.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
+        self.bridge.resize_canvas(self.image, 104, 48, 10, 0)  # round 2: crop, then two variations
+        layers = self.bridge.insert_results(
+            self.image,
+            [png_bytes("red", (104, 48)), png_bytes("blue", (104, 48))],
+            Rect(0, 0, 104, 48),
+            "E",
+            0.0,
+            None,
+            False,
+        )
+        self.bridge.finish(self.image)
+        self.assertGreater(len(self.target["history"]), 2)
+        service._one_step(self.image, base)
+        self.assertEqual(self.target["history"], ["Open", "Generative Expand"])
+        self.assertEqual(self.target["size"], (104, 48))
+        service.layers = layers
+        service.show_variation(1)
+        service.keep("selected")
+        self.assertEqual(self.target["history"], ["Open", "Generative Expand"])
+        self.assertEqual(self.target["size"], (104, 48))  # the canvas stays
+        self.assertEqual(len(self.target["layers"][0]["children"]), 1)
+        self.pc.run("history.deleteState", state=1)  # one Undo takes the whole expand back
+        self.assertEqual((self.target["size"], len(self.target["layers"])), ((64, 48), 1))
 
     def test_explicit_mask_is_feathered_in_python(self):
         mask = bytes(255 if y > 24 else 0 for y in range(48) for _ in range(64))

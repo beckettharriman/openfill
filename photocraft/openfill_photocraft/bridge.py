@@ -577,6 +577,22 @@ class PhotoCraftBridge:
         self.client.run("history.deleteState", state=int(state))
         image._snapshot = None
 
+    def collapse(self, image: PCImage, since: int, name: str) -> None:
+        """Make history steps ``since``.. one step named ``name``: a snapshot of the document as
+        it is, the steps taken back, and the snapshot selected (PhotoCraft adds that as one
+        step). The snapshot itself is deleted afterwards (the document does not change)."""
+        self.activate(image)
+        snap = (self.client.run("history.newSnapshot", name=name, **{"from": "fullDocument"}) or {})["snapshot"]
+        self.client.run("history.deleteState", state=int(since))
+        try:
+            self.client.run("history.selectSnapshot", snapshot=snap)
+        except ControlError:
+            # Once more; if that fails too the snapshot stays in the History panel, so the
+            # result can still be brought back by hand.
+            self.client.run("history.selectSnapshot", snapshot=snap)
+        self.client.run("history.deleteSnapshot", snapshot=snap)
+        image._snapshot = None
+
     def put_back(self, image: PCImage, layer: PCLayer, name: str) -> None:
         """Add one result layer again, on its own and visible: one step."""
         layer.id, layer.group, layer.visible, layer.name = None, None, True, name

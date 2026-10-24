@@ -135,11 +135,12 @@ class Service:
         self._warm: threading.Thread | None = None
         self.image: PCImage | None = None
         self.layers: list[PCLayer] = []
-        # The document's history right after the last result went in, and as the picker left it:
-        # while it is still that, Keep and Discard can take the result step back and leave one
+        # The document's history before the last job, and as the job and the picker left it:
+        # while it is still that, Keep and Discard can take the result back and leave one
         # clean step (Keep) or none (Discard) instead of piling deletes on top.
-        self._result_history: list[str] = []
+        self._job_base: list[str] = []
         self._expected_history: list[str] = []
+        self._collapsed = False  # the job's several steps were made into one (an expand)
 
     def _find_comfy(self) -> None:
         """First start: use the ComfyUI OpenFill for GIMP uses, or one already on this computer."""
@@ -278,8 +279,11 @@ class Service:
             image = self.bridge.active_image() if kind != "txt2img" or p.get("target") == "layer" else None
             if kind != "txt2img" and image is None:
                 raise RuntimeError("Open an image in PhotoCraft first.")
+            self._job_base, self._expected_history, self._collapsed = [], [], False
+            base: list[str] | None = None
             if image is not None:
                 self.bridge.track(image)
+                base = self.bridge.history(image)
             self.image = image
             seed = int(p.get("seed", -1))
             variations = int(p.get("variations", 1))
@@ -330,14 +334,8 @@ class Service:
                 with self.state.lock:
                     self.state.text = "Adding the result to PhotoCraft..."
                 self.bridge.finish(image)  # the results reach the document here, in one step
+                self._one_step(image, base)
             self.layers = list(layers or [])
-            self._result_history = []
-            if image is not None and self.layers:
-                try:
-                    self._result_history = self.bridge.history(image)
-                except ControlError:
-                    pass
-            self._expected_history = list(self._result_history)
             with self.state.lock:
                 self.state.state = "done"
                 self.state.fraction = 1.0
@@ -440,18 +438,44 @@ class Service:
         with self.state.lock:
             self.state.shown = index
 
+    def _one_step(self, image: PCImage, base: list[str] | None) -> None:
+        """After a job: when it left several history steps (an expand crops the canvas, then adds
+        its layers, once per round), make them one step named after the job, so one Undo takes
+        it all back. Remembers the history for Keep and Discard."""
+        try:
+            after = self.bridge.history(image)
+            if base is None or after[: len(base)] != base or len(after) == len(base):
+                return
+            if len(after) - len(base) > 1:
+                self.bridge.collapse(image, len(base), self.state.title or "OpenFill")
+                self._collapsed = True
+                after = self.bridge.history(image)
+            self._job_base, self._expected_history = base, after
+        except ControlError as err:
+            self.app.log.warning("the job's steps were not made one: %s", err)
+
     def keep(self, which: str) -> None:
         """'selected': delete the hidden variations; 'all': keep them (hidden); 'none': delete all."""
         if not self.image or not self.layers:
             return
         shown = self.state.shown
-        if which != "all" and self._take_back_result():
-            if which == "selected":
-                chosen = self.layers[shown]
-                self.bridge.put_back(self.image, chosen, re.sub(r" \(\d+\)$", "", chosen.name))
-                self.layers = [chosen]
-            else:
+        if which != "all" and self._unchanged_since_job():
+            image, base = self.image, self._job_base
+            self._job_base = []
+            if which == "none":
+                self.bridge.rewind(image, len(base))  # as if the job had not run: no step
                 self.layers = []
+            elif not self._collapsed:
+                chosen = self.layers[shown]
+                self.bridge.rewind(image, len(base))
+                self.bridge.put_back(image, chosen, re.sub(r" \(\d+\)$", "", chosen.name))
+                self.layers = [chosen]
+            else:  # an expand: its canvas stays; the hidden variations go, still one step
+                for i, layer in enumerate(self.layers):
+                    if i != shown and layer.id is not None:
+                        self.client.run("layer.delete", layer=layer.id)
+                self.bridge.collapse(image, len(base), self.state.title or "OpenFill")
+                self.layers = [self.layers[shown]]
             with self.state.lock:
                 self.state.variations = []
             return
@@ -473,21 +497,14 @@ class Service:
         with self.state.lock:
             self.state.variations = []
 
-    def _take_back_result(self) -> bool:
-        """Undo the last result's step (and the picker's visibility steps after it) when the
-        document's history is still exactly as OpenFill left it. False when anything else
-        changed since: then nothing is taken back."""
-        base = self._result_history
-        self._result_history = []
-        if not base or self.image is None:
+    def _unchanged_since_job(self) -> bool:
+        """True when the document's history is still exactly as the last job and the picker
+        left it (nothing else was done since), so the job's step can be taken back."""
+        if not self._job_base or self.image is None:
             return False
         try:
-            if self.bridge.history(self.image) != self._expected_history:
-                return False
-            self.bridge.rewind(self.image, len(base) - 1)
-            return True
-        except ControlError as err:
-            self.app.log.warning("keep: the result step was not taken back: %s", err)
+            return self.bridge.history(self.image) == self._expected_history
+        except ControlError:
             return False
 
 
