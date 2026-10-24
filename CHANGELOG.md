@@ -15,9 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - RORem (Apache-2.0, 6.9 GB): an SDXL inpainting model trained to remove
     objects (CVPR 2025). It runs on ComfyUI's own nodes, needs about 8 GB of
     graphics memory, and works a large selection in tiles at full resolution.
-  - FLUX.1 Fill object removal LoRA v1 (0.3 GB, on top of FLUX.1 Fill GGUF
-    Q4_0): the LoRA is MIT, but FLUX.1 Fill dev is non-commercial, so this is
-    for non-commercial use only. Slow on 8 GB, like FLUX Fill itself.
+  - FLUX.1 Fill object removal LoRA v1 (0.3 GB, on top of FLUX.1 Fill): the
+    LoRA is MIT, but FLUX.1 Fill dev is non-commercial, so this is for
+    non-commercial use only. It runs on whichever FLUX.1 Fill you have (the Q4
+    or Q6 GGUF, the full model, or your own file); with none, Download adds the
+    Q4 GGUF. Slow on 8 GB, like FLUX Fill itself.
 
 ### Changed
 
@@ -50,6 +52,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - License: Apache-2.0 (was GPL-3.0-or-later). OpenFill started as a port of
   Stable Boy by Torben Giesselmann; none of its code remains, and the README
   keeps the credit.
+- A removal's layer is called Object Removal, whichever model made it. With an
+  eraser it was named after the eraser's own trigger words ("Generative Fill:
+  4K, high quality, masterpiece..."), and a fill model used to remove was
+  named after OpenFill's background prompt.
+- ComfyUI is also looked for in `~/AI/ComfyUI`.
+
+### Fixed
+
+- A busy ComfyUI that did not answer one status request for a moment (seen on
+  Windows right after a fill finished) failed the job with "The AI backend is
+  not available". While waiting for a result, a server that gives no answer
+  at all now counts as "not done yet" for up to 90 seconds.
 
 ## [2.0.0-beta.3] - 2026-10-21
 
