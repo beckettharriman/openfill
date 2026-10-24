@@ -17,13 +17,15 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any
 
-from openfill.app import App
+from openfill.app import App, NothingSelected
 from openfill.backend import GenerationCancelled, describe_error
 from openfill.progress import parse_preview_frame
 from openfill.supervisor import process_name
 
 from .bridge import PCImage, PCLayer, PhotoCraftBridge
 from .control import ControlClient, ControlError
+
+NO_SELECTION = "Select an area first: Marquee, Lasso or Object Selection. Select > All works on the whole image."
 
 
 @dataclass
@@ -347,7 +349,12 @@ class Service:
             self.app.log.warning("job %s failed: %s\n%s", kind, err, traceback.format_exc())
             with self.state.lock:
                 self.state.state = "cancelled" if cancelled else "error"
-                self.state.message = "Cancelled - the image was left unchanged." if cancelled else describe_error(err)
+                if cancelled:
+                    self.state.message = "Cancelled - the image was left unchanged."
+                elif isinstance(err, NothingSelected):  # the core's message names GIMP's tools
+                    self.state.message = NO_SELECTION
+                else:
+                    self.state.message = describe_error(err)
         finally:
             if image is not None:
                 self.bridge.discard(image)  # whatever did not reach the document is dropped
