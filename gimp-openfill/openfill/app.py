@@ -824,7 +824,9 @@ class App:
             full_grow=mp.grow_image,
             full_blur=min(mp.grow_image, mp.feather_image),
         )
-        title = "Object Removal" if model.prompt_free else "Generative Fill"
+        title = "Object Removal" if remove or model.prompt_free or model.eraser else "Generative Fill"
+        # A removal's prompt is OpenFill's own (an eraser's trigger words, or "background"): not in the name.
+        name = _layer_name(title, "" if removal_intent else prompt)
         runner = self.runner_cls(
             self, title, model_display_name(entry.name) if entry else model.checkpoint, interactive=self.interactive
         )
@@ -841,7 +843,7 @@ class App:
                 image,
                 result.images,
                 ctx,
-                _layer_name(title, prompt),
+                name,
                 float(mp.feather_image),
                 self.paths.temp,
                 grow=layer_grow,
@@ -854,7 +856,9 @@ class App:
         if self.settings.grain_match and not model.prompt_free:
             self._match_grain(image, layers, ctx, image_rgba, mask_raw, result.seed)
         if len(layers) > 1 and self.settings.rank_variations:
-            layers = self._rank_variations(image, layers, ctx, image_rgba, mask_raw, removal_intent, title, prompt)
+            layers = self._rank_variations(
+                image, layers, ctx, image_rgba, mask_raw, removal_intent, title, "" if removal_intent else prompt
+            )
         runner.done(f"Added layer: {layers[0].get_name()}" if layers else "Done")
         self.log.info("fill: done, seed=%s, %d layer(s)", result.seed, len(layers))
         return layers
