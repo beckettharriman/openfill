@@ -137,6 +137,7 @@ class Service:
         self._warm: threading.Thread | None = None
         self.image: PCImage | None = None
         self.layers: list[PCLayer] = []
+        self.setup_task = ""  # the ComfyUI download this companion queued
         # The document's history before the last job, and as the job and the picker left it:
         # while it is still that, Keep and Discard can take the result back and leave one
         # clean step (Keep) or none (Discard) instead of piling deletes on top.
@@ -383,6 +384,65 @@ class Service:
             image.pending_group = "Object Removal"
         return layers
 
+    # ComfyUI ----------------------------------------------------------------------------
+
+    def comfy_preflight(self) -> dict[str, Any]:
+        """What a ComfyUI download would be (Windows): its size, where it goes, and the checks
+        (disk space, graphics card). ``blocked`` when it cannot run."""
+        from openfill import comfy_setup
+
+        install_dir = comfy_setup.default_install_dir()
+        manifest, pre = self.app.setup_preflight(install_dir)
+        size = comfy_setup.download_notice(manifest.for_older_gpus() if pre.older_gpu else manifest)
+        return {
+            "folder": str(install_dir),
+            "size": size,
+            "blocked": pre.blocked,
+            "cpu": pre.needs_cpu_choice,
+            "older_gpu": pre.older_gpu,
+            "text": pre.text(),
+        }
+
+    def setup_comfy(self) -> str:
+        """Download and install ComfyUI's portable build (the version OpenFill for GIMP
+        installs, checked against its SHA-256) as a background task. The supervisor saves the
+        folder in the settings when it is done (see ``setup_progress``)."""
+        from openfill import comfy_setup
+
+        pre = self.comfy_preflight()
+        if pre["blocked"]:
+            raise RuntimeError(pre["text"] or "ComfyUI cannot be installed here.")
+        self.setup_task = self.app.queue_comfy_setup(
+            comfy_setup.default_install_dir(), bool(pre["cpu"]), bool(pre["older_gpu"])
+        )
+        return self.setup_task
+
+    def setup_progress(self) -> dict[str, Any] | None:
+        """The ComfyUI download while it runs ({fraction, text}), its error when it failed, or
+        None. When it has finished, the new folder is taken into use here."""
+        from openfill import comfy_setup
+
+        status = self.app.task_status()
+        current = status.get("current") or {}
+        if current.get("type") == "setup_comfy":
+            state = str(current.get("state") or "")
+            done, total = int(current.get("done") or 0), int(current.get("total") or 0)
+            fraction = float(current.get("fraction") or comfy_setup.overall_fraction(state, done, total))
+            return {"fraction": fraction, "text": setup_step_text(state, done, total)}
+        task = getattr(self, "setup_task", "")
+        if not task:
+            return None
+        last = next((h for h in status.get("history") or [] if h.get("task_id") == task), None)
+        if last is None:
+            return {"fraction": 0.0, "text": "Getting ready..."}
+        self.setup_task = ""
+        if last.get("state") != "done":
+            return {"error": str(last.get("message") or last.get("state") or "the download stopped")}
+        self.app.reload_settings()
+        self.rescan_models()
+        self.warm_up()
+        return None
+
     # models -----------------------------------------------------------------------------
 
     def uninstall(self, model_id: str) -> str:
@@ -513,6 +573,25 @@ class Service:
             return self.bridge.history(self.image) == self._expected_history
         except ControlError:
             return False
+
+
+SETUP_STEPS = {
+    "verifying": "Checking the download...",
+    "unpacking": "Unpacking ComfyUI (a few minutes)...",
+    "nodes": "Installing the inpaint nodes...",
+    "packages": "Installing packages...",
+}
+
+
+def setup_step_text(state: str, done: int, total: int) -> str:
+    """What the ComfyUI download is doing, for the panel."""
+    from openfill import catalog as cat
+
+    if state == "downloading":
+        return f"Downloading ComfyUI: {cat.human_size(done)} of {cat.human_size(total)}"
+    if state == "unpacking" and total:
+        return f"Unpacking ComfyUI: {cat.human_size(done)} of about {cat.human_size(total)}"
+    return SETUP_STEPS.get(state, "Getting ready...")
 
 
 def gimp_comfy_dirs() -> list[str]:

@@ -60,6 +60,7 @@ class Api:
             "activeModel": app.active_model_id(),
             "comfyReady": _comfy_set(app),
             "comfyProblem": "" if _comfy_set(app) else _comfy_problem(app),
+            "setup": None if _comfy_set(app) else self.service.setup_progress(),
             "pick": self._pick,
         }
 
@@ -150,6 +151,8 @@ class Api:
             app.settings.save(app.paths.config)
             app.reload_settings()
             return self.settings()
+        if path == "/api/comfy/setup":
+            return {"task": svc.setup_comfy()}
         if path == "/api/backend/check":
             health = app.check_backend()
             return {"ok": health.ok, "detail": health.detail, "device": getattr(health, "device", "")}

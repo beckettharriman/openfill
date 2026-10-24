@@ -960,6 +960,33 @@ class ServiceModelTests(unittest.TestCase):
             self.assertEqual(service.app.settings.active_model, "")
 
 
+class ServiceSetupTests(unittest.TestCase):
+    """The ComfyUI download (Windows first run) as the panel follows it."""
+
+    def test_progress_then_the_folder_is_taken_into_use(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.service import Service
+
+        status = {"current": {"type": "setup_comfy", "state": "downloading", "done": 2**30, "total": 2**31}}
+        calls = []
+        service = Service.__new__(Service)
+        service.app = SimpleNamespace(task_status=lambda: status, reload_settings=lambda: calls.append("reload"))
+        service.rescan_models = lambda: calls.append("rescan")
+        service.warm_up = lambda: calls.append("warm")
+        service.setup_task = "t1"
+        step = service.setup_progress()
+        self.assertEqual(step["text"], "Downloading ComfyUI: 1.0 GB of 2.0 GB")
+        self.assertGreater(step["fraction"], 0)
+        status = {"current": None, "history": [{"task_id": "t1", "state": "done"}]}
+        self.assertIsNone(service.setup_progress())
+        self.assertEqual(calls, ["reload", "rescan", "warm"])
+        self.assertEqual(service.setup_task, "")
+        service.setup_task = "t2"
+        status = {"current": None, "history": [{"task_id": "t2", "state": "error", "message": "no network"}]}
+        self.assertEqual(service.setup_progress(), {"error": "no network"})
+
+
 class PageTests(unittest.TestCase):
     def test_key_is_required(self):
         from openfill_photocraft import web

@@ -156,6 +156,7 @@ class Refresher:
         self.facts: dict[str, Any] = self._load_cache()
         self._hardware: str | None = self.facts.get("hardware") or None
         self._saved = ""
+        self._preflight: dict[str, Any] | None = None  # what a ComfyUI download would be (Windows)
         self.lock = threading.Lock()
         self.wake = threading.Event()
         threading.Thread(target=self._loop, name="openfill-bar-refresh", daemon=True).start()
@@ -218,6 +219,16 @@ class Refresher:
             "comfy_problem": "" if comfy_ok else comfy_problem(app.settings.comfy_dir),
         }
         if not comfy_ok:
+            if sys.platform == "win32":
+                try:
+                    facts["setup"] = self.service.setup_progress()
+                    if facts["setup"] is None and comfy_layout(app.settings.comfy_dir) is not None:
+                        return self.look()  # the download just finished: ComfyUI is there now
+                    if self._preflight is None:
+                        self._preflight = self.service.comfy_preflight()
+                    facts["preflight"] = self._preflight
+                except Exception as err:  # noqa: BLE001 - the card offers the folder choice anyway
+                    facts["setup"] = {"error": str(err)}
             return facts
         rows = app.model_rows(None)
         status = app.task_status()
@@ -1184,6 +1195,19 @@ class Bar:
         self._say("ComfyUI found. It is starting in the background.", OK)
         self.refresher.wake.set()
 
+    def download_comfy(self) -> None:
+        """Download and install ComfyUI in the background (Windows); the setup card shows it."""
+
+        def work() -> None:
+            try:
+                self.service.setup_comfy()
+                self.call_soon(self._say, "Downloading ComfyUI. You can keep working in PhotoCraft.", OK)
+            except Exception as err:  # noqa: BLE001 - shown on the panel
+                self.call_soon(self._say, str(err), BAD)
+            self.refresher.wake.set()
+
+        threading.Thread(target=work, name="openfill-setup", daemon=True).start()
+
     def _comfy_help(self) -> None:
         webbrowser.open("https://github.com/beckettharriman/gimp-openfill#install")
 
@@ -1333,13 +1357,47 @@ class Bar:
     def _update_setup(self, facts: dict[str, Any]) -> None:
         """The setup card: ComfyUI not found, a download running, or no models yet."""
         key: tuple = ()
-        if facts and not facts.get("comfy_ok", True):
+        setup = facts.get("setup") or {}
+        pre = facts.get("preflight") or {}
+        if facts and not facts.get("comfy_ok", True) and setup and "error" not in setup:
+            key = (
+                "setup",
+                "download",
+                ACCENT,
+                "Setting up ComfyUI",
+                "It downloads and unpacks in the background, which takes a few minutes. You can keep working.",
+                (),
+            )
+        elif facts and not facts.get("comfy_ok", True) and pre and not pre.get("blocked"):
+            line = (
+                f"OpenFill runs on ComfyUI. Download it ({pre['size']}, into {pre['folder']}), "
+                "or choose the folder of one you have."
+            )
+            if pre.get("cpu"):
+                line += " No NVIDIA graphics card was found: it would run on the processor, which is very slow."
+            if setup.get("error"):
+                line = f"The download stopped: {setup['error']} " + line
             key = (
                 "comfy",
                 "warn",
                 WARN,
                 "AI engine not found",
-                "OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it.",
+                line,
+                (
+                    ("Download ComfyUI", "accent", self.download_comfy),
+                    ("Choose folder", "secondary", self.choose_comfy),
+                ),
+            )
+        elif facts and not facts.get("comfy_ok", True):
+            line = "OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it."
+            if pre.get("blocked") and pre.get("text"):
+                line = pre["text"] + " " + line
+            key = (
+                "comfy",
+                "warn",
+                WARN,
+                "AI engine not found",
+                line,
                 (("Choose folder", "accent", self.choose_comfy), ("How to install", "secondary", self._comfy_help)),
             )
         elif facts.get("download"):
@@ -1358,8 +1416,8 @@ class Bar:
         if shown_key != self._setup_key:
             self._setup_key = shown_key
             self._build_setup(key)
-        if key and key[0] == "download":
-            fraction = facts["download"]["fraction"]
+        if key and key[0] in ("download", "setup"):
+            fraction = (facts["download"] if key[0] == "download" else setup)["fraction"]
             self.setup_percent.configure(text=f"{int(fraction * 100)}%")
             self.setup_bar.set(fraction)
         was = self._shown.get("setup")
@@ -1381,7 +1439,7 @@ class Bar:
         ui.text(head, title, f.bold, bg=PANEL).pack(side="left", padx=(8, 0))
         self.setup_percent = ui.small(head, "", bg=PANEL, wrap=0)
         self.setup_percent.pack(side="right")
-        if kind == "download":
+        if kind in ("download", "setup"):
             self.setup_bar = ui.Progress(inner, CW - 24)
             self.setup_bar.pack(fill="x", pady=(8, 0))
         ui.small(inner, line, bg=PANEL, wrap=CW - 24).pack(fill="x", pady=(8, 0))
