@@ -36,7 +36,7 @@ The bar stays on top of PhotoCraft. Drag it by its header; the arrow at the top 
 | Mode | What it does |
 |---|---|
 | Fill | Fills the selection from your prompt, or from the surroundings with no prompt. Up to 5 variations. |
-| Remove | Erases what you selected and continues the background. |
+| Remove | Erases what you selected and continues the background. LaMa does it at the image's own resolution; the Model menu offers every installed model that can remove. |
 | Expand | Grows the canvas to +25% or an aspect ratio (1:1, 4:3, 3:2, 16:9, 9:16) and paints the new edges. |
 | Create | Text to Image as a new image or a layer in this one (square, landscape or portrait). |
 

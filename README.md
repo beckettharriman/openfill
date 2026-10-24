@@ -41,7 +41,7 @@ The network comes into it twice: when the Models tab searches Hugging Face and C
 | | |
 |:---:|:---:|
 | <a href="docs/screenshots/fill-dialog.png"><img src="docs/screenshots/fill-dialog.png" height="250" alt="Generative Fill"></a> | <a href="docs/screenshots/fill-dialog-remove.png"><img src="docs/screenshots/fill-dialog-remove.png" height="250" alt="Remove object"></a> |
-| **Generative Fill.** Prompt, Recent prompts, what to avoid, the model and the number of variations are all on the first screen. Change amount and seed sit under Advanced. | **Remove object.** Same dialog, other tab. Nothing to type: it uses an installed removal model (LaMa or MAT) when there is one. |
+| **Generative Fill.** Prompt, Recent prompts, what to avoid, the model and the number of variations are all on the first screen. Change amount and seed sit under Advanced. | **Remove object.** Same dialog, other tab. Nothing to type: LaMa erases it at the image's own resolution. Pick another model to use that one instead. |
 | <a href="docs/screenshots/expand-dialog.png"><img src="docs/screenshots/expand-dialog.png" height="400" alt="Generative Expand"></a> | <a href="docs/screenshots/progress-window.png"><img src="docs/screenshots/progress-window.png" height="400" alt="Progress"></a> |
 | **Generative Expand.** Drag any edge of the thumbnail outward, or pick a ratio (1:1, 4:5, 3:2, 16:9 and the rest) and where the image sits on a 3x3 grid. It shows the new size as you drag. | **Progress.** Floats over your image without stealing focus: the step, time left, a live preview of the picture forming, and Cancel. |
 | <a href="docs/screenshots/settings-models.png"><img src="docs/screenshots/settings-models.png" height="290" alt="Models"></a> | <a href="docs/screenshots/variations-picker.png"><img src="docs/screenshots/tiles/variations-picker.png" height="290" alt="Variations"></a> |
@@ -53,7 +53,7 @@ OpenFill doesn't ship a model. On first run it opens the download manager, where
 
 | Job | Default model | Graphics memory | Time |
 |---|---|---|---|
-| Remove object | LaMa (MAT also available) | 2 GB | about 3 s |
+| Remove object | LaMa at full resolution (MAT, RORem and the FLUX Fill removal LoRA also available) | 2 GB | a few seconds |
 | Fast fill | DreamShaper 8 Inpainting | 4 GB | about 9 s |
 | Quality fill | RealVisXL V5 with the Fooocus inpaint patch | 8 GB | about 21 s |
 | Generative Expand | SD 1.5 Inpainting, then DreamShaper 8 | 4 GB | |
@@ -171,7 +171,7 @@ Works end to end on Windows, on Linux (GIMP 3.2.6, including the Flatpak) and on
 Where the models still fall short:
 
 - **SD 1.5 often ignores the prompt** on flat areas and small selections. Pick an SDXL model in the dialog.
-- **Remove object struggles with very large holes.** LaMa smears and MAT invents shapes; both are fine on small objects.
+- **Remove object struggles with very large holes.** LaMa keeps the texture sharp now, but across a big hole it smears the shapes, and MAT invents them; both are fine on small objects. RORem and the FLUX Fill removal LoRA are in the Models tab to compare.
 - **Generative Expand gets weaker beyond 25% per side.** Expand in rounds; OpenFill also splits large expansions itself.
 - Fine textures like fabric come back softer in large fills.
 

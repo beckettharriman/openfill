@@ -7,8 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Two erase-trained models in the Models tab, to try against LaMa. Both are
+  in the Remove model menu once downloaded. I have not compared them on real
+  photos yet.
+  - RORem (Apache-2.0, 6.9 GB): an SDXL inpainting model trained to remove
+    objects (CVPR 2025). It runs on ComfyUI's own nodes, needs about 8 GB of
+    graphics memory, and works a large selection in tiles at full resolution.
+  - FLUX.1 Fill object removal LoRA v1 (0.3 GB, on top of FLUX.1 Fill GGUF
+    Q4_0): the LoRA is MIT, but FLUX.1 Fill dev is non-commercial, so this is
+    for non-commercial use only. Slow on 8 GB, like FLUX Fill itself.
+
 ### Changed
 
+- Remove object works at the image's own resolution. The node that ran LaMa
+  squeezed every area into a 256 px square, so on a large photo the result
+  came back soft: a 3150 x 1800 px selection on a 4344 x 3258 px image was
+  cleared at 512 x 384 px and stretched back up. OpenFill now comes with its
+  own small ComfyUI node that runs LaMa on the selection and its surroundings
+  at 1:1, padded to a multiple of 8, in one pass when it fits the graphics
+  memory. When it doesn't, it works in a few large overlapping windows at 1:1
+  and blends them; only a hole too wide for that is done once at the largest
+  size that fits (about two thirds of full size for that whole-car selection
+  on an 8 GB card, where it used to be about an eighth). On an RTX 4070 Laptop
+  GPU a 1300 x 1360 px area took one full-size pass in about 5 s and 1.6 GB of
+  graphics memory. The node goes into ComfyUI's custom_nodes folder as
+  openfill-nodes whenever OpenFill starts ComfyUI, and the Models tab offers
+  Install nodes for LaMa if it is missing. Half precision is not used: LaMa
+  returns a flat patch in fp16. MAT is fixed at 512 px and works as before.
+- Any model can remove. The model you pick for Remove object is used as
+  picked: LaMa stays the default, and MAT, the erasers and every fill model
+  (FLUX and Qwen too) are offered. A fill model gets a background-only prompt.
+  Fill lists the removal models as well; with an empty prompt they remove.
+- The Models list says what each model can run, for example "Fill, expand,
+  create, remove" or "Remove (erase-trained)", next to its size.
+- PhotoCraft: Remove no longer runs LaMa and then a generation model over its
+  result. With LaMa at full resolution that second pass isn't needed, and it
+  took minutes. The Remove menu keeps the model choice: LaMa (default), MAT,
+  the erasers and each generation model, used as picked. Picking a removal
+  model in Fill uses it for that run without making it the active model.
 - License: Apache-2.0 (was GPL-3.0-or-later). OpenFill started as a port of
   Stable Boy by Torben Giesselmann; none of its code remains, and the README
   keeps the credit.
