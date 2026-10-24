@@ -343,48 +343,20 @@ class Service:
             with self.state.lock:
                 self.state.finished = time.time()
 
-    REFINE_STRENGTH = 0.6  # how much the second pass may change LaMa's result
+    # Remove values of older menus (saved in the panel's settings): LaMa or MAT alone, and the
+    # two-pass "LaMa + a generation model", which LaMa at full resolution replaced.
+    OLD_REMOVALS = {"lama": "lama-big", "mat": "mat-places512"}
 
     def _remove(self, image: PCImage, p: dict[str, Any], seed: int, variations: int) -> list:
-        """Remove object. ``removal`` picks how:
-
-        - "lama" / "mat": the prompt-free model alone (fast; soft on large areas, since it
-          works at about 512 px);
-        - "refine:<model>" (the default, with the active generation model): LaMa clears the
-          object, then the generation model repaints the area at its own resolution over
-          LaMa's result with a background-only prompt at partial strength, so it keeps LaMa's
-          clean structure and adds real detail. One layer, one step;
-        - "<model>": a generation model alone, asked for background only.
-        """
-        app = self.app
-        how = str(p.get("removal") or "refine:active")
-        removal_model = app.removal_model_available()
-        if how in ("lama", "mat") or (how.startswith("refine:") and removal_model is None):
-            if how.startswith("refine:"):
-                how = how.split(":", 1)[1]  # no LaMa/MAT installed: the generation model alone
-            else:
-                model_id = {"lama": "lama-big", "mat": "mat-places512"}[how]
-                return app.generative_fill(image, "", "", 1, 1.0, seed, model_id, remove=True)
-        if how.startswith("refine:"):
-            target = how.split(":", 1)[1]
-            with self.state.lock:
-                self.state.text = "Clearing the object (LaMa)..."
-            first = app.generative_fill(image, "", "", 1, 1.0, seed, removal_model.id, remove=True)
-            if not first:
-                return first
-            self.bridge.bake_pending(image)  # LaMa's result becomes what the second pass sees
-            with self.state.lock:
-                self.state.text = "Adding detail..."
-            prefill = app.settings.prefill
-            app.settings.prefill = False  # its pre-blur would wipe out LaMa's result
-            try:
-                layers = app.generative_fill(
-                    image, app.REMOVAL_PROMPT, app.REMOVAL_NEGATIVE, variations, self.REFINE_STRENGTH, seed, target
-                )
-            finally:
-                app.settings.prefill = prefill
-        else:
-            layers = app.generative_fill(image, app.REMOVAL_PROMPT, app.REMOVAL_NEGATIVE, variations, 1.0, seed, how)
+        """Remove object with ``removal``: "default" (LaMa at the image's own resolution,
+        else MAT, else the active model with a background prompt) or any installed model's
+        id, used as picked (erasers with their own prompt, generation models with a
+        background-only prompt). One layer, one step."""
+        how = str(p.get("removal") or "default")
+        if how.startswith("refine:") or how == "default":
+            how = "active"
+        how = self.OLD_REMOVALS.get(how, how)
+        layers = self.app.generative_fill(image, "", "", variations, 1.0, seed, how, remove=True)
         for index, layer in enumerate(layers):
             layer.name = "Object Removal" if len(layers) == 1 else f"Object Removal ({index + 1})"
         if image.pending_group:

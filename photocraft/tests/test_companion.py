@@ -406,17 +406,6 @@ class BridgeTests(unittest.TestCase):
         self.assertNotEqual(layer.id, old)
         self.assertNotIn(old, [r["id"] for r in self.target["layers"]])
 
-    def test_baked_results_are_read_by_the_next_pass_but_never_added(self):
-        self.bridge.export_region(self.image, Rect(0, 0, 64, 48))
-        self.bridge.insert_results(
-            self.image, [png_bytes("red")], Rect(0, 0, 64, 48), "Fill", 0.0, None, use_selection_mask=False
-        )
-        self.bridge.bake_pending(self.image)
-        _png, flat = self.bridge.export_region(self.image, Rect(0, 0, 4, 4))
-        self.assertEqual(flat[:3], bytes([255, 0, 0]))  # the next pass sees the baked pixels
-        self.bridge.finish(self.image)
-        self.assertEqual(self.target["history"], ["Open"])  # and nothing reached the document
-
     def test_resize_commits_first_and_is_an_extending_crop(self):
         self.bridge.insert_results(
             self.image, [png_bytes("red")], Rect(0, 0, 64, 48), "E", 0.0, None, use_selection_mask=False
@@ -557,26 +546,51 @@ class InstallTests(unittest.TestCase):
 
 
 class BarLogicTests(unittest.TestCase):
-    def test_removal_menu_puts_lama_plus_the_active_model_first(self):
+    FACTS = {
+        "active": "realvisxl-v5",
+        "models": {
+            "remove": [
+                ("lama-big", "LaMa (big-lama) - prompt-free object removal at full resolution"),
+                ("mat-places512", "MAT Places512 (fp16) - prompt-free object removal"),
+                ("rorem-sdxl", "RORem (SDXL inpainting, erase-trained) - object removal"),
+            ],
+            "fill": [
+                ("dreamshaper-8-inpainting", "DreamShaper 8 (SD 1.5)"),
+                ("realvisxl-v5", "RealVisXL V5.0 (fp16)"),
+                ("flux1-fill-dev-gguf-q4", "FLUX.1 Fill [dev] GGUF Q4_0 (+ T5 GGUF, CLIP-L, FLUX VAE)"),
+            ],
+        },
+    }
+
+    def test_removal_menu_defaults_to_lama_and_offers_every_installed_model(self):
         try:
             from openfill_photocraft.bar import removal_choices
         except ImportError:
             self.skipTest("no tkinter")
-        facts = {
-            "active": "realvisxl-v5",
-            "models": {
-                "remove": [("lama-big", "LaMa (big-lama)")],
-                "fill": [
-                    ("dreamshaper-8-inpainting", "DreamShaper 8 (SD 1.5)"),
-                    ("realvisxl-v5", "RealVisXL V5.0 (fp16)"),
-                ],
-            },
-        }
-        choices = removal_choices(facts)
-        self.assertEqual(next(iter(choices.items())), ("LaMa + RealVisXL V5.0 (best)", "refine:realvisxl-v5"))
-        self.assertEqual(choices["LaMa only (fast)"], "lama")
-        self.assertEqual(choices["DreamShaper 8 only"], "dreamshaper-8-inpainting")
-        self.assertNotIn("MAT only (fast)", choices)
+        choices = removal_choices(self.FACTS)
+        self.assertEqual(next(iter(choices.items())), ("LaMa (default)", "default"))
+        self.assertEqual(choices["MAT Places512"], "mat-places512")
+        self.assertEqual(choices["RORem"], "rorem-sdxl")
+        # generation models too, FLUX included: any model can remove when picked
+        self.assertEqual(choices["DreamShaper 8"], "dreamshaper-8-inpainting")
+        self.assertEqual(choices["FLUX.1 Fill [dev] GGUF Q4_0"], "flux1-fill-dev-gguf-q4")
+        self.assertEqual(list(choices.values())[3], "realvisxl-v5")  # the active one first among them
+        self.assertNotIn("refine:realvisxl-v5", choices.values())  # no two-pass Remove any more
+        only_painters = {"active": "", "models": {"fill": self.FACTS["models"]["fill"]}}
+        self.assertNotIn("default", removal_choices(only_painters).values())
+        self.assertEqual(removal_choices({}), {"The active model": "default"})
+
+    def test_fill_menu_also_offers_the_removal_models(self):
+        try:
+            from openfill_photocraft.bar import fill_choices
+        except ImportError:
+            self.skipTest("no tkinter")
+        choices = fill_choices(self.FACTS)
+        self.assertEqual(
+            list(choices.values())[:3], ["dreamshaper-8-inpainting", "realvisxl-v5", "flux1-fill-dev-gguf-q4"]
+        )
+        self.assertIn("rorem-sdxl", choices.values())
+        self.assertIn("lama-big", choices.values())
 
     def test_expand_margins(self):
         try:
@@ -613,8 +627,10 @@ class ModelInfoTests(unittest.TestCase):
         from openfill_photocraft.modelinfo import model_detail, needed_by
 
         row = {"capabilities": ["fill", "expand", "txt2img"], "size": "6.5 GB"}
-        self.assertEqual(model_detail(row), "Fill, expand, create · 6.5 GB")
+        self.assertEqual(model_detail(row), "Fill, expand, create, remove · 6.5 GB")  # any fill model can remove
         self.assertEqual(model_detail({"capabilities": ["remove"], "size": "196.1 MB"}), "Remove · 196.1 MB")
+        eraser = {"capabilities": ["remove"], "template": "sdxl_eraser", "size": "6.9 GB"}
+        self.assertEqual(model_detail(eraser), "Remove (erase-trained) · 6.9 GB")
         entries = [
             SimpleNamespace(id="realvisxl-v5", arch="sdxl", requires_models=("fooocus-inpaint-patch",)),
             SimpleNamespace(id="juggernaut-xl-v9", arch="sdxl", requires_models=("fooocus-inpaint-patch",)),
@@ -708,6 +724,40 @@ class LookTests(unittest.TestCase):
             )
         finally:
             root.destroy()
+
+
+class ServiceRemoveTests(unittest.TestCase):
+    """Remove object runs once, with the model picked (LaMa at full resolution by default)."""
+
+    def run_remove(self, removal):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.service import Service
+
+        calls = []
+
+        class App:
+            def generative_fill(self, image, prompt, negative, variations, strength, seed, model, remove=False):
+                calls.append((prompt, variations, strength, model, remove))
+                return [SimpleNamespace(name="x")]
+
+        stub = SimpleNamespace(app=App(), OLD_REMOVALS=Service.OLD_REMOVALS)
+        image = SimpleNamespace(pending_group="g")
+        layers = Service._remove(stub, image, {"removal": removal} if removal is not None else {}, 5, 2)
+        self.assertEqual(len(calls), 1)  # one pass, never LaMa then a second model
+        self.assertEqual(layers[0].name, "Object Removal")
+        self.assertEqual(image.pending_group, "Object Removal")
+        return calls[0]
+
+    def test_values(self):
+        self.assertEqual(self.run_remove(None), ("", 2, 1.0, "active", True))
+        self.assertEqual(self.run_remove("default")[3], "active")
+        self.assertEqual(self.run_remove("rorem-sdxl")[3], "rorem-sdxl")
+        self.assertEqual(self.run_remove("realvisxl-v5")[3], "realvisxl-v5")
+        # values saved by older menus
+        self.assertEqual(self.run_remove("lama")[3], "lama-big")
+        self.assertEqual(self.run_remove("mat")[3], "mat-places512")
+        self.assertEqual(self.run_remove("refine:realvisxl-v5")[3], "active")
 
 
 class ServiceModelTests(unittest.TestCase):

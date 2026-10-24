@@ -241,14 +241,14 @@ $("strength").oninput=()=>$("str-v").textContent=(+$("strength").value).toFixed(
 $("model").onchange=async()=>{const v=$("model").value;
   if(v==="__manage"){fillSelect();showGear("models");return}
   if(mode==="remove"){removal=v;return}
-  if(v&&v!==activeId){try{await post("/api/models/activate",{id:v});activeId=v}catch(e){say(e.message,"bad")}}};
+  if(v&&v!==activeId&&!removers().has(v)){try{await post("/api/models/activate",{id:v});activeId=v}catch(e){say(e.message,"bad")}}};
 function seedOf(){const v=$("seed").value.trim();return v===""?-1:parseInt(v)}
 function say(t,kind){note=t?{text:t,kind:kind||"bad",base:baseContext()[0]}:null;context()}
 async function start(kind,body){try{await post("/api/"+kind,body);lastSeq=-1;say("")}catch(e){say(e.message,"bad")}}
 $("go").onclick=()=>{if(busy)return;const prompt=$("prompt").value.trim(),model=$("model").value||"active";
   if(mode==="fill"||mode==="remove"){if(!sel){say(NO_SEL,"bad");return}
     const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:mode==="fill"?+$("strength").value:1,seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
-    if(mode==="remove"){b.removal=model;b.model="active";if(model==="lama"||model==="mat")b.variations=1}else b.model=model;
+    if(mode==="remove"){b.removal=model;b.model="active";if(["default",...PROMPT_FREE].includes(model))b.variations=1}else b.model=model;
     start("fill",b)}
   else if(mode==="expand"){const m=["left","top","right","bottom"].map(k=>+$("e-"+k).value);if(!m.some(Boolean)){say("Enter the pixels to add on each side, or pick a ratio.","bad");return}
     start("expand",{prompt,negative:"",left:m[0],top:m[1],right:m[2],bottom:m[3],variations,seed:-1,model})}
@@ -272,15 +272,21 @@ function baseContext(){if(!pc.connected)return["Waiting for PhotoCraft...","dim"
 function context(){let[t,k,i]=baseContext();if(note){if(note.base!==t)note=null;else{t=note.text;k=note.kind;i={bad:"error",ok:"check",warn:"warn"}[k]||"info"}}
   $("ctx-icon").innerHTML=svg(i,C[k],14);$("ctx-text").textContent=t;$("context").style.color=C[k]}
 
-function removalChoices(){const inst=models.filter(r=>r.installed&&r.runnable&&!(r.missing_models||[]).length&&!(r.missing_nodes||[]).length);
-  const removers=new Set(inst.filter(r=>(r.capabilities||[]).includes("remove")).map(r=>r.id));
-  const painters=inst.filter(r=>(r.capabilities||[]).includes("fill")&&!removers.has(r.id)).sort((a,b)=>(a.id!==activeId)-(b.id!==activeId));
-  const out=[];if(removers.size){painters.forEach((r,i)=>out.push([`LaMa + ${short(r.name)}`+(i?"":" (best)"),"refine:"+r.id]));
-    if(removers.has("lama-big"))out.push(["LaMa only (fast)","lama"]);if(removers.has("mat-places512"))out.push(["MAT only (fast)","mat"])}
-  painters.forEach(r=>out.push([`${short(r.name)} only`,r.id]));return out}
+// LaMa and MAT give the same result for the same input; the first one installed is Remove's default (full resolution).
+const PROMPT_FREE=["lama-big","mat-places512"];
+function usable(){return models.filter(r=>r.installed&&r.runnable&&!(r.missing_models||[]).length&&!(r.missing_nodes||[]).length)}
+function removers(){return new Set(usable().filter(r=>(r.capabilities||[]).includes("remove")).map(r=>r.id))}
+function removalChoices(){const inst=usable(),rem=inst.filter(r=>(r.capabilities||[]).includes("remove")),ids=new Set(rem.map(r=>r.id));
+  const painters=inst.filter(r=>(r.capabilities||[]).includes("fill")&&!ids.has(r.id)).sort((a,b)=>(a.id!==activeId)-(b.id!==activeId));
+  const def=PROMPT_FREE.find(m=>ids.has(m)),out=[];
+  if(def)out.push([`${short(rem.find(r=>r.id===def).name)} (default)`,"default"]);
+  rem.concat(painters).forEach(r=>{if(r.id!==def)out.push([short(r.name),r.id])});
+  return out}
 function fillSelect(){const s=$("model");let opts;
   if(mode==="remove")opts=removalChoices();
-  else opts=models.filter(r=>r.installed&&r.runnable&&!(r.missing_models||[]).length&&!(r.missing_nodes||[]).length&&(r.capabilities||[]).includes(mode)).map(r=>[r.name,r.id]);
+  else{const inst=usable();opts=inst.filter(r=>(r.capabilities||[]).includes(mode)).map(r=>[r.name,r.id]);
+    // Fill also offers the removal models: with an empty prompt they remove (LaMa and MAT ignore a prompt, erasers use their own)
+    if(mode==="fill")inst.filter(r=>(r.capabilities||[]).includes("remove")&&!(r.capabilities||[]).includes("fill")).forEach(r=>opts.push([r.name,r.id]))}
   const want=mode==="remove"?(opts.some(o=>o[1]===removal)?removal:(opts[0]||[])[1]):(opts.some(o=>o[1]===activeId)?activeId:(opts[0]||[])[1]);
   const key=JSON.stringify([opts,want]);if(s.dataset.key===key)return;s.dataset.key=key;
   s.innerHTML="";if(!opts.length){const o=document.createElement("option");o.value="";o.textContent=models.length||!comfy?"No models installed":"Checking...";s.appendChild(o)}
@@ -326,9 +332,13 @@ async function tick(){
   $("notices").innerHTML=(j.notices||[]).map(n=>`<div class="context" style="color:${C.warn}">${svg("warn",C.warn,14)}<span>${esc(n)}</span></div>`).join("");
 }
 
+// What a model can run, as catalog.job_hint says it: any fill model can also remove; erasers are marked.
 function detail(r){const words={fill:"fill",expand:"expand",txt2img:"create",remove:"remove",edit:"edit"};
-  const caps=(r.capabilities||[]).filter(c=>c!=="patch").map(c=>words[c]||c);let what=caps.join(", ");what=what.charAt(0).toUpperCase()+what.slice(1);
-  if(!caps.length)what="Needed by other models";return[what,r.size].filter(Boolean).join(" · ")}
+  const caps=(r.capabilities||[]).filter(c=>c in words);const list=caps.map(c=>words[c]);
+  if(caps.includes("fill")&&!caps.includes("remove"))list.push("remove");
+  let what=list.join(", ");what=what.charAt(0).toUpperCase()+what.slice(1);
+  if(["sdxl_eraser","flux_eraser"].includes(r.template))what+=" (erase-trained)";
+  if(!caps.length||r.runnable===false)what=r.neededBy||"Needed by other models";return[what,r.size].filter(Boolean).join(" · ")}
 function mnote(t,kind){const n=$("mnote");n.hidden=!t;n.textContent=t||"";n.className="note "+(kind||"bad")}
 async function act(fn){try{await fn();mnote("")}catch(e){mnote(e.message,"bad")}loadModels()}
 async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}models=m.rows||[];$("hw").textContent=m.hardware||m.error||"";

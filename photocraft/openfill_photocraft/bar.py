@@ -87,25 +87,46 @@ def short_name(name: str) -> str:
     return name.split(" (")[0].strip() or name
 
 
+# LaMa and MAT give the same result for the same input: one variation is enough.
+PROMPT_FREE = ("lama-big", "mat-places512")
+
+
 def removal_choices(facts: dict[str, Any]) -> dict[str, str]:
-    """Remove object's model menu: label -> Service removal value, best first."""
+    """Remove object's model menu: label -> Service removal value, default first.
+
+    With LaMa (or MAT) installed the default is LaMa at the image's own resolution
+    ("default"); then every other installed model that can remove, used as picked: MAT,
+    the erasers, and each generation model (with a background-only prompt)."""
     models = facts.get("models") or {}
-    removers = {model_id for model_id, _name in models.get("remove", [])}
-    painters = [(i, n) for i, n in models.get("fill", []) if i not in removers]
+    removers = list(models.get("remove", []))
+    ids = {model_id for model_id, _name in removers}
+    painters = [(i, n) for i, n in models.get("fill", []) if i not in ids]
     active = facts.get("active") or ""
     painters.sort(key=lambda m: m[0] != active)
     out: dict[str, str] = {}
-    if removers:
-        for model_id, name in painters:
-            label = f"LaMa + {short_name(name)}" + (" (best)" if not out else "")
-            out[label] = f"refine:{model_id}"
-        if "lama-big" in removers:
-            out["LaMa only (fast)"] = "lama"
-        if "mat-places512" in removers:
-            out["MAT only (fast)"] = "mat"
-    for model_id, name in painters:
-        out[f"{short_name(name)} only"] = model_id
-    return out or {"The active model": "refine:active"}
+    default = next((m for m in PROMPT_FREE if m in ids), "")
+    if default:
+        name = next(n for i, n in removers if i == default)
+        out[f"{short_name(name)} (default)"] = "default"
+    for model_id, name in removers + painters:
+        if model_id == default:
+            continue
+        label = short_name(name)
+        while label in out:
+            label += " "
+        out[label] = model_id
+    return out or {"The active model": "default"}
+
+
+def fill_choices(facts: dict[str, Any]) -> dict[str, str]:
+    """Fill's model menu: every installed fill model, then the removal models (with an
+    empty prompt they remove; LaMa and MAT ignore a prompt, erasers use their own)."""
+    models = facts.get("models") or {}
+    out = {name: model_id for model_id, name in models.get("fill", [])}
+    for model_id, name in models.get("remove", []):
+        if model_id not in out.values():
+            out.setdefault(name, model_id)
+    return out
 
 
 def expand_margins(width: int, height: int, preset: tuple[int, int] | None) -> tuple[int, int, int, int]:
@@ -1050,13 +1071,16 @@ class Bar:
         return self._model_ids.get(self.model_choice.get(), "active")
 
     def _model_picked(self, label: str) -> None:
-        """The Model select: the model picked becomes the active one (Remove keeps its own choice)."""
+        """The Model select: the model picked becomes the active one (Remove keeps its own
+        choice; a removal model picked in Fill is used for that run only)."""
         self.model_choice.set(label)
         if self.tab.get() == "remove":
             self.prefs["removal"] = label
             return
         model_id = self._model_ids.get(label)
-        if model_id and model_id != self.refresher.get().get("active"):
+        facts = self.refresher.get()
+        removers = {i for i, _n in (facts.get("models") or {}).get("remove", [])}
+        if model_id and model_id != facts.get("active") and model_id not in removers:
 
             def activate() -> None:
                 self.service.app.set_active(model_id)
@@ -1078,9 +1102,9 @@ class Bar:
                     prompt="" if kind == "remove" else prompt, remove=kind == "remove", strength=1.0, negative=""
                 )
                 if kind == "remove":
-                    removal = self._model_ids.get(self.model_choice.get(), "refine:active")
+                    removal = self._model_ids.get(self.model_choice.get(), "default")
                     body.update(removal=removal)
-                    if removal in ("lama", "mat"):
+                    if removal in (*PROMPT_FREE, "default"):
                         body.update(variations=1)  # same input, same result: one is enough
                 self.service.start("fill", body)
             elif kind == "expand":
@@ -1184,7 +1208,7 @@ class Bar:
             choices = removal_choices(facts) if has_any else {}
             wanted = self.prefs.get("removal", "")
         else:
-            choices = {name: model_id for model_id, name in models.get(tab, [])}
+            choices = fill_choices(facts) if tab == "fill" else {name: i for i, name in models.get(tab, [])}
             wanted = facts.get("active_name") or ""
         self._model_ids = choices
         names = list(choices)

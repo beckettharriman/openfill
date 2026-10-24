@@ -385,6 +385,7 @@ class App:
                     "missing_models": st.missing_models,
                     "partial": st.partial,
                     "capabilities": list(e.capabilities),
+                    "template": e.template or "",
                     "seen_by_server": st.seen_by_server,
                 }
             )

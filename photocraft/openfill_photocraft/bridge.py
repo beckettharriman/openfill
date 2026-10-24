@@ -360,34 +360,6 @@ class PhotoCraftBridge:
         image.layers.extend(layers)
         return layers
 
-    def bake_pending(self, image: PCImage) -> None:
-        """Put the pending results (with their masks) into the cached view of the document
-        instead of the document, and drop them: the next pass reads the image as if they
-        were there, and the document still gets only that pass's result."""
-        if not image.pending or image._snapshot is None:
-            image.pending, image.pending_group = [], ""
-            return
-        revision, visible, selection = image._snapshot
-        out = visible.copy()
-        for layer in reversed(image.pending):
-            if not layer.visible:
-                continue
-            o = layer.origin
-            pixels = Image.frombytes("RGBA", (o.width, o.height), layer.rgba)
-            mask = self._mask_image(image, layer, out.size)
-            if mask is not None:
-                if layer.mask_kind == "selection":
-                    if layer.grow > 0:
-                        mask = mask.filter(ImageFilter.MaxFilter(min(51, 2 * (layer.grow // 4) + 1)))
-                    if layer.feather > 0:
-                        mask = mask.filter(ImageFilter.GaussianBlur(float(layer.feather) / 2))
-                alpha = mask.crop((o.x, o.y, o.x + o.width, o.y + o.height))
-                pixels.putalpha(Image.composite(pixels.getchannel("A"), Image.new("L", alpha.size, 0), alpha))
-            out.alpha_composite(pixels, (o.x, o.y))
-        image._snapshot = (revision, out, selection)
-        image.layers = [layer for layer in image.layers if layer not in image.pending]
-        image.pending, image.pending_group = [], ""
-
     def layer_rgba(self, layer: PCLayer) -> bytes:
         return layer.rgba
 

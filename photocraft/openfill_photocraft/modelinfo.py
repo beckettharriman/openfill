@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from typing import Any
 
-CAPABILITY_WORDS = {"fill": "fill", "expand": "expand", "txt2img": "create", "remove": "remove", "edit": "edit"}
 ARCH_NAMES = {"sdxl": "SDXL", "sd15": "SD 1.5", "flux": "FLUX", "qwen_image": "Qwen Image"}
 
 
@@ -33,12 +32,11 @@ def hardware_line(hw: Any) -> str:
 
 
 def model_detail(row: dict[str, Any], needed_by: str = "") -> str:
-    """The grey line under a model's name: what it does and its size."""
-    caps = [CAPABILITY_WORDS.get(c, c) for c in row.get("capabilities") or [] if c != "patch"]
-    what = ", ".join(caps)
-    what = what[:1].upper() + what[1:]
-    if not caps:
-        what = needed_by or "Used by other models"
+    """The grey line under a model's name: the jobs it can run (any fill model can also
+    remove; erasers are marked erase-trained) and its size."""
+    from openfill.catalog import job_hint
+
+    what = job_hint(row) or needed_by or "Used by other models"
     return " · ".join(x for x in (what, row.get("size") or "") if x)
 
 
