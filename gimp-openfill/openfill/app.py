@@ -1098,7 +1098,18 @@ class App:
         image_png, image_rgba = self.io.export_region(image, source_rect, transparent_outside=True)
         mask_pixels = geometry.mask_for_expand(plan)
         mask_png = self.io.mask_png_from_bytes(plan.context, mask_pixels)
-        request = InpaintRequest(
+        # Worked below 1:1: windows at the image's own resolution add the detail the one pass
+        # could not (the new area of a 3000 px wide canvas was otherwise drawn at a third of it).
+        detail: tuple = ()
+        detail_denoise = float(getattr(self.settings, "expand_detail_denoise", 0.4))
+        if (
+            getattr(self.settings, "expand_detail", False)
+            and model.effective_template in workflow.REFINE_TEMPLATES
+            and ws.scale < 0.95
+            and detail_denoise > 0
+        ):
+            detail = geometry.expand_detail_tiles(plan, profile, mp.grow_image + mp.feather_image)
+        request = workflow.PlannedInpaintRequest(
             image_png=image_png,
             mask_png=mask_png,
             width=plan.context.width,
@@ -1113,7 +1124,18 @@ class App:
             grow=mp.grow_work,
             feather=mp.blur_work,
             prefill=True,
+            refine_tiles=detail,
+            refine_denoise=detail_denoise,
+            full_grow=mp.grow_image,
+            full_blur=min(mp.grow_image, mp.feather_image),
         )
+        if detail:
+            self.log.info(
+                "expand: detail windows=%d at 1:1, denoise %.2f: %s",
+                len(detail),
+                detail_denoise,
+                [(t.rect.x, t.rect.y, t.rect.width, t.rect.height) for t in detail],
+            )
         result = runner.run(
             lambda progress, preview, cancel: self.backend(progress, cancel).outpaint(
                 request, tracker.wrap(progress), preview, cancel

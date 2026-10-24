@@ -166,6 +166,43 @@ class ExpandTests(unittest.TestCase):
             g.plan_expand(100, 100, -1, 0, 0, 0, g.SD15)
 
 
+class ExpandDetailTests(unittest.TestCase):
+    """Windows at full resolution over an expand's new bands."""
+
+    def check(self, arch, w, h, margins):
+        prof = g.PROFILES[arch]
+        plan = g.plan_expand(w, h, *margins, prof)
+        tiles = g.expand_detail_tiles(plan, prof, 72)
+        ctx = plan.context
+        keep = plan.keep_rect.translate(-ctx.x, -ctx.y)
+        mask = g.mask_for_expand(plan)
+        # every pixel of the new area is in a window
+        for y in range(0, ctx.height, 17):
+            for x in range(0, ctx.width, 17):
+                if mask[y * ctx.width + x]:
+                    self.assertTrue(
+                        any(t.rect.x <= x < t.rect.right and t.rect.y <= y < t.rect.bottom for t in tiles), (x, y)
+                    )
+        for t in tiles:
+            self.assertLessEqual(max(t.rect.width, t.rect.height), prof.max_side)
+            self.assertEqual((t.work_width, t.work_height), (t.rect.width, t.rect.height))  # 1:1
+            self.assertFalse(  # never a window of old image only
+                keep.x + 72 <= t.rect.x
+                and t.rect.right <= keep.right - 72
+                and keep.y + 72 <= t.rect.y
+                and t.rect.bottom <= keep.bottom - 72
+            )
+        return tiles
+
+    def test_bands(self):
+        self.assertEqual(len(self.check("sdxl", 1448, 1086, (241, 0, 242, 0))), 4)
+        tiles = self.check("sdxl", 2896, 2172, (0, 400, 0, 400))
+        self.assertTrue(all(t.rect.height == 768 for t in tiles))  # the bands, not the middle
+        self.check("sd15", 1000, 1000, (250, 250, 250, 250))
+        self.check("sd15", 4000, 3000, (666, 0, 667, 0))
+        self.check("sdxl", 1448, 1086, (100, 300, 400, 0))
+
+
 class ExpandRoundsTests(unittest.TestCase):
     def test_moderate_expansion_is_one_round_with_all_sides(self):
         self.assertEqual(g.expand_rounds(1920, 1440, 192, 192, 192, 192), [(192, 192, 192, 192)])

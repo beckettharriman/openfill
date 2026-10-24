@@ -855,6 +855,56 @@ def refine_layout(
     return _with_done(rects, [(r.width, r.height) for r in rects], overlap)
 
 
+# How much of the old image a detail window of an expand shows next to the new band
+# (image px, beyond the mask's reach), so it continues what is there.
+EXPAND_DETAIL_CONTEXT = 128
+
+
+def expand_detail_tiles(plan: ExpandPlan, profile: ModelProfile, grow: int = 0) -> tuple[Tile, ...]:
+    """Windows at the image's own resolution (scale 1, at most ``profile.max_side`` a side)
+    over each new band of an expand, in context coordinates. A band is the new area, the
+    regenerated overlap and ``grow`` (how far the mask reaches into the old image) plus
+    ``EXPAND_DETAIL_CONTEXT`` px of the old image, and at least ``profile.min_side`` across
+    where the canvas allows. Overlapping windows blend as in ``refine_layout``."""
+    ctx = plan.context
+    whole = Rect(0, 0, ctx.width, ctx.height)
+    left, top, right, bottom = plan.grows
+    keep = plan.keep_rect.translate(-ctx.x, -ctx.y)
+    reach = max(0, grow) + EXPAND_DETAIL_CONTEXT
+    bands = []
+    if left:
+        bands.append(Rect(0, 0, keep.x + reach, whole.height))
+    if right:
+        x = keep.right - reach
+        bands.append(Rect(x, 0, whole.width - x, whole.height))
+    if top:
+        bands.append(Rect(0, 0, whole.width, keep.y + reach))
+    if bottom:
+        y = keep.bottom - reach
+        bands.append(Rect(0, y, whole.width, whole.height - y))
+    m = profile.multiple
+    side = profile.max_side // m * m
+    rects: list[Rect] = []
+    for band in bands:
+        band = clamp_rect(band, whole)
+        if band.is_empty():
+            continue
+        # at least min_side across where the canvas allows (grown into the old image)
+        need_w = max(band.width, min(profile.min_side, whole.width))
+        need_h = max(band.height, min(profile.min_side, whole.height))
+        x = band.x if band.x == 0 else band.right - need_w
+        y = band.y if band.y == 0 else band.bottom - need_h
+        need_w = min(whole.width, -(-need_w // m) * m)  # whole latent cells, no sliver of a window
+        need_h = min(whole.height, -(-need_h // m) * m)
+        x = band.x if band.x == 0 else band.right - need_w
+        y = band.y if band.y == 0 else band.bottom - need_h
+        band = clamp_rect(Rect(x, y, need_w, need_h), whole)
+        tw = min(side, band.width // m * m) or band.width
+        th = min(side, band.height // m * m) or band.height
+        rects += _grid(band, tw, th, TILE_OVERLAP)
+    return _with_done(rects, [(r.width, r.height) for r in rects], TILE_OVERLAP)
+
+
 def plan_native_removal(selection: Rect, image: Rect) -> FillPlan:
     """LaMa at the image's own pixels: the classic removal context
     (``REMOVAL_MODEL_PADDING``) at scale 1, never resized. OpenFill's node pads it to

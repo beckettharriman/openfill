@@ -460,6 +460,24 @@ class TiledGraphTests(unittest.TestCase):
         self.assertNotIn("r0_scale", graph)  # full resolution
         self.assertEqual(graph["r0_enc"]["class_type"], "InpaintModelConditioning")
 
+    def test_expand_with_detail_windows(self):
+        plan = g.plan_expand(2896, 2172, 0, 400, 0, 400, g.SDXL)
+        tiles = g.expand_detail_tiles(plan, g.SDXL, 72)
+        req = _planned(
+            g.FillPlan(plan.context, g.WorkingSize(1000, 1024, 0.34)),
+            model=FOOOCUS,
+            mode="expand",
+            refine_tiles=tiles,
+            refine_denoise=0.4,
+        )
+        graph = w.build_inpaint(req, "i", "m", 9, w.Capabilities(True))
+        self.assertIn("sampler", graph)  # the one pass at the working size first
+        last = len(tiles) - 1
+        self.assertEqual(graph[w.OUTPUT_NODE]["inputs"]["images"], [f"r{last}_paste", 0])
+        self.assertNotIn("r0_scale", graph)  # the windows work at 1:1
+        self.assertEqual(graph["r0_sampler"]["inputs"]["denoise"], 0.4)
+        self.assertGreater(graph["fmask_grow"]["inputs"]["blur"], 0)  # an expand keeps its soft mask
+
     def test_variations_repeat_the_canvas(self):
         graph = w.build_inpaint(_planned(ROOF, batch=3), "i", "m", 9, w.Capabilities(True))
         self.assertEqual(graph["dest_batch"]["inputs"]["amount"], 3)

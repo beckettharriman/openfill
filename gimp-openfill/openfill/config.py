@@ -78,6 +78,10 @@ class Settings:
     # the A/B it made fills softer (SD 1.5) or changed their content (SDXL).
     refine: bool = False
     refine_denoise: float = 0.4
+    # Generative Expand worked below 1:1 (SD 1.5 and SDXL): a second pass at the image's own
+    # resolution over the new area, in windows, at ``expand_detail_denoise``.
+    expand_detail: bool = True
+    expand_detail_denoise: float = 0.4
     # Tiled fills: below 1.0 the whole context is generated first in one pass
     # (layout) and the tiles add detail to it at this denoise.
     tile_denoise: float = 0.65
