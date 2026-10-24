@@ -675,7 +675,10 @@ class App:
         seed: int,
         model_choice: str,
         remove: bool = False,
+        as_picked: bool = False,
     ) -> list:
+        # ``as_picked``: ``model_choice`` was picked by hand for this job (a Remove menu), so it
+        # is used even when it is also the active model.
         # Checked before anything else (no backend start, no model lookup): without a
         # selection there is nothing to fill, and filling the whole image is never
         # what was meant.
@@ -684,7 +687,7 @@ class App:
         if selection is None:
             self.log.info("fill: refused, nothing selected")
             raise NothingSelected(NO_SELECTION_MESSAGE)
-        if (remove or not prompt.strip()) and self._is_default_choice(model_choice):
+        if (remove or not prompt.strip()) and not as_picked and self._is_default_choice(model_choice):
             # Remove object, or an empty prompt, with the default model: LaMa (then MAT)
             # whenever one is installed; generation checkpoints (SDXL in 10 of 13 judged
             # cases) repaint the object they were asked to remove. A model picked by

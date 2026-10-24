@@ -792,11 +792,15 @@ class ServiceRemoveTests(unittest.TestCase):
 
         from openfill_photocraft.service import Service
 
-        calls = []
+        calls, picked = [], []
+        self.picked = picked
 
         class App:
-            def generative_fill(self, image, prompt, negative, variations, strength, seed, model, remove=False):
+            def generative_fill(
+                self, image, prompt, negative, variations, strength, seed, model, remove=False, as_picked=False
+            ):
                 calls.append((prompt, variations, strength, model, remove))
+                picked.append(as_picked)
                 return [SimpleNamespace(name="x")]
 
         stub = SimpleNamespace(app=App(), OLD_REMOVALS=Service.OLD_REMOVALS)
@@ -810,8 +814,10 @@ class ServiceRemoveTests(unittest.TestCase):
     def test_values(self):
         self.assertEqual(self.run_remove(None), ("", 2, 1.0, "active", True))
         self.assertEqual(self.run_remove("default")[3], "active")
+        self.assertFalse(self.picked[0])  # the default may become LaMa
         self.assertEqual(self.run_remove("rorem-sdxl")[3], "rorem-sdxl")
         self.assertEqual(self.run_remove("realvisxl-v5")[3], "realvisxl-v5")
+        self.assertTrue(self.picked[0])  # a pick is used as picked, even when it is the active model
         # values saved by older menus
         self.assertEqual(self.run_remove("lama")[3], "lama-big")
         self.assertEqual(self.run_remove("mat")[3], "mat-places512")

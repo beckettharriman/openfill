@@ -369,7 +369,9 @@ class Service:
         if how.startswith("refine:") or how == "default":
             how = "active"
         how = self.OLD_REMOVALS.get(how, how)
-        layers = self.app.generative_fill(image, "", "", variations, 1.0, seed, how, remove=True)
+        layers = self.app.generative_fill(
+            image, "", "", variations, 1.0, seed, how, remove=True, as_picked=how != "active"
+        )
         for index, layer in enumerate(layers):
             layer.name = "Object Removal" if len(layers) == 1 else f"Object Removal ({index + 1})"
         if image.pending_group:
