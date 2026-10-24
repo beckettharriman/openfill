@@ -636,6 +636,7 @@ def run_setup(
         downloads.install_custom_node(
             n.repo, n.folder, n.commit, nodes_dir, layout["python"], log, runner, cancel, opener
         )
+    downloads.ensure_bundled_nodes(nodes_dir, log)
     if manifest.pip:
         progress("packages", 0, 0)
         log("installing " + ", ".join(manifest.pip))

@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from openfill import catalog as cat
+from openfill import downloads
 
 REPO = Path(__file__).resolve().parent.parent
 CATALOG = REPO / "models" / "catalog.json"
@@ -46,6 +47,9 @@ class ShippedCatalogTests(unittest.TestCase):
                 self.assertEqual(f.filename, Path(f.filename).name, f.dest)
                 self.assertTrue(f.sha256 and len(f.sha256) == 64, f"{e.id}: {f.dest} needs a sha256")
             for n in e.requires_nodes:
+                if n.bundled:  # OpenFill's own pack: pinned to the version it ships
+                    self.assertEqual(n.commit, downloads.bundled_node_version(), n.folder)
+                    continue
                 self.assertEqual(len(n.commit), 40, n.folder)
 
     def test_gated_flags(self):
@@ -475,11 +479,22 @@ class ViewModelTests(unittest.TestCase):
         self.assertEqual(cat.row_status(vm_row("a"), cur), "Downloading 43%")
 
     def test_row_details_flags(self):
-        text = cat.row_details(vm_row("a", size="2.0 GB", license="L", origin="civitai", checksum_known=False))
+        text = cat.row_details(
+            vm_row("a", size="2.0 GB", license="L", origin="civitai", checksum_known=False, capabilities=[])
+        )
         self.assertTrue(text.startswith("2.0 GB"))
         self.assertIn("from Civitai", text)
         self.assertIn("unverified checksum", text)
         self.assertIn("helper file", cat.row_details(vm_row("p", runnable=False)))
+
+    def test_job_hint_offers_every_job_a_model_can_run(self):
+        row = vm_row("x", size="6.5 GB", capabilities=["fill", "expand", "txt2img"])
+        self.assertEqual(cat.job_hint(row), "Fill, expand, create, remove")  # any fill model can remove
+        self.assertTrue(cat.row_details(row).startswith("Fill, expand, create, remove  ·  6.5 GB"))
+        self.assertEqual(cat.job_hint(vm_row("lama-big", capabilities=["remove"], template="inpaint_model")), "Remove")
+        eraser = vm_row("rorem-sdxl", capabilities=["remove"], template="sdxl_eraser")
+        self.assertEqual(cat.job_hint(eraser), "Remove (erase-trained)")
+        self.assertEqual(cat.job_hint(vm_row("p", capabilities=["patch"], runnable=False)), "")
 
     def test_state_button(self):
         removal = vm_row("mat", installed=True, capabilities=["remove"])

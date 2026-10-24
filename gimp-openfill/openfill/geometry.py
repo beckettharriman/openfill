@@ -855,7 +855,16 @@ def refine_layout(
     return _with_done(rects, [(r.width, r.height) for r in rects], overlap)
 
 
-# Tiled removal: the LaMa/MAT node pads its input to a square and resizes it to
+def plan_native_removal(selection: Rect, image: Rect) -> FillPlan:
+    """LaMa at the image's own pixels: the classic removal context
+    (``REMOVAL_MODEL_PADDING``) at scale 1, never resized. OpenFill's node pads it to
+    a multiple of 8 and, when one pass does not fit the graphics memory, works it in
+    large overlapping windows at 1:1 (comfy_nodes/plan.py)."""
+    ctx = context_rect(selection, image, INPAINT_MODEL, padding_ratio=REMOVAL_MODEL_PADDING)
+    return FillPlan(ctx, WorkingSize(ctx.width, ctx.height, 1.0))
+
+
+# Tiled removal (MAT): the LaMa/MAT node pads its input to a square and resizes it to
 # 256 px (LaMa) or 512 px (MAT), so a large context came back smeared. Windows
 # of REMOVAL_TILE image px keep the node's scale near 256 / REMOVAL_TILE.
 REMOVAL_TILE = 512

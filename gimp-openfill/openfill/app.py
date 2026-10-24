@@ -325,6 +325,9 @@ class App:
         sampler, scheduler = self.settings.sampler, self.settings.scheduler
         if model.arch == "flux":
             cfg, sampler, scheduler, steps = 30.0, "euler", "normal", max(20, min(steps, 30))
+        elif model.effective_template == "sdxl_eraser":
+            # RORem's own settings: no classifier-free guidance, 15 to 50 steps.
+            cfg, sampler, scheduler, steps = 1.0, "euler", "normal", max(20, min(steps, 30))
         elif model.arch == "qwen_image":
             cfg, sampler, scheduler, steps = 2.5, "euler", "simple", max(20, min(steps, 30))
         batch = 1 if model.prompt_free else max(1, min(8, int(variations)))
@@ -483,12 +486,7 @@ class App:
         layout = comfy_layout(self.settings.comfy_dir)
         if layout is None:
             raise ModelMissing(f"ComfyUI was not found at '{self.settings.comfy_dir}'")
-        nodes = [
-            n
-            for n in entry.requires_nodes
-            if not cat.file_installed(self.custom_nodes_dir, cat.FileSpec("", "", n.folder))
-            and not (self.custom_nodes_dir / n.folder).is_dir()
-        ]
+        nodes = [n for n in entry.requires_nodes if cat.node_missing(self.custom_nodes_dir, n)]
         if not nodes:
             return None
         task = {
@@ -528,7 +526,7 @@ class App:
 
     def nodes_to_install(self, model_id: str) -> list[cat.NodeSpec]:
         entry = cat.by_id(self.catalog, model_id)
-        return [n for n in entry.requires_nodes if not (self.custom_nodes_dir / n.folder).is_dir()]
+        return [n for n in entry.requires_nodes if cat.node_missing(self.custom_nodes_dir, n)]
 
     def remove_model(self, model_id: str) -> str:
         entry = cat.by_id(self.catalog, model_id)
@@ -624,14 +622,15 @@ class App:
                 return entry
         return None
 
-    def _is_removal_model(self, choice: str | None) -> bool:
-        """True when ``choice`` explicitly names a prompt-free removal model."""
+    def _is_default_choice(self, choice: str | None) -> bool:
+        """True for "active", a legacy tier, or the active model itself (PhotoCraft's menus
+        name it by id): the choices that mean "the default model", not a pick by hand."""
         choice = (choice or "active").strip()
         if choice == "active" or choice in LEGACY_CHOICES:
-            return False
+            return True
         try:
-            return cat.by_id(self.catalog, choice).template == "inpaint_model"
-        except cat.CatalogError:
+            return choice == self.active_model_id()
+        except Exception:  # noqa: BLE001 - no catalog or ComfyUI folder: treat as a pick
             return False
 
     def expand_suggestion(self, model_choice: str) -> tuple[cat.ModelEntry, cat.ModelEntry] | None:
@@ -685,11 +684,11 @@ class App:
         if selection is None:
             self.log.info("fill: refused, nothing selected")
             raise NothingSelected(NO_SELECTION_MESSAGE)
-        if (remove or not prompt.strip()) and not self._is_removal_model(model_choice):
-            # An empty prompt is a removal too: generation checkpoints (SDXL in 10
-            # of 13 judged cases) repaint the object they were asked to remove,
-            # so LaMa (then MAT) takes it whenever one is installed, unless a
-            # removal model was picked explicitly.
+        if (remove or not prompt.strip()) and self._is_default_choice(model_choice):
+            # Remove object, or an empty prompt, with the default model: LaMa (then MAT)
+            # whenever one is installed; generation checkpoints (SDXL in 10 of 13 judged
+            # cases) repaint the object they were asked to remove. A model picked by
+            # hand is used as picked: any installed model can remove.
             removal = self.removal_model_available()
             if removal is not None:
                 self.log.info("fill: %s -> using %s", "Remove object" if remove else "empty prompt", removal.id)
@@ -704,7 +703,7 @@ class App:
         profile = self.profile_for(model)
         full = self.io.image_rect(image)
         target = selection
-        removal_intent = remove or not prompt.strip() or model.prompt_free
+        removal_intent = remove or not prompt.strip() or model.prompt_free or model.eraser
         refine = (
             bool(self.settings.refine)
             and model.effective_template in workflow.REFINE_TEMPLATES
@@ -720,8 +719,13 @@ class App:
             refine=refine,
             layout=float(self.settings.tile_denoise) < 1.0,
             layout_min_scale=float(self.settings.layout_min_scale),
+            # Erasers work at full image resolution, in tiles of their own working size.
+            min_scale=1.0 if model.eraser else None,
         )
-        if model.prompt_free and int(self.settings.removal_tile) > 0:
+        if model.native_lama:
+            # LaMa at the image's own pixels: OpenFill's node fits it to the graphics memory.
+            plan = geometry.plan_native_removal(target, full)
+        elif model.prompt_free and int(self.settings.removal_tile) > 0:
             tiled = geometry.plan_removal(
                 target, full, int(self.settings.removal_tile), int(self.settings.removal_tile_overlap)
             )
@@ -740,6 +744,10 @@ class App:
         prefill_style, prefill_mode = geometry.prefill_for(removal_intent, strength, model.arch)
         if model.prompt_free:
             prompt, negative = "", ""
+        elif model.eraser:
+            # Erase-trained: their own prompt (what the user typed is not used).
+            prompt, negative = workflow.ERASER_PROMPTS.get(model.effective_template, ("", ""))
+            strength = 1.0
         elif removal_intent:
             # Empty prompt on a generation model: ask for background, not "anything".
             prompt = self.REMOVAL_PROMPT

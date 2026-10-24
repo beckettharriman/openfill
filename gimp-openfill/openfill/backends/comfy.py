@@ -77,7 +77,8 @@ class ComfyBackend(Backend):
     def capabilities(self, refresh: bool = False) -> workflow.Capabilities:
         if self._caps is None or refresh:
             info = self.client.object_info("INPAINT_ExpandMask")
-            self._caps = workflow.Capabilities(inpaint_nodes=bool(info))
+            native = self.client.object_info(workflow.NATIVE_LAMA_NODE)
+            self._caps = workflow.Capabilities(inpaint_nodes=bool(info), native_lama=bool(native))
         return self._caps
 
     def health(self) -> HealthStatus:

@@ -192,7 +192,7 @@
     },
     {
       "id": "lama-big",
-      "name": "LaMa (big-lama) - prompt-free object removal",
+      "name": "LaMa (big-lama) - prompt-free object removal at full resolution",
       "tier": "removal",
       "capabilities": ["remove"],
       "arch": "inpaint_model",
@@ -204,7 +204,8 @@
       "uploader": "Sanster (lama-cleaner author) GitHub release of the official advimman/lama big-lama checkpoint",
       "min_vram_gb": 2,
       "requires_nodes": [
-        {"repo": "https://github.com/Acly/comfyui-inpaint-nodes", "folder": "comfyui-inpaint-nodes", "commit": "5b7681746fe19e563113d27366ba85236bc1ba5b", "license": "GPL-3.0"}
+        {"repo": "https://github.com/Acly/comfyui-inpaint-nodes", "folder": "comfyui-inpaint-nodes", "commit": "5b7681746fe19e563113d27366ba85236bc1ba5b", "license": "GPL-3.0"},
+        {"repo": "bundled", "folder": "openfill-nodes", "commit": "1", "license": "same as OpenFill (ships with it)"}
       ],
       "requires_models": [],
       "files": [
@@ -230,6 +231,50 @@
       "requires_models": [],
       "files": [
         {"role": "inpaint_model", "url": "https://huggingface.co/Acly/MAT/resolve/main/MAT_Places512_G_fp16.safetensors", "dest": "inpaint/MAT_Places512_G_fp16.safetensors", "size": 125280278, "sha256": "309dd6ce6e04034dc4b6b15c7bd2a4844d158e03eb2a139e0eca6b366e40c0de"}
+      ]
+    },
+    {
+      "id": "rorem-sdxl",
+      "name": "RORem (SDXL inpainting, erase-trained) - object removal",
+      "tier": "removal",
+      "capabilities": ["remove"],
+      "arch": "sdxl",
+      "template": "sdxl_eraser",
+      "page": "https://huggingface.co/LetsThink/RORem",
+      "license": {"name": "Apache-2.0", "url": "https://huggingface.co/LetsThink/RORem"},
+      "gated": false,
+      "source_type": "first-party",
+      "uploader": "LetsThink (RORem authors, CVPR 2025: SDXL inpainting UNet trained to remove objects; diffusers layout, loaded by ComfyUI's core loaders)",
+      "min_vram_gb": 8,
+      "requires_nodes": [],
+      "requires_models": [],
+      "files": [
+        {"role": "unet", "url": "https://huggingface.co/LetsThink/RORem/resolve/main/unet/diffusion_pytorch_model.safetensors", "dest": "unet/RORem-unet.safetensors", "size": 5135178560, "sha256": "ed10552914ce17189e9544071b2b3d1cbd467834e0e5a7b79469dc32800b8b4e"},
+        {"role": "clip1", "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors", "dest": "clip/clip_l.safetensors", "size": 246144152, "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd", "license": "Apache-2.0", "optional": true},
+        {"role": "clip2", "url": "https://huggingface.co/LetsThink/RORem/resolve/main/text_encoder_2/model.safetensors", "dest": "clip/RORem-clip-g.safetensors", "size": 1389382176, "sha256": "ec310df2af79c318e24d20511b601a591ca8cd4f1fce1d8dff822a356bcdb1f4"},
+        {"role": "vae", "url": "https://huggingface.co/LetsThink/RORem/resolve/main/vae/diffusion_pytorch_model.safetensors", "dest": "vae/RORem-sdxl-vae.safetensors", "size": 167335342, "sha256": "6353737672c94b96174cb590f711eac6edf2fcce5b6e91aa9d73c5adc589ee48"},
+        {"role": "preview", "url": "https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesdxl_decoder.pth", "dest": "vae_approx/taesdxl_decoder.pth", "size": 4913541, "sha256": "a3956b8a7a763f251c7357aad6375dacdb6d971121c73e97a3069fc33a94fe1e", "optional": true, "license": "MIT"}
+      ]
+    },
+    {
+      "id": "flux1-fill-object-removal-lora",
+      "name": "FLUX.1 Fill object removal LoRA v1 (on FLUX.1 Fill GGUF Q4_0) - object removal",
+      "tier": "removal",
+      "capabilities": ["remove"],
+      "arch": "flux",
+      "template": "flux_eraser",
+      "page": "https://huggingface.co/lrzjason/ObjectRemovalFluxFill",
+      "license": {"name": "MIT for the LoRA; FLUX.1 [dev] Non-Commercial License for the FLUX.1 Fill model it runs on (non-commercial use only)", "url": "https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/blob/main/LICENSE.md"},
+      "gated": false,
+      "source_type": "first-party",
+      "uploader": "lrzjason (LoRA author, trained on FLUX.1 Fill dev)",
+      "min_vram_gb": 8,
+      "requires_nodes": [
+        {"repo": "https://github.com/city96/ComfyUI-GGUF", "folder": "ComfyUI-GGUF", "commit": "6ea2651e7df66d7585f6ffee804b20e92fb38b8a", "license": "Apache-2.0"}
+      ],
+      "requires_models": ["flux1-fill-dev-gguf-q4"],
+      "files": [
+        {"role": "lora", "url": "https://huggingface.co/lrzjason/ObjectRemovalFluxFill/resolve/main/objectRemovalv1_r32.safetensors", "dest": "loras/objectRemovalv1_r32.safetensors", "size": 315889584, "sha256": "66e85b8d4fea938b8377ac01bdceab94c7f75dbec23f669b45418e192f3a7c16", "license": "MIT"}
       ]
     },
     {

@@ -950,6 +950,8 @@ def _run_backend(
             "WARN",
         )
 
+    # OpenFill's own node pack (native-resolution LaMa) is copied in before ComfyUI loads its nodes.
+    downloads.ensure_bundled_nodes(Path(args.main).resolve().parent / "custom_nodes", log)
     backend = Backend(cmd, args.cwd, str(base / "comfyui.log"), log)
     backend.start()
     watch_name = process_name(args.watch_pid) if args.watch_pid else None

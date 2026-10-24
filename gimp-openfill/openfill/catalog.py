@@ -40,7 +40,10 @@ from .downloads import safe_relative_path, validate_node_spec
 TIERS = ("fast", "quality", "edit", "removal")
 CAPABILITIES = ("fill", "expand", "txt2img", "remove", "edit", "patch")
 SOURCE_TYPES = ("first-party", "community-quantization")
-TEMPLATES = ("sd15_inpaint", "sdxl_fooocus", "flux_fill", "qwen_edit", "inpaint_model")
+TEMPLATES = ("sd15_inpaint", "sdxl_fooocus", "flux_fill", "qwen_edit", "inpaint_model", "sdxl_eraser", "flux_eraser")
+# Erase-trained diffusion models: they run Remove object with their own prompt and
+# settings (RORem on SDXL inpainting; an object-removal LoRA on FLUX.1 Fill).
+ERASER_TEMPLATES = ("sdxl_eraser", "flux_eraser")
 ARCHS = {"sd15": "sd15", "sdxl": "sdxl", "flux": "flux", "qwen_image": "qwen_image", "inpaint_model": "inpaint_model"}
 SOURCES = ("bundled", "huggingface", "civitai")
 
@@ -58,6 +61,8 @@ FAMILY_OF_TEMPLATE = {
     "flux_fill": "flux-fill",
     "qwen_edit": "qwen-edit",
     "inpaint_model": "removal",
+    "sdxl_eraser": "removal",
+    "flux_eraser": "removal",
 }
 TEMPLATE_ARCH = {"sd15_inpaint": "sd15", "sdxl_fooocus": "sdxl", "flux_fill": "flux", "qwen_edit": "qwen_image"}
 # Operations of the plug-in and the capabilities that can serve them.
@@ -141,14 +146,41 @@ class FileSpec:
         return parts[0] if len(parts) == 2 else ""
 
 
+# OpenFill's own node pack (the folder comfy_nodes next to this file), copied to
+# custom_nodes/<folder> instead of downloaded. In the catalog its repo is "bundled" and
+# its commit is the pack's VERSION, so a newer OpenFill replaces an older copy.
+BUNDLED_REPO = "bundled"
+BUNDLED_NODES = ("openfill-nodes",)
+BUNDLED_VERSION_FILE = "VERSION"
+
+
 @dataclass(frozen=True)
 class NodeSpec:
-    """A ComfyUI custom node pack, pinned to a commit."""
+    """A ComfyUI custom node pack, pinned to a commit (OpenFill's own: to its version)."""
 
     repo: str
     folder: str
     commit: str
     license: str = ""
+
+    @property
+    def bundled(self) -> bool:
+        """OpenFill's own node pack, copied from the plug-in folder."""
+        return self.repo == BUNDLED_REPO
+
+
+def node_missing(custom_nodes_dir: Path | str, node: NodeSpec) -> bool:
+    """True when ``node`` is not installed in ``custom_nodes_dir``: its folder is
+    missing, or (OpenFill's own pack) it holds another version."""
+    folder = Path(custom_nodes_dir) / node.folder
+    if not folder.is_dir():
+        return True
+    if not node.bundled:
+        return False
+    try:
+        return (folder / BUNDLED_VERSION_FILE).read_text(encoding="utf-8").strip() != node.commit
+    except OSError:
+        return True
 
 
 @dataclass(frozen=True)
@@ -321,6 +353,8 @@ def parse_catalog(data: dict[str, Any], source: str = "bundled", known_ids: Iter
             for n in raw.get("requires_nodes", [])
         )
         for n in nodes:
+            if n.bundled and n.folder in BUNDLED_NODES and n.commit.strip():
+                continue
             try:
                 validate_node_spec(n.repo, n.folder, n.commit)
             except ValueError as err:
@@ -618,7 +652,7 @@ def install_status(
     missing_nodes = []
     if custom_nodes_dir is not None:
         for n in entry.requires_nodes:
-            if not (Path(custom_nodes_dir) / n.folder).is_dir():
+            if node_missing(custom_nodes_dir, n):
                 missing_nodes.append(n.folder)
     missing_models = []
     catalog = list(catalog)
@@ -701,6 +735,8 @@ def is_opt_in(entry: ModelEntry) -> bool:
 
 def tier_label(entry: ModelEntry) -> str:
     """Short tier name for menus: Fast, Quality, Quality (slow), Edit or Removal."""
+    if entry.template in ERASER_TEMPLATES:
+        return "Removal"
     if entry.arch == "flux":
         return "Quality (slow)"
     return {"fast": "Fast", "quality": "Quality", "edit": "Edit", "removal": "Removal"}.get(entry.tier, "")
@@ -794,6 +830,11 @@ def model_spec_for(entry: ModelEntry, catalog: Iterable[ModelEntry] = ()) -> Mod
     spec.clip2 = names.get("clip2", "")
     spec.vae = names.get("vae", "")
     spec.inpaint_model = names.get("inpaint_model", "")
+    spec.lora = names.get("lora", "")
+    if entry.template == "flux_eraser":
+        # The LoRA runs on the FLUX.1 Fill entry it requires: its UNet, text encoders and VAE.
+        base = model_spec_for(by_id(list(catalog), entry.requires_models[0]), catalog)
+        spec.unet, spec.clip1, spec.clip2, spec.vae = base.unet, base.clip1, base.clip2, base.vae
     if entry.template == "sdxl_fooocus":
         for dep in entry.requires_models:
             dep_entry = by_id(list(catalog), dep)
@@ -888,6 +929,7 @@ def model_row(
         "missing_models": status.missing_models,
         "partial": status.partial,
         "capabilities": list(entry.capabilities),
+        "template": entry.template or "",
         "seen_by_server": status.seen_by_server,
         "origin": entry.source,
         "family": entry.family,
@@ -972,9 +1014,34 @@ def model_role(row: dict[str, Any]) -> str:
     return ""
 
 
+# What a model can run, in the words of the tools (Create is text to image).
+JOB_WORDS = {"fill": "fill", "expand": "expand", "txt2img": "create", "remove": "remove", "edit": "edit"}
+
+
+def job_hint(row: dict[str, Any]) -> str:
+    """Short line of the jobs a model can run, for the Models list: "Fill, expand,
+    create, remove" (every fill model can also remove, with a background prompt),
+    "Remove" (LaMa, MAT), "Remove (erase-trained)" (RORem, the FLUX removal LoRA).
+    Empty for helper files."""
+    caps = [c for c in row.get("capabilities") or [] if c in JOB_WORDS]
+    if not caps or not row.get("runnable", True):
+        return ""
+    words = [JOB_WORDS[c] for c in caps]
+    if "fill" in caps and "remove" not in caps:
+        words.append("remove")
+    text = ", ".join(words)
+    text = text[:1].upper() + text[1:]
+    if row.get("template") in ERASER_TEMPLATES:
+        text += " (erase-trained)"
+    return text
+
+
 def row_details(row: dict[str, Any]) -> str:
-    """The small grey line under the name: size, license, fit, origin, checksum."""
+    """The small grey line under the name: jobs, size, license, fit, origin, checksum."""
     parts = [str(row.get("size") or "?")]
+    hint = job_hint(row)
+    if hint:
+        parts.insert(0, hint)
     role = model_role(row)
     if role:
         parts.insert(0, role)
@@ -1062,7 +1129,7 @@ def build_sections(
     not shown above), More from Hugging Face and Civitai (by family, best first).
     Every row appears exactly once; empty sections are left out."""
     installed = [r for r in rows if r.get("installed") or r.get("partial")]
-    installed.sort(key=lambda r: (0 if r.get("active") else 1 if r.get("installed") else 2))
+    installed.sort(key=lambda r: 0 if r.get("active") else 1 if r.get("installed") else 2)
     shown = {r["id"] for r in installed}
     rec = [r for r in recommended([r for r in rows if r["id"] not in shown], limit, now)]
     shown |= {r["id"] for r in rec}

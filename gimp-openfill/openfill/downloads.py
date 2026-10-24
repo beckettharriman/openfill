@@ -501,6 +501,71 @@ def install_node_from_zip(
     return nodes / folder
 
 
+BUNDLED_REPO = "bundled"  # catalog.BUNDLED_REPO
+BUNDLED_NODES_SOURCE = Path(__file__).resolve().parent / "comfy_nodes"
+
+
+def bundled_node_version(source: Path = BUNDLED_NODES_SOURCE) -> str:
+    """The VERSION of OpenFill's own node pack (read from its __init__.py, no import)."""
+    text = (source / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'^VERSION = "([^"]+)"', text, re.M)
+    if not match:
+        raise RuntimeError(f"no VERSION in {source / '__init__.py'}")
+    return match.group(1)
+
+
+def install_bundled_node(
+    folder: str,
+    version: str,
+    custom_nodes_dir: Path,
+    log: Callable[[str], None] | None = None,
+    source: Path = BUNDLED_NODES_SOURCE,
+) -> Path:
+    """Copy OpenFill's own node pack to ``custom_nodes_dir/folder`` and write its
+    VERSION. Replaces an older copy OpenFill made; refuses a folder of that name it
+    did not make. Idempotent."""
+    log = log or (lambda _msg: None)
+    if not is_safe_name(folder):
+        raise ValueError(f"custom node folder must be a plain name: {folder!r}")
+    have = bundled_node_version(source)
+    if have != version:
+        raise RuntimeError(f"OpenFill's node pack is version {have}, the catalog asks for {version}")
+    target = Path(custom_nodes_dir) / folder
+    stamp = target / "VERSION"
+    if stamp.is_file() and stamp.read_text(encoding="utf-8").strip() == version:
+        log(f"{folder} is already at version {version}")
+        return target
+    if target.exists() and not stamp.is_file():
+        raise RuntimeError(
+            f"{target} already exists but was not installed by OpenFill. Move or delete that folder, then try again."
+        )
+    staging = target.with_name(target.name + ".openfill-new")
+    shutil.rmtree(staging, ignore_errors=True)
+    shutil.copytree(source, staging, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    (staging / "VERSION").write_text(version + "\n", encoding="utf-8")
+    if target.exists():
+        shutil.rmtree(target)
+    staging.rename(target)
+    log(f"installed OpenFill's node pack {folder} version {version}")
+    return target
+
+
+def ensure_bundled_nodes(custom_nodes_dir: Path, log: Callable[[str], None] | None = None) -> bool:
+    """Put OpenFill's own node pack (current version) into ``custom_nodes_dir`` before
+    ComfyUI starts, so native-resolution LaMa works without a visit to Models. Best
+    effort: False (and a log line) when it could not; the Models tab still offers
+    Install nodes then."""
+    log = log or (lambda _msg: None)
+    try:
+        if not Path(custom_nodes_dir).is_dir():
+            return False
+        install_bundled_node("openfill-nodes", bundled_node_version(), Path(custom_nodes_dir), log)
+        return True
+    except (OSError, RuntimeError, ValueError) as err:
+        log(f"OpenFill's node pack not installed: {err}")
+        return False
+
+
 def install_custom_node(
     repo: str,
     folder: str,
@@ -518,8 +583,11 @@ def install_custom_node(
     A new install uses the GitHub zip archive of the commit (no git needed). An
     existing git clone is reset to the pinned commit (needs git). Every command
     is an argument list (never a shell); ``repo``, ``folder`` and ``commit`` are
-    checked with :func:`validate_node_spec` first.
+    checked with :func:`validate_node_spec` first. OpenFill's own pack (repo
+    "bundled") is copied from the plug-in folder instead (:func:`install_bundled_node`).
     """
+    if repo == BUNDLED_REPO:
+        return install_bundled_node(folder, commit, Path(custom_nodes_dir), log)
     validate_node_spec(repo, folder, commit)
     log = log or (lambda _msg: None)
     target = Path(custom_nodes_dir) / folder

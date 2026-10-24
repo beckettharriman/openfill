@@ -78,6 +78,7 @@ class ModelSpec:
     clip2: str = ""  # text encoder 2 (CLIP-L)
     vae: str = ""  # separate VAE file
     inpaint_model: str = ""  # LaMa / MAT file for prompt-free removal
+    lora: str = ""  # LoRA applied to the diffusion model (the FLUX Fill object-removal LoRA)
 
     @property
     def uses_fooocus(self) -> bool:
@@ -100,6 +101,18 @@ class ModelSpec:
     def prompt_free(self) -> bool:
         """LaMa / MAT style models that ignore the prompt."""
         return self.effective_template == "inpaint_model"
+
+    @property
+    def eraser(self) -> bool:
+        """Erase-trained diffusion models (RORem, the FLUX Fill removal LoRA): every
+        run with them is an object removal, with their own prompt."""
+        return self.effective_template in ("sdxl_eraser", "flux_eraser")
+
+    @property
+    def native_lama(self) -> bool:
+        """LaMa, which OpenFill's own node runs at the image's own resolution (MAT is
+        fixed at 512 px and keeps comfyui-inpaint-nodes' node)."""
+        return self.prompt_free and "lama" in self.inpaint_model.lower()
 
 
 @dataclass

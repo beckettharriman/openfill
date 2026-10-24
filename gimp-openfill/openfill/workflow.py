@@ -26,6 +26,7 @@ OUTPUT_NODE = "save"
 @dataclass(frozen=True)
 class Capabilities:
     inpaint_nodes: bool = False
+    native_lama: bool = False  # OpenFill's own node pack (OpenFillLamaNative) is loaded
 
 
 class Graph:
@@ -51,6 +52,30 @@ class Graph:
 def _checkpoint(g: Graph, name: str) -> tuple[list, list, list]:
     g.add("ckpt", "CheckpointLoaderSimple", ckpt_name=name)
     return g.out("ckpt", 0), g.out("ckpt", 1), g.out("ckpt", 2)
+
+
+def _sampler_cfg(req: InpaintRequest) -> float:
+    """KSampler guidance: FLUX takes its guidance through FluxGuidance and samples at 1.0."""
+    return 1.0 if req.model.arch == "flux" else float(req.sampling.cfg)
+
+
+def _loaders(g: Graph, spec: ModelSpec) -> tuple[list, list, list]:
+    """Model, CLIP and VAE of a fill model: one checkpoint file, or (erasers) separate
+    files. RORem is an SDXL inpainting UNet in diffusers layout with SDXL's two text
+    encoders and VAE; the FLUX eraser is FLUX.1 Fill with the object-removal LoRA."""
+    template = spec.effective_template
+    if template == "sdxl_eraser":
+        g.add("unet", "UNETLoader", unet_name=spec.unet, weight_dtype="default")
+        g.add("clip", "DualCLIPLoader", clip_name1=spec.clip1, clip_name2=spec.clip2, type="sdxl")
+        g.add("vae", "VAELoader", vae_name=spec.vae)
+        return g.out("unet"), g.out("clip"), g.out("vae")
+    if template == "flux_eraser":
+        model, clip, vae = _flux_loaders(g, spec)
+        if spec.lora:
+            g.add("lora", "LoraLoaderModelOnly", model=model, lora_name=spec.lora, strength_model=1.0)
+            model = g.out("lora")
+        return model, clip, vae
+    return _checkpoint(g, spec.checkpoint)
 
 
 def _prompts(g: Graph, clip: list, prompt: str, negative: str) -> tuple[list, list]:
@@ -126,6 +151,9 @@ def _prefill(g: Graph, image: list, mask: list, req: InpaintRequest, caps: Capab
 
 # Templates whose graph supports the tiled main pass and the refine pass.
 REFINE_TEMPLATES = ("sd15_inpaint", "sdxl_fooocus")
+# Templates whose graph supports the tiled main pass (erasers work at full image
+# resolution in tiles of their own working size).
+TILED_TEMPLATES = (*REFINE_TEMPLATES, "sdxl_eraser", "flux_eraser")
 
 
 @dataclass
@@ -228,7 +256,7 @@ def _single_pass(g: Graph, req: InpaintRequest, caps: Capabilities, model, posit
         latent_image=latent,
         seed=int(seed),
         steps=int(req.sampling.steps),
-        cfg=float(req.sampling.cfg),
+        cfg=_sampler_cfg(req),
         sampler_name=req.sampling.sampler,
         scheduler=req.sampling.scheduler,
         denoise=float(req.sampling.denoise),
@@ -348,7 +376,11 @@ def _tile_pass(
             g.add(f"{p}_preblur", "INPAINT_MaskedBlur", image=image, mask=mask, blur=65, falloff=9)
         image = g.out(f"{p}_preblur")
     use_fooocus = not refine and req.model.uses_fooocus and caps.inpaint_nodes
-    inpaint_ckpt = req.model.arch == "sd15" or req.model.effective_template == "sd15_inpaint"
+    inpaint_ckpt = req.model.arch == "sd15" or req.model.effective_template in (
+        "sd15_inpaint",
+        "sdxl_eraser",
+        "flux_eraser",
+    )
     if use_fooocus:
         first = image
         if batch > 1:
@@ -422,7 +454,7 @@ def _tile_pass(
         latent_image=latent,
         seed=int(seed),
         steps=int(req.sampling.steps),
-        cfg=float(req.sampling.cfg),
+        cfg=_sampler_cfg(req),
         sampler_name=req.sampling.sampler,
         scheduler=req.sampling.scheduler,
         denoise=float(denoise),
@@ -474,8 +506,11 @@ def build_inpaint(
     need comfyui-inpaint-nodes; without them the single pass is used.
     """
     g = Graph()
-    model, clip, vae = _checkpoint(g, req.model.checkpoint)
+    model, clip, vae = _loaders(g, req.model)
     positive, negative = _prompts(g, clip, req.prompt, req.negative)
+    if req.model.effective_template == "flux_eraser":
+        g.add("guidance", "FluxGuidance", conditioning=positive, guidance=float(req.sampling.cfg or 30.0))
+        positive = g.out("guidance")
     g.add("load_image", "LoadImage", image=image_ref)
     g.add("load_mask", "LoadImage", image=mask_ref)
     tiles, refine_tiles = _tiles(req), _refine_tiles(req)
@@ -764,6 +799,21 @@ def build_qwen_edit(
     return _finish(g, req, g.out("decode"), mask, caps, filename_prefix)
 
 
+# The prompts erase-trained models run with (positive, negative). RORem's authors found
+# content-free quality words help; the FLUX Fill removal LoRA needs no prompt.
+ERASER_PROMPTS = {
+    "sdxl_eraser": (
+        "4K, high quality, masterpiece, Highly detailed, Sharp focus, Professional, photorealistic, realistic",
+        "low quality, worst, bad proportions, blurry, extra finger, Deformed, disfigured, unclear background",
+    ),
+    "flux_eraser": ("", ""),
+}
+
+# OpenFill's own node (comfy_nodes): LaMa at the image's own resolution.
+NATIVE_LAMA_NODE = "OpenFillLamaNative"
+NATIVE_LAMA_OVERLAP = 256  # px of overlap between windows when one pass does not fit
+
+
 def build_removal(
     req: InpaintRequest,
     image_ref: str,
@@ -772,10 +822,31 @@ def build_removal(
     caps: Capabilities,
     filename_prefix: str = "openfill/remove",
 ) -> dict:
-    """Prompt-free removal with LaMa / MAT through comfyui-inpaint-nodes."""
+    """Prompt-free removal with LaMa / MAT. LaMa runs through OpenFill's own node at the
+    crop's own resolution (one pass, or large overlapping windows at 1:1 when the
+    graphics memory is short; see comfy_nodes); MAT, or LaMa on a server without that
+    node, through comfyui-inpaint-nodes' Inpaint (using Model)."""
     if not caps.inpaint_nodes:
         raise ValueError("prompt-free removal needs comfyui-inpaint-nodes on the server")
     g = Graph()
+    if req.model.native_lama and caps.native_lama and not _tiles(req):
+        image, mask = _load_inputs(g, req, image_ref, mask_ref, caps)
+        g.add("inpaint_model", "INPAINT_LoadInpaintModel", model_name=req.model.inpaint_model)
+        g.add(
+            "remove",
+            NATIVE_LAMA_NODE,
+            inpaint_model=g.out("inpaint_model"),
+            image=image,
+            mask=mask,
+            seed=int(seed),
+            max_megapixels=0.0,
+            overlap=NATIVE_LAMA_OVERLAP,
+        )
+        out = g.out("remove")
+        if req.needs_scaling:
+            out = _scale_image(g, "out_scale", out, req.width, req.height)
+        g.add(OUTPUT_NODE, "SaveImage", images=out, filename_prefix=filename_prefix)
+        return g.to_dict()
     if _tiles(req):
         out = _removal_tiles(g, req, image_ref, mask_ref, seed)
         g.add(OUTPUT_NODE, "SaveImage", images=out, filename_prefix=filename_prefix)
@@ -919,6 +990,8 @@ BUILDERS = {
     "flux_fill": build_flux_fill,
     "qwen_edit": build_qwen_edit,
     "inpaint_model": build_removal,
+    "sdxl_eraser": build_inpaint,
+    "flux_eraser": build_inpaint,
 }
 
 
