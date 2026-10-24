@@ -57,6 +57,7 @@ class PCLayer:
     grow: int = 0
     feather: float = 0.0
     mask: bytes | None = None
+    selection: bytes | None = None  # the job's selection (canvas-sized), for a "selection" mask built later
 
     def get_name(self) -> str:
         return self.name
@@ -353,7 +354,19 @@ class PhotoCraftBridge:
                 rgba = rgba.resize((origin.width, origin.height), Image.LANCZOS)
             kind = "" if not use_selection_mask else ("pixels" if mask_pixels is not None else "selection")
             layers.append(
-                PCLayer(None, name, origin, rgba.tobytes(), None, index == 0, kind, grow, feather, mask_pixels)
+                PCLayer(
+                    None,
+                    name,
+                    origin,
+                    rgba.tobytes(),
+                    None,
+                    index == 0,
+                    kind,
+                    grow,
+                    feather,
+                    mask_pixels,
+                    image.selection,
+                )
             )
         image.pending = layers
         image.pending_group = base_name if group_variations and len(images) > 1 else ""
@@ -395,8 +408,9 @@ class PhotoCraftBridge:
             full.paste(mask, (layer.origin.x, layer.origin.y))
             return full
         if layer.mask_kind == "selection":
-            if image.selection is not None and len(image.selection) == size[0] * size[1]:
-                return Image.frombytes("L", size, image.selection)
+            selection = layer.selection if layer.selection is not None else image.selection
+            if selection is not None and len(selection) == size[0] * size[1]:
+                return Image.frombytes("L", size, selection)
             return Image.new("L", size, 255)
         return None
 
@@ -551,6 +565,23 @@ class PhotoCraftBridge:
             self.client.run("layer.setProps", layer=layer.id, name=layer.name, visible=layer.visible)
         self.client.run("layer.select", layer=ordered[0].id)
         return ordered
+
+    def history(self, image: PCImage) -> list[str]:
+        """The document's history (its step labels, oldest first)."""
+        self.activate(image)
+        return list((self.client.run("document.inspect") or {}).get("history") or [])
+
+    def rewind(self, image: PCImage, state: int) -> None:
+        """Take the document back to before history step ``state`` (it and every later step go)."""
+        self.activate(image)
+        self.client.run("history.deleteState", state=int(state))
+        image._snapshot = None
+
+    def put_back(self, image: PCImage, layer: PCLayer, name: str) -> None:
+        """Add one result layer again, on its own and visible: one step."""
+        layer.id, layer.group, layer.visible, layer.name = None, None, True, name
+        image.pending, image.pending_group = [layer], ""
+        self.commit(image)
 
     def show_variation(self, image: PCImage, layers: list[PCLayer], index: int) -> None:
         """The variations picker: only ``layers[index]`` visible (two steps, not one per layer)."""

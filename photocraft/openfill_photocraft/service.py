@@ -10,6 +10,7 @@ worker thread and keeps the variations of the last job for the picker.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import traceback
@@ -134,6 +135,11 @@ class Service:
         self._warm: threading.Thread | None = None
         self.image: PCImage | None = None
         self.layers: list[PCLayer] = []
+        # The document's history right after the last result went in, and as the picker left it:
+        # while it is still that, Keep and Discard can take the result step back and leave one
+        # clean step (Keep) or none (Discard) instead of piling deletes on top.
+        self._result_history: list[str] = []
+        self._expected_history: list[str] = []
 
     def _find_comfy(self) -> None:
         """First start: use the ComfyUI OpenFill for GIMP uses, or one already on this computer."""
@@ -325,6 +331,13 @@ class Service:
                     self.state.text = "Adding the result to PhotoCraft..."
                 self.bridge.finish(image)  # the results reach the document here, in one step
             self.layers = list(layers or [])
+            self._result_history = []
+            if image is not None and self.layers:
+                try:
+                    self._result_history = self.bridge.history(image)
+                except ControlError:
+                    pass
+            self._expected_history = list(self._result_history)
             with self.state.lock:
                 self.state.state = "done"
                 self.state.fraction = 1.0
@@ -417,6 +430,11 @@ class Service:
         if not self.image or not (0 <= index < len(self.layers)):
             raise RuntimeError("No variations to pick from.")
         self.bridge.show_variation(self.image, self.layers, index)
+        if self._expected_history:
+            try:
+                self._expected_history = self.bridge.history(self.image)
+            except ControlError:
+                self._expected_history = []
         with self.state.lock:
             self.state.shown = index
 
@@ -425,6 +443,16 @@ class Service:
         if not self.image or not self.layers:
             return
         shown = self.state.shown
+        if which != "all" and self._take_back_result():
+            if which == "selected":
+                chosen = self.layers[shown]
+                self.bridge.put_back(self.image, chosen, re.sub(r" \(\d+\)$", "", chosen.name))
+                self.layers = [chosen]
+            else:
+                self.layers = []
+            with self.state.lock:
+                self.state.variations = []
+            return
         group = self.layers[0].group
         if which == "none" and group is not None and all(layer.group == group for layer in self.layers):
             doomed_ids = [group]  # the variations' group, in one step
@@ -442,6 +470,23 @@ class Service:
         self.layers = [] if which != "all" else self.layers
         with self.state.lock:
             self.state.variations = []
+
+    def _take_back_result(self) -> bool:
+        """Undo the last result's step (and the picker's visibility steps after it) when the
+        document's history is still exactly as OpenFill left it. False when anything else
+        changed since: then nothing is taken back."""
+        base = self._result_history
+        self._result_history = []
+        if not base or self.image is None:
+            return False
+        try:
+            if self.bridge.history(self.image) != self._expected_history:
+                return False
+            self.bridge.rewind(self.image, len(base) - 1)
+            return True
+        except ControlError as err:
+            self.app.log.warning("keep: the result step was not taken back: %s", err)
+            return False
 
 
 def gimp_comfy_dirs() -> list[str]:

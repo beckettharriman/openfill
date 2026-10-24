@@ -213,6 +213,14 @@ class FakePhotoCraft:
     def run(self, command: str, **params):
         self.calls.append((command, params))
         doc = self.doc
+        if command in self.EDITS:  # what each history step started from, for history.deleteState
+            edited = self.docs[params["document"]] if command == "layer.copyToDocument" else doc
+            edited.setdefault("before", {})[len(edited["history"])] = json.loads(json.dumps(edited["layers"]))
+        if command == "history.deleteState":
+            doc["layers"] = doc["before"][params["state"]]
+            del doc["history"][params["state"] :]
+            doc["revision"] += 1
+            return {"states": len(doc["history"])}
         if command == "document.inspect":
             return {
                 "width": doc["size"][0],
@@ -294,6 +302,9 @@ class FakePhotoCraft:
             group["children"].insert(0, row)
         elif command == "layer.delete":
             doc["layers"] = [r for r in doc["layers"] if r["id"] != params["layer"]]
+            for group in doc["layers"]:
+                if "children" in group:
+                    group["children"] = [c for c in group["children"] if c["id"] != params["layer"]]
         elif command == "image.crop":
             doc["size"] = (params["width"], params["height"])
         self._edit(doc, command)
@@ -371,6 +382,53 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(len(expand), 3)  # the selection is loaded again for each mask
         self.assertEqual((expand[0]["radius"], expand[0]["applyAtCanvasBounds"]), (4, False))
         self.assertNotIn("edit.copy", self.pc.commands())  # the clipboard is never used
+
+    def test_keep_and_discard_leave_one_step_or_none(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.service import JobState, Service
+
+        def fill():
+            self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+            layers = self.bridge.insert_results(
+                self.image,
+                [png_bytes("red"), png_bytes("blue"), png_bytes("green")],
+                Rect(0, 0, 64, 48),
+                "Fill",
+                0.0,
+                None,
+            )
+            self.bridge.finish(self.image)
+            service = Service.__new__(Service)
+            service.bridge, service.client, service.image, service.layers = self.bridge, self.pc, self.image, layers
+            service.state = JobState()
+            service.app = SimpleNamespace(log=SimpleNamespace(warning=lambda *a: None))
+            service._result_history = service._expected_history = self.bridge.history(self.image)
+            return service, layers
+
+        service, _layers = fill()
+        service.show_variation(2)
+        service.keep("selected")
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])  # one Undo takes it back
+        top = self.target["layers"][0]
+        self.assertEqual((top["name"], top["visible"], top.get("mask")), ("Fill", True, True))
+        self.assertNotIn("children", top)  # the kept variation alone, no group
+        self.assertEqual(len(self.target["layers"]), 2)
+        self.assertEqual(service.layers[0].id, top["id"])
+
+        self.pc.run("history.deleteState", state=1)
+        service, _layers = fill()
+        service.show_variation(1)
+        service.keep("none")
+        self.assertEqual(self.target["history"], ["Open"])  # Discard leaves no step
+        self.assertEqual([r["name"] for r in self.target["layers"]], ["Background"])
+
+        # something else changed after the result: nothing is taken back, the hidden ones go
+        service, _layers = fill()
+        self.pc.run("layer.setProps", layer=2, name="Renamed")
+        service.keep("selected")
+        self.assertEqual(self.target["history"][:3], ["Open", "Duplicate Layer", "Layer Properties"])
+        self.assertEqual(len(self.target["layers"][0]["children"]), 1)
 
     def test_explicit_mask_is_feathered_in_python(self):
         mask = bytes(255 if y > 24 else 0 for y in range(48) for _ in range(64))
