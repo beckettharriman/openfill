@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Models already in ComfyUI's folders: header classification, scan, catalog entries (local_models)."""
 
 import json

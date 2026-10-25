@@ -1,5 +1,6 @@
 @echo off
 rem OpenFill installer: double-click this file. It runs install.ps1 and waits for a key at the end.
+rem SPDX-License-Identifier: Apache-2.0
 setlocal
 cd /d "%~dp0"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" %*
