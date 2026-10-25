@@ -10,7 +10,7 @@ GTK dependency, so it can be unit-tested and reused outside GIMP.
 import subprocess as _subprocess
 import sys as _sys
 
-__version__ = "2.0.0-beta.4"
+__version__ = "2.0.0-beta.5"
 __all__ = ["__version__"]
 
 

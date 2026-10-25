@@ -12,7 +12,7 @@
 </div>
 
 > [!IMPORTANT]
-> **Beta.** OpenFill for PhotoCraft is at 0.2.1, a fix-up of its first release, and the GIMP plug-in is at 2.0.0-beta.4. Both work end to end on Windows with an 8 GB laptop GPU, which is what I build and test on, and on Linux. The GIMP plug-in also runs on macOS. Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
+> **Beta.** OpenFill for PhotoCraft is at 0.2.1, a fix-up of its first release, and the GIMP plug-in is at 2.0.0-beta.5. Both work end to end on Windows with an 8 GB laptop GPU, which is what I build and test on, and on Linux. The GIMP plug-in also runs on macOS. Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
 
 ## Why I made this
 
@@ -47,7 +47,7 @@ More in [photocraft/README.md](photocraft/README.md).
 
 **GIMP 3.2**
 
-1. Download `openfill-2.0.0-beta.4.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it, and run `Install OpenFill.cmd` (or drag the `gimp-openfill` folder into GIMP's plug-ins folder; macOS and Linux: `sh install.sh`).
+1. Download `openfill-2.0.0-beta.5.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it, and run `Install OpenFill.cmd` (or drag the `gimp-openfill` folder into GIMP's plug-ins folder; macOS and Linux: `sh install.sh`).
 2. Restart GIMP and run `Filters > OpenFill > Generative Fill...`. If ComfyUI isn't found, **Download ComfyUI** sets it up (Windows), or **I already have ComfyUI** lets you pick one.
 3. Get LaMa and DreamShaper 8 Inpainting when the model manager opens. The first request starts the backend in about a minute; after that it's seconds.
 

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build the OpenFill release zip: what a user unzips and drops into GIMP.
 
-    python tools/make_release_zip.py [--out dist] [--version 2.0.0-beta.4]
+    python tools/make_release_zip.py [--out dist] [--version 2.0.0-beta.5]
 
 ``openfill-<version>.zip`` holds ``gimp-openfill/`` at its top level. That folder
 is complete on its own (plug-in code, ``models/catalog.json``,

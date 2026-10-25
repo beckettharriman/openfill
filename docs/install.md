@@ -38,7 +38,7 @@ The installer gives PhotoCraft's menu entry to OpenFill (a copy in `~/.local/sha
 ### Windows
 
 1. Install [GIMP 3.2](https://www.gimp.org/downloads/). Open it once, then close it.
-2. Unzip `openfill-2.0.0-beta.4.zip` and double-click `Install OpenFill.cmd`, or drag the `gimp-openfill` folder into `%APPDATA%\GIMP\3.2\plug-ins`.
+2. Unzip `openfill-2.0.0-beta.5.zip` and double-click `Install OpenFill.cmd`, or drag the `gimp-openfill` folder into `%APPDATA%\GIMP\3.2\plug-ins`.
 3. Restart GIMP and run `Filters > OpenFill > Generative Fill...`. If ComfyUI isn't found, **Download ComfyUI** sets it up for you, or **I already have ComfyUI** lets you pick an existing install.
 4. When the model manager opens, get LaMa (0.2 GB) and DreamShaper 8 Inpainting (2 GB).
 
