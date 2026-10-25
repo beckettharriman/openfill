@@ -1,5 +1,44 @@
 # Models and backend setup
 
+## Models and their licenses
+
+OpenFill doesn't ship a model. These are the models in its verified list. Each
+has its own license, and the model manager links to it. **Check the license
+before you use a result commercially: MAT and everything that runs on FLUX.1
+Fill are non-commercial.**
+
+| Model | Download | Graphics memory | For | License |
+|---|---|---|---|---|
+| LaMa | 0.2 GB | 2 GB | Remove (default) | Apache-2.0 |
+| MAT Places512 | 0.1 GB | 2 GB | Remove | **CC BY-NC 4.0, non-commercial** |
+| RORem (SDXL eraser) | 6.5 GB | 8 GB | Remove | Apache-2.0 |
+| FLUX.1 Fill object removal LoRA | 0.3 GB, runs on FLUX.1 Fill | 8 GB | Remove | MIT for the LoRA, but FLUX.1 Fill is **non-commercial** |
+| DreamShaper 8 Inpainting | 2.0 GB | 4 GB | Fill, Expand, Create | CreativeML OpenRAIL-M |
+| SD 1.5 Inpainting | 4.0 GB | 4 GB | Fill, Expand, Create | CreativeML OpenRAIL-M |
+| Realistic Vision V6 Inpainting | 2.0 GB | 4 GB | Fill, Expand, Create | CreativeML OpenRAIL-M |
+| RealVisXL V5 | 6.5 GB | 8 GB | Fill, Expand, Create | CreativeML OpenRAIL++-M |
+| Juggernaut XL v9 | 6.6 GB | 8 GB | Fill, Expand, Create | CreativeML OpenRAIL-M |
+| SDXL base 1.0 | 6.5 GB | 8 GB | Fill, Expand, Create | CreativeML OpenRAIL++-M |
+| Fooocus inpaint patch (used with every SDXL model) | 1.2 GB | | | OpenRAIL |
+| FLUX.1 Fill dev, GGUF Q4 | 10.0 GB | 8 GB | Fill, Expand | **FLUX.1 [dev] Non-Commercial License** |
+| FLUX.1 Fill dev, GGUF Q6 | 12.9 GB | 12 GB | Fill, Expand | **FLUX.1 [dev] Non-Commercial License** |
+| FLUX.1 Fill dev (full) | 27.3 GB | 16 GB | Fill, Expand | **FLUX.1 [dev] Non-Commercial License** |
+| Qwen Image Edit 2511, GGUF Q4 | 21.3 GB | 12 GB | Fill, Expand | Apache-2.0 |
+
+Sizes are in GiB, as the model manager shows them. Any model can also be
+picked for Remove. Your own SD 1.5 inpainting, SDXL and FLUX.1 Fill files in
+ComfyUI's model folders show up too, marked "your file", under their own
+licenses.
+
+The ComfyUI node packs OpenFill adds when a model needs them are
+[comfyui-inpaint-nodes](https://github.com/Acly/comfyui-inpaint-nodes) by Acly
+(GPL-3.0; LaMa, MAT and the Fooocus inpaint patch) and
+[ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) by city96 (Apache-2.0;
+the FLUX and Qwen GGUF files). They are downloaded into your ComfyUI, not
+shipped with OpenFill.
+
+## Where the files come from
+
 The backend and the verified model list were downloaded from the official
 project pages only (GitHub releases of Comfy-Org, GitHub clone of Acly,
 Hugging Face repos of the model authors). Checksums were verified with
@@ -220,10 +259,13 @@ of the companion files that live candidates reuse.
 | `realvisxl-v5` | SDXL | 6.5 GB | 8 GB | CreativeML OpenRAIL++-M (repository tag) | no | https://huggingface.co/SG161222/RealVisXL_V5.0 |
 | `fooocus-inpaint-patch` | SDXL helper | 1.2 GB | - | OpenRAIL (repository tag) | no | https://huggingface.co/lllyasviel/fooocus_inpaint |
 | `flux1-fill-dev-gguf-q4` | FLUX.1 Fill | 10.0 GB | 8 GB | FLUX.1 [dev] Non-Commercial | yes (VAE) | https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF |
+| `flux1-fill-dev-gguf-q6` | FLUX.1 Fill | 12.9 GB | 12 GB | FLUX.1 [dev] Non-Commercial | yes (VAE) | https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF |
 | `flux1-fill-dev` | FLUX.1 Fill | 27.3 GB | 16 GB | FLUX.1 [dev] Non-Commercial | yes | https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev |
 | `qwen-image-edit-2511-gguf-q4` | Qwen-Image-Edit | 21.3 GB | 12 GB | Apache-2.0 | no | https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF |
 | `lama-big` | Object removal | 196 MB | 2 GB | Apache-2.0 | no | https://github.com/advimman/lama |
 | `mat-places512` | Object removal | 120 MB | 2 GB | CC BY-NC 4.0 | no | https://huggingface.co/Acly/MAT |
+| `rorem-sdxl` | Object removal (SDXL eraser) | 6.5 GB | 8 GB | Apache-2.0 | no | https://huggingface.co/LetsThink/RORem |
+| `flux1-fill-object-removal-lora` | Object removal (LoRA on FLUX.1 Fill) | 0.3 GB | 8 GB | MIT for the LoRA; FLUX.1 [dev] Non-Commercial for FLUX.1 Fill | no | https://huggingface.co/lrzjason/ObjectRemovalFluxFill |
 
 (Sizes in GiB as the Models tab shows them.) Each entry records id, display
 name (messages use only the part before the packaging details in

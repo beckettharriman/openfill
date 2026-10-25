@@ -20,12 +20,15 @@ I moved to GIMP 3 as my Photoshop replacement after paying Adobe an outrageously
 
 Here's what you get:
 
-|                        |                                                                                                       |
-| ---------------------- | ----------------------------------------------------------------------------------------------------- |
-| **Fill with a prompt** | Select, type "a red door with brass handles", Enter. The fill lands on a new layer with a soft mask.  |
+|                        |                                                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Fill with a prompt** | Select, type "a red door with brass handles", Enter. The fill lands on a new layer with a soft mask. |
 | **Remove object**      | Select, press Remove. No prompt. It erases the selection at your image's own resolution.             |
 | **Generative Expand**  | Drag the canvas edges outward or pick a ratio, and it paints the new border. The prompt is optional. |
 | **Create**             | A new image or a new layer from a prompt, sized to the selection if there is one.                    |
+|                        |                                                                                                      |
+|                        |                                                                                                      |
+|                        |                                                                                                      |
 
 Results always go on new layers, in one undo step, so your existing layers are never painted over. In PhotoCraft it's a panel next to your image (and `Filter > Plug-ins > OpenFill`); in GIMP it's under `Filters > OpenFill`.
 
@@ -41,7 +44,7 @@ You need an NVIDIA graphics card (8 GB for the best models; Remove and SD 1.5 ru
 
 1. Install PhotoCraft, and Python from [python.org](https://www.python.org/downloads/) if you don't have it.
 2. Download `openfill-photocraft-0.2.0.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it and run **Install OpenFill for PhotoCraft.cmd** (Linux: `sh install.sh`).
-3. Open **PhotoCraft with OpenFill**. The first time, the panel offers **Download ComfyUI** (or **Choose folder** if you have it) and then **Open model manager** to get LaMa (0.2 GB) and DreamShaper 8 Inpainting (2 GB).
+3. Open **PhotoCraft with OpenFill**. The first time, the panel offers **Download ComfyUI** on Windows (or **Choose folder** if you have it) and then **Open model manager** to get LaMa (0.2 GB) and DreamShaper 8 Inpainting (2 GB).
 
 More in [photocraft/README.md](photocraft/README.md).
 
@@ -60,7 +63,7 @@ See [docs/install.md](docs/install.md).
 
 ## Models
 
-OpenFill doesn't ship a model. The model manager only recommends models that fit your graphics memory and disk, and also finds your own `.safetensors` and `.gguf` files in ComfyUI's folders.
+OpenFill doesn't ship a model. The model manager only recommends models that fit your graphics memory and disk, and also finds your own SD 1.5 inpainting, SDXL and FLUX.1 Fill files (`.safetensors` and `.gguf`) in ComfyUI's folders.
 
 | Job | Default model | Graphics memory | Time (RTX 4070 Laptop) |
 |---|---|---|---|
