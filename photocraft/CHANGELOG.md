@@ -5,7 +5,7 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - 2026-10-24
+## [0.2.0] - 2026-10-25
 
 First public release.
 
@@ -31,9 +31,6 @@ First public release.
   background, and uses it right away.
 - Linux installer (`install.sh`): hands PhotoCraft's menu entry to OpenFill, or
   adds a separate one, and can download PhotoCraft itself.
-- Generative Expand repaints the new area in windows at the image's own
-  resolution after its first pass (SD 1.5 and SDXL models), so the new edges of
-  a large canvas are no longer drawn at a fraction of its size.
 
 ### Changed
 
@@ -57,5 +54,7 @@ First public release.
 
 ### Known limits
 
-- Fill and Expand with FLUX or Qwen, and Create, work at about 1024 px on the
-  long side and are scaled up on large images (see the README).
+- Fill with FLUX or Qwen, Expand with every model, and Create work at about
+  1024 px on the long side and are scaled up on large images (see the README).
+  A second Expand pass at full resolution for SD 1.5 and SDXL is in the code
+  but off: it has not been tested on real photos yet.

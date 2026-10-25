@@ -79,8 +79,9 @@ class Settings:
     refine: bool = False
     refine_denoise: float = 0.4
     # Generative Expand worked below 1:1 (SD 1.5 and SDXL): a second pass at the image's own
-    # resolution over the new area, in windows, at ``expand_detail_denoise``.
-    expand_detail: bool = True
+    # resolution over the new area, in windows, at ``expand_detail_denoise``. Off until an
+    # A/B on real photos shows it helps (it is untested on hardware); turn on in config.json.
+    expand_detail: bool = False
     expand_detail_denoise: float = 0.4
     # Tiled fills: below 1.0 the whole context is generated first in one pass
     # (layout) and the tiles add detail to it at this denoise.

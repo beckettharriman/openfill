@@ -94,7 +94,7 @@ Your own SD 1.5 inpainting, SDXL and FLUX.1 Fill files in ComfyUI's model folder
 These are about resolution on large images. Remove is not affected: LaMa works at the image's own resolution.
 
 - **Fill** with SD 1.5 or SDXL works at no less than 60 % (SD 1.5) or 75 % (SDXL) of full resolution, in overlapping windows when the selection is large. With **FLUX** or Qwen there are no windows yet: a large selection is drawn at about 1024 px on its long side and scaled up, so a 2000 px selection comes back at about half resolution.
-- **Expand** draws the new area in one pass at about 1024 px, then, with SD 1.5 and SDXL, repaints it in windows at full resolution. With FLUX or Qwen it stays at that first pass: on a 3000 px canvas the new edges are drawn at about a third of full resolution and look soft.
+- **Expand** draws the new area in one pass at about 1024 px with every model and scales it up: on a 3000 px canvas the new edges are drawn at about a third of full resolution and look soft. Expand in rounds on big images.
 - **Create** makes images of up to 1024 px on the long side with SDXL (768 px with SD 1.5), in the shape you pick. As a layer in a larger selection it is scaled up to fit.
 - **Variations** of a Remove with LaMa or MAT are all the same, so Remove makes one.
 

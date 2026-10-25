@@ -17,6 +17,11 @@ TOKEN = "hf_abcdefghijklmnopqrstuvwxyz0123456789"
 
 
 class SettingsTests(unittest.TestCase):
+    def test_unvalidated_passes_are_off_by_default(self):
+        # The Expand detail windows and Fill's refine pass stay opt-in until an A/B shows they help.
+        self.assertFalse(Settings().expand_detail)
+        self.assertFalse(Settings().refine)
+
     def test_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
