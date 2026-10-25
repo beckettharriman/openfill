@@ -12,7 +12,7 @@
 </div>
 
 > [!IMPORTANT]
-> **Beta.** OpenFill for PhotoCraft is a first release (0.2.0) and the GIMP plug-in is at 2.0.0-beta.4. Both work end to end on Windows with an 8 GB laptop GPU, which is what I build and test on, and on Linux. The GIMP plug-in also runs on macOS. Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
+> **Beta.** OpenFill for PhotoCraft is at 0.2.1, a fix-up of its first release, and the GIMP plug-in is at 2.0.0-beta.4. Both work end to end on Windows with an 8 GB laptop GPU, which is what I build and test on, and on Linux. The GIMP plug-in also runs on macOS. Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
 
 ## Why I made this
 
@@ -40,7 +40,7 @@ You need an NVIDIA graphics card (8 GB for the best models; Remove and SD 1.5 ru
 **PhotoCraft (0.12 to 0.16)**
 
 1. Install PhotoCraft, and Python from [python.org](https://www.python.org/downloads/) if you don't have it.
-2. Download `openfill-photocraft-0.2.0.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it and run **Install OpenFill for PhotoCraft.cmd** (Linux: `sh install.sh`).
+2. Download `openfill-photocraft-0.2.1.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it and run **Install OpenFill for PhotoCraft.cmd** (Linux: `sh install.sh`).
 3. Open **PhotoCraft with OpenFill**. The first time, the panel offers **Download ComfyUI** on Windows (or **Choose folder** if you have it) and then **Open model manager** to get LaMa (0.2 GB) and DreamShaper 8 Inpainting (2 GB).
 
 More in [photocraft/README.md](photocraft/README.md).

@@ -16,7 +16,7 @@ The short steps are in the [README](../README.md#install). This page has the res
 
 1. Install PhotoCraft (the `.msi` from its [releases page](https://github.com/storytold/photocraft/releases)).
 2. Install Python from [python.org](https://www.python.org/downloads/windows/) if you don't have it (the default options are fine).
-3. Unzip `openfill-photocraft-0.2.0.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
+3. Unzip `openfill-photocraft-0.2.1.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
 4. Open **PhotoCraft with OpenFill**. PhotoCraft opens with the OpenFill panel next to it.
 5. The first time, the panel asks for what's missing:
    - **AI engine not found**: press **Download ComfyUI**. It downloads and unpacks in the background into `%LOCALAPPDATA%\OpenFill\ComfyUI`. If you already have ComfyUI, press **Choose folder** and pick the folder that has `main.py` in it (or the portable folder).
@@ -27,7 +27,7 @@ If no Python with Tk is found, the installer uses ComfyUI's own Python and the p
 ### Linux
 
 1. On Fedora, install the panel's packages: `sudo dnf install python3-pillow python3-tkinter`.
-2. Unzip `openfill-photocraft-0.2.0.zip` and run `sh install.sh` in the unzipped folder. No PhotoCraft yet? The installer offers to download the official Linux build (SHA-256 checked, no admin rights).
+2. Unzip `openfill-photocraft-0.2.1.zip` and run `sh install.sh` in the unzipped folder. No PhotoCraft yet? The installer offers to download the official Linux build (SHA-256 checked, no admin rights).
 3. Open PhotoCraft the usual way: from the app menu, or by opening an image in the file manager. OpenFill comes with it.
 4. The first time, the panel asks for what's missing. ComfyUI: choose its folder, or follow ComfyUI's [manual install](https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux) first. Models: **Open model manager**.
 

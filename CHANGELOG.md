@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Remove with LaMa failed the first time on a ComfyUI that did not have
+  OpenFill's node pack yet (one you set up yourself, say), with "needs the
+  custom node pack(s) openfill-nodes; press Install nodes in the Models tab",
+  until another job had started ComfyUI. OpenFill now puts its own node pack
+  in place before ComfyUI starts.
+
 ## [2.0.0-beta.4] - 2026-10-25
 
 ### Added

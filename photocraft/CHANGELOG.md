@@ -5,6 +5,23 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-25
+
+### Fixed
+
+- Keep could lose the variations. Clicking in PhotoCraft (to deselect, say)
+  while Keep was still working made it fail with "select.modify.feather is not
+  available right now: no selection", and the variations were gone. Keep now
+  makes the kept layer from the job's own selection first and only then takes
+  the variations away, a click on the way is tried again, and if Keep still
+  fails the variations stay as they were and Keep can be pressed again. The
+  same goes for the result a Fill, Remove or Expand adds at the end.
+- Remove with LaMa failed the first time on a ComfyUI you already had, with
+  "needs the custom node pack(s) openfill-nodes; press Install nodes in the
+  Models tab", until another job had started ComfyUI. OpenFill now puts its
+  own node pack in place before ComfyUI starts, as it does for the ComfyUI it
+  downloads for you.
+
 ## [0.2.0] - 2026-10-25
 
 First public release.

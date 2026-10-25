@@ -6,7 +6,7 @@ It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharrima
 
 <img src="../docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
 
-> **First release (0.2.0).** It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. macOS is not supported yet.
+> **Version 0.2.1** (the first release, 0.2.0, with two fixes). It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. macOS is not supported yet.
 
 ## What you need
 
@@ -21,7 +21,7 @@ It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharrima
 
 1. Install PhotoCraft (the `.msi`).
 2. Install Python from [python.org](https://www.python.org/downloads/windows/) if you don't have it (the default options are fine).
-3. Unzip `openfill-photocraft-0.2.0.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
+3. Unzip `openfill-photocraft-0.2.1.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
 4. Open **PhotoCraft with OpenFill**. PhotoCraft opens with the OpenFill panel next to it.
 5. The first time, the panel asks for what's missing:
    - **AI engine not found**: press **Download ComfyUI**. It downloads and unpacks in the background (a few minutes) into `%LOCALAPPDATA%\OpenFill\ComfyUI`. If you already have ComfyUI, press **Choose folder** instead and pick the folder that has `main.py` in it (or the portable folder).
@@ -33,7 +33,7 @@ To remove it, run `Install OpenFill for PhotoCraft.cmd --uninstall` from a comma
 
 ## Install on Linux
 
-1. Unzip `openfill-photocraft-0.2.0.zip` and run `sh install.sh` in the unzipped folder.
+1. Unzip `openfill-photocraft-0.2.1.zip` and run `sh install.sh` in the unzipped folder.
    - No PhotoCraft yet? The installer offers to download it for you (the official Linux build, SHA-256 checked, no admin rights).
 2. Open PhotoCraft the usual way: from the app menu, or by opening an image in the file manager. OpenFill comes with it.
 3. The first time, the panel asks for what's missing. ComfyUI: choose its folder, or follow ComfyUI's [manual install](https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux) first. Models: **Open model manager**.
