@@ -2,7 +2,7 @@
 
 # OpenFill
 
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) ![PhotoCraft 0.12](https://img.shields.io/badge/PhotoCraft-0.12-444.svg) ![GIMP 3.2](https://img.shields.io/badge/GIMP-3.2-444.svg) ![Python + ComfyUI](https://img.shields.io/badge/made%20with-Python%20%2B%20ComfyUI-orange.svg) ![Local](https://img.shields.io/badge/100%25-local-30d158.svg) ![Beta](https://img.shields.io/badge/status-beta-e8a33d.svg)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) ![PhotoCraft 0.12 to 0.16](https://img.shields.io/badge/PhotoCraft-0.12%20to%200.16-444.svg) ![GIMP 3.2](https://img.shields.io/badge/GIMP-3.2-444.svg) ![Python + ComfyUI](https://img.shields.io/badge/made%20with-Python%20%2B%20ComfyUI-orange.svg) ![Local](https://img.shields.io/badge/100%25-local-30d158.svg) ![Beta](https://img.shields.io/badge/status-beta-e8a33d.svg)
 
 *Generative fill, expand and object removal for PhotoCraft and GIMP 3, running on your graphics card. You own the whole pipeline, nothing leaves your computer.*
 
@@ -37,7 +37,7 @@ Generation runs in ComfyUI on your machine, listening on `127.0.0.1` only. The n
 
 You need an NVIDIA graphics card (8 GB for the best models; Remove and SD 1.5 run on less) and Windows 10/11 or Linux. On Windows, OpenFill can download ComfyUI for you.
 
-**PhotoCraft (0.12.0)**
+**PhotoCraft (0.12 to 0.16)**
 
 1. Install PhotoCraft, and Python from [python.org](https://www.python.org/downloads/) if you don't have it.
 2. Download `openfill-photocraft-0.2.0.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it and run **Install OpenFill for PhotoCraft.cmd** (Linux: `sh install.sh`).

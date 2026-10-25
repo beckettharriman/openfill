@@ -12,7 +12,7 @@ First public release.
 ### Added
 
 - Generative Fill, Remove object, Generative Expand and Text to Image for
-  PhotoCraft 0.12.0, running on a local ComfyUI with OpenFill's engine (the
+  PhotoCraft 0.12 to 0.16, running on a local ComfyUI with OpenFill's engine (the
   same models, model manager, seam correction and variations as OpenFill for
   GIMP).
 - The OpenFill panel next to PhotoCraft: Fill, Remove, Expand and Create, a
@@ -51,6 +51,11 @@ First public release.
 - A busy ComfyUI that did not answer one status request for a moment failed
   the job with "The AI backend is not available".
 - Starting a fill without a selection from the page named GIMP's tools.
+- PhotoCraft is started without its own control and automation variables
+  (`PHOTOCRAFT_CONTROL_TOKEN` and the others) in the environment. A token
+  exported next to OpenFill's token file stopped PhotoCraft from starting.
+- Image names that start with `-` reach PhotoCraft as files, not as options
+  (PhotoCraft refuses an option it does not know).
 
 ### Known limits
 

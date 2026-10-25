@@ -6,11 +6,11 @@ It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharrima
 
 <img src="../docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
 
-> **First release (0.2.0).** I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB). It also ran end to end on Linux (Fedora 44, RTX 2070 Max-Q) on an earlier build of 0.2.0. macOS is not supported yet.
+> **First release (0.2.0).** It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. macOS is not supported yet.
 
 ## What you need
 
-- **PhotoCraft 0.12.0** (the Windows `.msi` or the Linux build from its [releases page](https://github.com/storytold/photocraft/releases)).
+- **PhotoCraft 0.12 to 0.16** (the Windows `.msi` or the Linux build from its [releases page](https://github.com/storytold/photocraft/releases)). The newest, 0.16.0, is fine.
 - **Windows 10 or 11, or Linux.**
 - **An NVIDIA graphics card**, 8 GB or more for the SDXL and FLUX models. LaMa (Remove) and the SD 1.5 models are fine on less. Without an NVIDIA card it runs on the processor, which is very slow.
 - **ComfyUI.** On Windows the OpenFill panel downloads it for you the first time (a 1.9 GB download, 6.7 GB unpacked). If you use OpenFill for GIMP, the same ComfyUI is found by itself.

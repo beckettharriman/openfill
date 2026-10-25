@@ -1,0 +1,18 @@
+{
+  "menu_entries": [
+    "plugin.filter.app.openfill.panel"
+  ],
+  "menu_pick_reached_companion": false,
+  "menu_pick_left_no_step": true,
+  "remove": {
+    "state": "done",
+    "message": "Added layer: Object Removal",
+    "seconds": 7.1
+  },
+  "remove_steps_added": [
+    "Duplicate Layer"
+  ],
+  "remove_layers_added": 1,
+  "undo_restored": true,
+  "ok": false
+}

@@ -1,0 +1,193 @@
+[
+  {
+    "case": "expand",
+    "state": "done",
+    "history": [
+      "Generative Expand"
+    ],
+    "documents_added": 0,
+    "message": "Canvas is now 1448 x 1626",
+    "seconds": 40.2,
+    "previews": 9,
+    "canvas": [
+      1448,
+      1626
+    ],
+    "expected": [
+      1448,
+      1626
+    ],
+    "layers": [
+      [
+        "Generative Expand",
+        [
+          0,
+          0,
+          1448,
+          1626
+        ]
+      ],
+      [
+        "Background",
+        [
+          0,
+          0,
+          1448,
+          1626
+        ]
+      ]
+    ],
+    "old_edge_max_step": 13.3,
+    "canvas_edge_min": 52.7,
+    "canvas_edge_max": 190.7
+  },
+  {
+    "case": "fill-3-variations",
+    "state": "done",
+    "history": [
+      "Duplicate Layer"
+    ],
+    "documents_added": 0,
+    "message": "Added layer: Generative Fill: a red and yellow hot air balloon (1)",
+    "seconds": 69.7,
+    "previews": 25,
+    "variations": [
+      "Generative Fill: a red and yellow hot air balloon (1)",
+      "Generative Fill: a red and yellow hot air balloon (2)",
+      "Generative Fill: a red and yellow hot air balloon (3)"
+    ],
+    "top_layer": [
+      "Generative Fill: a red and yellow hot air balloon",
+      0
+    ],
+    "layers": [
+      [
+        "Generative Fill: a red and yellow hot air balloon",
+        0,
+        true
+      ],
+      [
+        "Generative Fill: a red and yellow hot air balloon (1)",
+        1,
+        true
+      ],
+      [
+        "Generative Fill: a red and yellow hot air balloon (2)",
+        1,
+        false
+      ],
+      [
+        "Generative Fill: a red and yellow hot air balloon (3)",
+        1,
+        false
+      ],
+      [
+        "Generative Expand",
+        0,
+        true
+      ],
+      [
+        "Background",
+        0,
+        true
+      ]
+    ]
+  },
+  {
+    "case": "picker",
+    "shown_after_pick": [
+      [
+        "Generative Fill: a red and yellow hot air balloon (1)",
+        false
+      ],
+      [
+        "Generative Fill: a red and yellow hot air balloon (2)",
+        true
+      ],
+      [
+        "Generative Fill: a red and yellow hot air balloon (3)",
+        false
+      ]
+    ],
+    "after_keep": [
+      [
+        "Generative Fill: a red and yellow hot air balloon",
+        0
+      ],
+      [
+        "Generative Expand",
+        0
+      ],
+      [
+        "Background",
+        0
+      ]
+    ],
+    "selection_kept": [
+      60,
+      290,
+      380,
+      300
+    ]
+  },
+  {
+    "case": "remove",
+    "state": "done",
+    "history": [
+      "Duplicate Layer"
+    ],
+    "documents_added": 0,
+    "message": "Added layer: Object Removal",
+    "seconds": 12.3,
+    "top": "Object Removal"
+  },
+  {
+    "case": "txt2img-layer",
+    "state": "done",
+    "history": [
+      "Duplicate Layer"
+    ],
+    "documents_added": 0,
+    "message": "Done",
+    "seconds": 24.4,
+    "top": [
+      "Text to Image: a cozy log cabin in a snowy pine forest at dusk,",
+      [
+        0,
+        0,
+        512,
+        384
+      ]
+    ]
+  },
+  {
+    "case": "txt2img-image",
+    "state": "done",
+    "history": [
+      "Open",
+      "Rename Layer",
+      "Duplicate Layer"
+    ],
+    "documents_added": 1,
+    "message": "Done",
+    "seconds": 53.0,
+    "documents": [
+      "porsche-v2.png",
+      "Text to Image a cozy log cabin in a snowy pine forest at dus.png"
+    ],
+    "new_doc_layers": [
+      [
+        "Text to Image: a cozy log cabin in a snowy pine forest at dusk, (2)",
+        false
+      ],
+      [
+        "Text to Image: a cozy log cabin in a snowy pine forest at dusk, (1)",
+        true
+      ]
+    ],
+    "size": [
+      768,
+      576
+    ]
+  }
+]

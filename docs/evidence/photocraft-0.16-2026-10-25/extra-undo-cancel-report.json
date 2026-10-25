@@ -1,0 +1,242 @@
+[
+  {
+    "case": "open",
+    "ok": true,
+    "size": [
+      1448,
+      1086
+    ],
+    "history": [
+      "Open"
+    ]
+  },
+  {
+    "case": "fill-1-variation",
+    "ok": true,
+    "state": "done",
+    "message": "Added layer: Generative Fill: a hot air balloon",
+    "seconds": 31.2,
+    "steps_added": [
+      "Duplicate Layer"
+    ],
+    "layers_after": [
+      [
+        "Generative Fill: a hot air balloon",
+        [
+          0,
+          0,
+          600,
+          540
+        ],
+        true
+      ],
+      [
+        "Background",
+        [
+          0,
+          0,
+          1448,
+          1086
+        ],
+        true
+      ]
+    ],
+    "size_after": [
+      1448,
+      1086
+    ],
+    "undo_restored": true
+  },
+  {
+    "case": "fill-3-keep",
+    "ok": true,
+    "state": "done",
+    "message": "Added layer: Generative Fill: a hot air balloon (1)",
+    "seconds": 41.3,
+    "steps_added": [
+      "Duplicate Layer"
+    ],
+    "layers_after": [
+      [
+        "Generative Fill: a hot air balloon",
+        [
+          0,
+          0,
+          600,
+          540
+        ],
+        true
+      ],
+      [
+        "Background",
+        [
+          0,
+          0,
+          1448,
+          1086
+        ],
+        true
+      ]
+    ],
+    "size_after": [
+      1448,
+      1086
+    ],
+    "undo_restored": true
+  },
+  {
+    "case": "fill-3-discard",
+    "ok": true,
+    "state": "done",
+    "layers_while_shown": 5,
+    "history_after": [
+      "Open",
+      "Rectangular Marquee"
+    ],
+    "same_as_before": true
+  },
+  {
+    "case": "remove-lama",
+    "ok": true,
+    "state": "done",
+    "message": "Added layer: Object Removal",
+    "seconds": 9.0,
+    "steps_added": [
+      "Duplicate Layer"
+    ],
+    "layers_after": [
+      [
+        "Object Removal",
+        [
+          0,
+          86,
+          1400,
+          1000
+        ],
+        true
+      ],
+      [
+        "Background",
+        [
+          0,
+          0,
+          1448,
+          1086
+        ],
+        true
+      ]
+    ],
+    "size_after": [
+      1448,
+      1086
+    ],
+    "undo_restored": true
+  },
+  {
+    "case": "expand",
+    "ok": true,
+    "state": "done",
+    "message": "Canvas is now 1704 x 1086",
+    "seconds": 28.0,
+    "steps_added": [
+      "Generative Expand"
+    ],
+    "layers_after": [
+      [
+        "Generative Expand",
+        [
+          0,
+          0,
+          1704,
+          1086
+        ],
+        true
+      ],
+      [
+        "Background",
+        [
+          0,
+          0,
+          1704,
+          1086
+        ],
+        true
+      ]
+    ],
+    "size_after": [
+      1704,
+      1086
+    ],
+    "undo_restored": true
+  },
+  {
+    "case": "create-layer",
+    "ok": true,
+    "state": "done",
+    "message": "Done",
+    "seconds": 14.0,
+    "steps_added": [
+      "Duplicate Layer"
+    ],
+    "layers_after": [
+      [
+        "Text to Image: a log cabin in snow",
+        [
+          0,
+          0,
+          512,
+          384
+        ],
+        true
+      ],
+      [
+        "Background",
+        [
+          0,
+          0,
+          1448,
+          1086
+        ],
+        true
+      ]
+    ],
+    "size_after": [
+      1448,
+      1086
+    ],
+    "undo_restored": true
+  },
+  {
+    "case": "create-image",
+    "ok": false,
+    "state": "done",
+    "documents_added": 1,
+    "size": [
+      680,
+      512
+    ],
+    "history": [
+      "Open",
+      "Rename Layer"
+    ],
+    "layers": [
+      [
+        "Text to Image: a log cabin in snow",
+        [
+          0,
+          0,
+          680,
+          512
+        ],
+        true
+      ]
+    ]
+  },
+  {
+    "case": "cancel",
+    "ok": true,
+    "state": "cancelled",
+    "message": "Cancelled - the image was left unchanged.",
+    "same_as_before": true
+  }
+]

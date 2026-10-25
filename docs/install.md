@@ -7,7 +7,7 @@ The short steps are in the [README](../README.md#install). This page has the res
 - **An NVIDIA graphics card with 8 GB or more** for the SDXL and FLUX models. LaMa (Remove) and the SD 1.5 models run on less. Without an NVIDIA card it runs on the processor, which takes minutes per fill. AMD cards are untested.
 - **ComfyUI.** On Windows, OpenFill downloads it for you the first time (about 2 GB, about 7 GB unpacked). On Linux and macOS you set it up once (steps below). If you already have ComfyUI, point OpenFill at it.
 - **Disk space** for the models: from 0.2 GB (LaMa) to about 13 GB (FLUX.1 Fill Q6).
-- **For PhotoCraft:** PhotoCraft 0.12.0, Windows 10 or 11 or Linux, and Python 3.10 or newer with Tk and Pillow. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. macOS is not supported yet.
+- **For PhotoCraft:** PhotoCraft 0.12 to 0.16, Windows 10 or 11 or Linux, and Python 3.10 or newer with Tk and Pillow. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. macOS is not supported yet.
 - **For GIMP:** GIMP 3.2 or newer on Windows, Linux or macOS. OpenFill uses GIMP's own Python and needs no extra packages.
 
 ## OpenFill for PhotoCraft

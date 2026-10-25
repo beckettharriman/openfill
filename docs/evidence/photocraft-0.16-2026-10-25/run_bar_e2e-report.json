@@ -1,0 +1,139 @@
+[
+  {
+    "case": "open_image",
+    "ok": true,
+    "context": "Select an area first: Marquee, Lasso or Object Selection."
+  },
+  {
+    "case": "panel_layout",
+    "ok": true,
+    "status": "Ready",
+    "variations": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "models": [
+      "Stable Diffusion 1.5 Inpainting",
+      "FLUX.1 Fill [dev] GGUF Q4_0 (+ T5 GGUF, CLIP-L, FLUX VAE)",
+      "DreamShaper 8 Inpainting (SD 1.5)",
+      "RealVisXL V5.0 (fp16, with Fooocus inpaint patch)",
+      "myPhotoMix_v3-inpainting (SD 1.5 inpainting, your file)",
+      "mySDXL-finetune (SDXL, your file)",
+      "my-flux-fill (FLUX.1 Fill, your file)",
+      "LaMa (big-lama) - prompt-free object removal at full resolution"
+    ],
+    "footer": [
+      "Generate"
+    ],
+    "title_bar": "motif",
+    "gear": [
+      "settings",
+      "models",
+      true,
+      true
+    ],
+    "engine_footer": [
+      "Save"
+    ],
+    "back": [
+      "",
+      false
+    ]
+  },
+  {
+    "case": "fill_from_menu",
+    "ok": true,
+    "menu_step_removed": true,
+    "focus": ".!canvas.!frame.!frame.!promptbox.!text",
+    "state": "done",
+    "message": "Added layer: Generative Fill: a red and yellow hot air balloon (1)",
+    "seconds": 37.8,
+    "history_added": [
+      "Duplicate Layer"
+    ],
+    "variations": 3,
+    "thumbnails_shown": 1,
+    "footer": [
+      "Discard",
+      "Keep all",
+      "Keep"
+    ]
+  },
+  {
+    "case": "pick_and_keep",
+    "ok": true,
+    "kept": [
+      "Generative Fill: a red and yellow hot air balloon"
+    ]
+  },
+  {
+    "case": "remove_from_menu",
+    "ok": true,
+    "state": "done",
+    "message": "Added layer: Object Removal",
+    "seconds": 8.7,
+    "history_added": [
+      "Duplicate Layer"
+    ],
+    "top": "Object Removal"
+  },
+  {
+    "case": "fill_needs_selection",
+    "ok": true,
+    "message": "Select an area first: Marquee, Lasso or Object Selection.",
+    "color": "#e5534b"
+  },
+  {
+    "case": "expand_preset",
+    "ok": true,
+    "size_text": "1448 x 1086 \u2192 1931 x 1086 px",
+    "canvas": [
+      1931,
+      1086
+    ],
+    "expected": [
+      1931,
+      1086
+    ],
+    "history_added": [
+      "Generative Expand"
+    ],
+    "seconds": 41.9,
+    "message": "Canvas is now 1931 x 1086"
+  },
+  {
+    "case": "create_image",
+    "ok": true,
+    "size": [
+      528,
+      768
+    ],
+    "documents": [
+      1,
+      2
+    ],
+    "seconds": 12.3,
+    "message": "Done"
+  },
+  {
+    "case": "hide_and_panel",
+    "ok": true,
+    "hidden": "withdrawn"
+  },
+  {
+    "case": "strip_and_header",
+    "ok": true,
+    "strip": [
+      236,
+      36,
+      "Ready"
+    ],
+    "moved": [
+      -40,
+      -20
+    ]
+  }
+]
