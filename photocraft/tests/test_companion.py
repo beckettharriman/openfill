@@ -1028,5 +1028,54 @@ class PageTests(unittest.TestCase):
             server.shutdown()
 
 
+class LaunchTests(unittest.TestCase):
+    """How the launcher starts PhotoCraft, which refuses unknown, repeated and conflicting options."""
+
+    def launch(self, files: list[str], env: dict[str, str]) -> tuple[list[str], dict]:
+        from unittest import mock
+
+        from openfill_photocraft import __main__ as main
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(main.subprocess, "Popen") as popen,
+        ):
+            t = Path(tmp)
+            main.launch(["photocraft"], 7890, t / "token", t, t / "exchange", files, t / "log")
+            args, kwargs = popen.call_args
+            kwargs["stdout"].close()
+            return args[0], kwargs
+
+    def test_flags_then_files_after_a_separator(self):
+        args, _ = self.launch(["-odd name.png", "b.png"], {})
+        self.assertEqual(args[:3], ["photocraft", "--control", "7890"])
+        for flag in ("--control-token-file", "--automation-read-root", "--automation-write-root"):
+            self.assertEqual(args.count(flag), 1, flag)  # a repeated flag is a usage error
+        self.assertEqual(args[-3:], ["--", "-odd name.png", "b.png"])
+
+    def test_no_separator_without_files(self):
+        args, _ = self.launch([], {})
+        self.assertNotIn("--", args)
+        self.assertEqual(args[-2], "--automation-write-root")
+
+    def test_photocraft_gets_no_control_variables(self):
+        exported = {
+            "PHOTOCRAFT_CONTROL_TOKEN": "ab" * 32,
+            "PHOTOCRAFT_CONTROL_TOKEN_FILE": "/elsewhere/token",
+            "PHOTOCRAFT_CONTROL_PORT": "7878",
+            "PHOTOCRAFT_AUTOMATION_READ_ROOT": "/",
+            "PHOTOCRAFT_AUTOMATION_WRITE_ROOT": "/",
+            "PHOTOCRAFT_CONFIG_DIR": "/keep/this",
+        }
+        _, kwargs = self.launch(["a.png"], exported)
+        env = kwargs["env"]
+        for name in exported:
+            if name != "PHOTOCRAFT_CONFIG_DIR":
+                self.assertNotIn(name, env)
+        self.assertEqual(env["PHOTOCRAFT_CONFIG_DIR"], "/keep/this")
+        self.assertEqual(env.get("PATH"), os.environ.get("PATH"))
+
+
 if __name__ == "__main__":
     unittest.main()

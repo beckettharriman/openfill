@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """End-to-end check against a running companion and PhotoCraft (not a unit test).
 
-    python photocraft/e2e/run_e2e.py [--out DIR]
+    python photocraft/e2e/run_e2e.py [--out DIR] [--port 7878]
 
 Opens porsche-v2.png from the exchange folder (copy it there first), then drives the
 companion's own HTTP API exactly as the page does: expand, a prompted fill with three
@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -30,8 +31,9 @@ from openfill_photocraft.control import ControlClient  # noqa: E402
 PROFILE = default_profile()
 URL = (PROFILE / "page-url.txt").read_text().strip()
 BASE, KEY = URL.split("/?key=")
-pc = ControlClient(7878, PROFILE / "control.token")
+pc = ControlClient(7878, PROFILE / "control.token")  # the port is set from --port in main()
 report: list[dict] = []
+MODEL = "realvisxl-v5"  # the fill and text-to-image model; --model
 
 
 def api(path: str, body: dict | None = None) -> dict:
@@ -106,14 +108,22 @@ def close_all() -> None:
 
 
 def main() -> int:
+    global MODEL
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default=str(HERE / "out"))
+    parser.add_argument("--port", type=int, default=7878, help="PhotoCraft control port (default 7878)")
+    parser.add_argument(
+        "--model", default="realvisxl-v5", help="model for the fills and text to image (default realvisxl-v5)"
+    )
     args = parser.parse_args()
+    pc.port = args.port
+    MODEL = args.model
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
     close_all()
-    pc.call("app.open", path="porsche-v2.png")
+    # app.open paths are relative to the read root, which the launcher sets to the home folder
+    pc.call("app.open", path=os.path.relpath(PROFILE / "exchange" / "porsche-v2.png", Path.home()))
     w0, h0 = doc()["width"], doc()["height"]
 
     # 1. expand top and bottom by 270 (4:3 towards portrait)
@@ -166,7 +176,7 @@ def main() -> int:
             "variations": 3,
             "strength": 1,
             "seed": 21,
-            "model": "realvisxl-v5",
+            "model": MODEL,
         },
     )
     rows = layers()
@@ -215,7 +225,7 @@ def main() -> int:
             "height": 384,
             "variations": 1,
             "seed": 3,
-            "model": "realvisxl-v5",
+            "model": MODEL,
             "target": "layer",
         },
     )
@@ -236,7 +246,7 @@ def main() -> int:
             "height": 768,
             "variations": 2,
             "seed": 3,
-            "model": "realvisxl-v5",
+            "model": MODEL,
             "target": "image",
         },
     )

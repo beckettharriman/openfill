@@ -65,10 +65,17 @@ jobs:
     # runner: PhotoCraft's .msi, then the zip is made and unpacked, "Install OpenFill for
     # PhotoCraft.cmd", start, Filter menu entries, the first-run states (no ComfyUI, no
     # models, Download ComfyUI resolves its pinned archive), quit, uninstall. No GPU.
+    # The oldest and the newest PhotoCraft OpenFill is tested with.
+    strategy:
+      fail-fast: false
+      matrix:
+        photocraft: ["0.12.0", "0.16.0"]
+    name: photocraft-windows-fresh-install (PhotoCraft ${{ matrix.photocraft }})
     runs-on: windows-latest
     timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
+      PC: ${{ matrix.photocraft }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -77,8 +84,8 @@ jobs:
       - name: Install PhotoCraft
         shell: pwsh
         run: |
-          gh release download v0.12.0 -R storytold/photocraft -p 'photocraft-0.12.0-windows-x64.msi' -D $env:RUNNER_TEMP
-          $msi = Join-Path $env:RUNNER_TEMP 'photocraft-0.12.0-windows-x64.msi'
+          gh release download "v$env:PC" -R storytold/photocraft -p "photocraft-$env:PC-windows-x64.msi" -D $env:RUNNER_TEMP
+          $msi = Join-Path $env:RUNNER_TEMP "photocraft-$env:PC-windows-x64.msi"
           Start-Process msiexec.exe -Wait -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart'
           Get-ItemProperty 'HKLM:\Software\PhotoCraft' | Select-Object InstallDir
       - name: Fresh install from the zip

@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """End-to-end check of the OpenFill bar and the Filter > Plug-ins entries (not a unit test).
 
-    python photocraft/e2e/run_bar_e2e.py [--out DIR] [--display :87]
+    python photocraft/e2e/run_bar_e2e.py [--out DIR] [--display :87] [--port 7878]
 
-Needs a PhotoCraft started by the OpenFill launcher (its control channel on 7878) and no
+Needs a PhotoCraft started by the OpenFill launcher (its control channel on 7878, or --port) and no
 companion running (stop it first: this script is the companion). It builds the same
 service, watcher and bar the launcher does, then acts like a user: picks OpenFill's
 entries from PhotoCraft's Filter menu, types into the bar and presses its buttons.
@@ -196,8 +196,16 @@ class Scenario:
         )
         self.shot("variation-2")
         self.ui(lambda: self.bar.keep_button.invoke())
-        left = self.wait_for(lambda: sum(1 for r in self.layers() if r["name"] in names) == 1)
-        record("pick_and_keep", shown and left, kept=[r["name"] for r in self.layers() if r["name"] in names])
+        # Keep leaves the picked variation alone, under the result's name without its " (2)"
+        kept_name = names[1].rsplit(" (", 1)[0]
+        left = self.wait_for(
+            lambda: [r["name"] for r in self.layers() if r["name"] in (*names, kept_name)] == [kept_name]
+        )
+        record(
+            "pick_and_keep",
+            shown and left,
+            kept=[r["name"] for r in self.layers() if r["name"] in (*names, kept_name)],
+        )
 
     def remove_from_menu(self) -> None:
         self.pc.run("select.rect", x=470, y=470, width=700, height=360, ellipse=True)
@@ -246,7 +254,7 @@ class Scenario:
         want = (round(h * 16 / 9), h) if w * 9 < h * 16 else (w, round(w * 9 / 16))
         record(
             "expand_preset",
-            st["state"] == "done" and (d["width"], d["height"]) == want and len(added) == 2,
+            st["state"] == "done" and (d["width"], d["height"]) == want and added == ["Generative Expand"],
             size_text=size_text,
             canvas=[d["width"], d["height"]],
             expected=list(want),
@@ -362,10 +370,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default=str(HERE / "out-bar"))
     parser.add_argument("--display", default=":87")
+    parser.add_argument("--port", type=int, default=7878, help="PhotoCraft control port (default 7878)")
     args = parser.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    pc = ControlClient(7878, PROFILE / "control.token")
+    pc = ControlClient(args.port, PROFILE / "control.token")
     exchange = PROFILE / "exchange"
     bridge = PhotoCraftBridge(pc, exchange, PROFILE, read_root=Path.home())
     service = Service(pc, bridge)

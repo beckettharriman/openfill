@@ -181,6 +181,23 @@ def port_open(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+# PhotoCraft's own variables for what OpenFill passes as flags. A flag wins over its variable,
+# but an exported PHOTOCRAFT_CONTROL_TOKEN next to our --control-token-file is a usage error
+# (exit status 2, PhotoCraft 0.12 to 0.16) that stops the launch, so PhotoCraft gets none of them.
+CONTROL_ENV = (
+    "PHOTOCRAFT_CONTROL_PORT",
+    "PHOTOCRAFT_CONTROL_TOKEN",
+    "PHOTOCRAFT_CONTROL_TOKEN_FILE",
+    "PHOTOCRAFT_AUTOMATION_READ_ROOT",
+    "PHOTOCRAFT_AUTOMATION_WRITE_ROOT",
+)
+
+
+def launch_env() -> dict[str, str]:
+    """The environment PhotoCraft starts with: ours, without its control and automation variables."""
+    return {k: v for k, v in os.environ.items() if k not in CONTROL_ENV}
+
+
 def launch(
     command: list[str], port: int, token: Path, read_root: Path, write_root: Path, files: list[str], log: Path
 ) -> subprocess.Popen:
@@ -197,9 +214,10 @@ def launch(
         str(read_root),
         "--automation-write-root",
         str(write_root),
-        *files,
     ]
-    kwargs: dict = {"stdout": open(log, "ab"), "stderr": subprocess.STDOUT, "env": dict(os.environ)}  # noqa: SIM115
+    if files:
+        args += ["--", *files]  # a file whose name starts with "-" is not read as an option
+    kwargs: dict = {"stdout": open(log, "ab"), "stderr": subprocess.STDOUT, "env": launch_env()}  # noqa: SIM115
     if Path(args[0]).is_file():
         kwargs["cwd"] = str(Path(args[0]).resolve().parent)  # not OpenFill's folder: an update must replace it
     if sys.platform == "win32":
@@ -255,7 +273,7 @@ def hand_over(info: dict, files: list[str], command: list[str] | None) -> int:
             left.append(name)
     if left and command:
         # Outside the folder OpenFill's PhotoCraft may read: open them in a PhotoCraft of their own.
-        subprocess.Popen([*command, "--new-instance", *left], start_new_session=sys.platform != "win32")
+        subprocess.Popen([*command, "--new-instance", "--", *left], start_new_session=sys.platform != "win32")
     try:
         with urllib.request.urlopen(_req(info, "/api/show", {"action": "panel"}), timeout=5):
             pass
