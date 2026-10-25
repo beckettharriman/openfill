@@ -20,15 +20,12 @@ I moved to GIMP 3 as my Photoshop replacement after paying Adobe an outrageously
 
 Here's what you get:
 
-|                        |                                                                                                      |
-| ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| **Fill with a prompt** | Select, type "a red door with brass handles", Enter. The fill lands on a new layer with a soft mask. |
-| **Remove object**      | Select, press Remove. No prompt. It erases the selection at your image's own resolution.             |
-| **Generative Expand**  | Drag the canvas edges outward or pick a ratio, and it paints the new border. The prompt is optional. |
-| **Create**             | A new image or a new layer from a prompt, sized to the selection if there is one.                    |
-|                        |                                                                                                      |
-|                        |                                                                                                      |
-|                        |                                                                                                      |
+<table>
+<tr><td><b>Fill with a prompt</b></td><td>Select, type "a red door with brass handles", Enter. The fill lands on a new layer with a soft mask.</td></tr>
+<tr><td><b>Remove object</b></td><td>Select, press Remove. No prompt. It erases the selection at your image's own resolution.</td></tr>
+<tr><td><b>Generative Expand</b></td><td>Drag the canvas edges outward or pick a ratio, and it paints the new border. The prompt is optional.</td></tr>
+<tr><td><b>Create</b></td><td>A new image or a new layer from a prompt, sized to the selection if there is one.</td></tr>
+</table>
 
 Results always go on new layers, in one undo step, so your existing layers are never painted over. In PhotoCraft it's a panel next to your image (and `Filter > Plug-ins > OpenFill`); in GIMP it's under `Filters > OpenFill`.
 
