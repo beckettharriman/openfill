@@ -143,6 +143,8 @@ class FakePhotoCraft:
         "layer.layerMask.revealSelection": "Add Layer Mask",
     }
 
+    NEEDS_SELECTION = ("select.modify.expand", "select.modify.feather", "layer.layerMask.revealSelection")
+
     def __init__(self, exchange: Path, size=(64, 48)) -> None:
         self.exchange = exchange
         self.calls: list[tuple[str, dict]] = []
@@ -150,6 +152,9 @@ class FakePhotoCraft:
         self.docs = [self._doc("photo.png", size, [{"id": 2, "name": "Background", "visible": True}])]
         self.docs[0]["selection"] = [8, 6, 20, 10]
         self.active = 0
+        # The user clicking to deselect in PhotoCraft while OpenFill works: before each of the
+        # next ``deselects`` selection-using commands, the active document loses its selection.
+        self.deselects = 0
 
     def _doc(self, name, size, layers):
         return {
@@ -213,6 +218,12 @@ class FakePhotoCraft:
     def run(self, command: str, **params):
         self.calls.append((command, params))
         doc = self.doc
+        if command in self.NEEDS_SELECTION:
+            if self.deselects > 0:
+                self.deselects -= 1
+                doc["selection"] = None
+            if not doc["selection"]:  # as PhotoCraft says it
+                raise control.ControlError(f"engine.execute: {command} is not available right now: no selection")
         if command in self.EDITS:  # what each history step started from, for history.deleteState
             edited = self.docs[params["document"]] if command == "layer.copyToDocument" else doc
             edited.setdefault("before", {})[len(edited["history"])] = json.loads(json.dumps(edited["layers"]))
@@ -296,8 +307,6 @@ class FakePhotoCraft:
         if command == "select.loadSelection":
             doc["selection"] = [0, 0, *doc["size"]]
         elif command == "layer.layerMask.revealSelection":
-            if not doc["selection"]:
-                raise RuntimeError("no selection")
             doc["selection"] = None  # adding a mask uses the selection up, as in PhotoCraft
             next(row for row in doc["layers"] if row["id"] == params["layer"])["mask"] = True
         elif command == "layer.setProps":
@@ -448,6 +457,120 @@ class BridgeTests(unittest.TestCase):
         service.keep("selected")
         self.assertEqual(self.target["history"][:3], ["Open", "Duplicate Layer", "Layer Properties"])
         self.assertEqual(len(self.target["layers"][0]["children"]), 1)
+
+    def _fill_service(self, grow=4, feather=6.0):
+        """A finished 3-variation fill (grow and feather: the masks use select.modify.*) and a
+        Service around it, as after a real job."""
+        from types import SimpleNamespace
+
+        from openfill_photocraft.service import JobState, Service
+
+        base = self.bridge.history(self.image)
+        self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        layers = self.bridge.insert_results(
+            self.image,
+            [png_bytes("red"), png_bytes("blue"), png_bytes("green")],
+            Rect(0, 0, 64, 48),
+            "Fill",
+            feather,
+            None,
+            grow=grow,
+        )
+        self.bridge.finish(self.image)
+        service = Service.__new__(Service)
+        service.bridge, service.client, service.image, service.layers = self.bridge, self.pc, self.image, layers
+        service.state = JobState()
+        service.state.variations = [layer.name for layer in layers]
+        service.app = SimpleNamespace(log=SimpleNamespace(warning=lambda *a: None))
+        service._collapsed = False
+        service._one_step(self.image, base)
+        return service, layers
+
+    def test_a_deselect_click_during_keep_is_harmless(self):
+        # Regression: a click to deselect while Keep ran made it fail with
+        # "select.modify.feather is not available right now: no selection", and the three
+        # variations vanished. Keep works from the job's stored selection, not the live one.
+        service, layers = self._fill_service()
+        service.show_variation(1)
+        self.target["selection"] = None  # the user deselected in the document
+        self.pc.deselects = 2  # and clicks land while Keep builds the mask
+        service.keep("selected")
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])  # still one step
+        top = self.target["layers"][0]
+        self.assertEqual((top["name"], top["visible"], top.get("mask")), ("Fill", True, True))
+        self.assertNotIn("children", top)
+        self.assertEqual(service.layers, [layers[1]])
+        self.assertEqual(service.state.variations, [])
+
+    def test_a_keep_that_fails_never_deletes_the_variations(self):
+        service, layers = self._fill_service()
+        service.show_variation(2)
+        before = json.loads(json.dumps(self.target["layers"]))
+        history = list(self.target["history"])  # the job's step and the picker's two
+        self.pc.deselects = 1000  # every try loses the selection
+        with self.assertRaises(control.ControlError):
+            service.keep("selected")
+        self.assertEqual(self.target["history"], history)
+        self.assertEqual(self.target["layers"], before)  # the variations are all still there
+        self.assertEqual(len(self.pc.docs), 1)  # scratch documents closed
+        self.assertEqual(service.layers, layers)  # and still in the picker
+        self.assertEqual(len(service.state.variations), 3)
+        self.pc.deselects = 0
+        service.keep("selected")  # Keep again works
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])
+        self.assertEqual(self.target["layers"][0]["name"], "Fill")
+        self.assertNotIn("children", self.target["layers"][0])
+
+    def test_keep_puts_the_variations_back_when_the_copy_fails(self):
+        service, layers = self._fill_service(grow=0, feather=0.0)
+        service.show_variation(0)
+        real_run, copies = self.pc.run, []
+
+        def run(command, **params):
+            if command == "layer.copyToDocument" and params.get("document") == 0:
+                copies.append(params)
+                if len(copies) == 1:
+                    raise control.ControlError("engine.execute: layer.copyToDocument: lost")
+            return real_run(command, **params)
+
+        self.pc.run = run
+        with self.assertRaises(control.ControlError):
+            service.keep("selected")
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])  # put back, one step
+        group = self.target["layers"][0]
+        self.assertEqual([c["name"] for c in group["children"]], ["Fill (1)", "Fill (2)", "Fill (3)"])
+        self.assertEqual([layer.id for layer in layers], [c["id"] for c in group["children"]])
+        self.assertEqual(len(service.state.variations), 3)
+        service.keep("selected")  # and Keep can be tried again
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])
+        self.assertNotIn("children", self.target["layers"][0])
+
+    def test_a_deselect_click_while_the_result_is_added(self):
+        self.pc.deselects = 1
+        self._fill_service()
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])
+        self.assertEqual(len(self.target["layers"][0]["children"]), 3)
+        self.assertTrue(all(c.get("mask") for c in self.target["layers"][0]["children"]))
+
+    def test_a_job_result_is_not_lost_when_adding_it_fails_once(self):
+        self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        self.bridge.insert_results(self.image, [png_bytes("red")], Rect(0, 0, 64, 48), "Fill", 6.0, None, grow=4)
+        self.pc.deselects = 4  # a whole mask sequence lost: the first commit fails
+        self.bridge.finish(self.image)  # the second one works
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])
+        self.assertEqual(len(self.pc.docs), 1)
+
+    def test_discard_and_keep_all_need_no_selection(self):
+        service, _layers = self._fill_service()
+        self.pc.deselects = 1000
+        service.keep("all")
+        self.assertEqual(len(self.target["layers"][0]["children"]), 3)
+        self.pc.run("history.deleteState", state=1)
+        self.pc.deselects = 0
+        service, _layers = self._fill_service()
+        self.pc.deselects = 1000
+        service.keep("none")
+        self.assertEqual(self.target["history"], ["Open"])
 
     def test_an_expand_is_one_step_and_keep_leaves_it_one(self):
         from types import SimpleNamespace

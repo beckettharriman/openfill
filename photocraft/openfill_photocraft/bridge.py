@@ -36,6 +36,9 @@ from openfill.geometry import Rect, flatten_over_mean
 
 from .control import ControlClient, ControlError
 
+# How often a mask is tried before a job's result fails (see ``_add_mask``).
+MASK_ATTEMPTS = 4
+
 
 class BridgeError(RuntimeError):
     """PhotoCraft did not do what OpenFill asked."""
@@ -453,17 +456,7 @@ class PhotoCraftBridge:
                 try:
                     self.client.run("document.activate", document=scratch)
                     for layer_id in targets:  # adding a mask uses the selection up, so load it for each
-                        self.client.run(
-                            "select.loadSelection", channel="transparency", layer=mask_layer, document=mask_doc
-                        )
-                        if kind == "selection":
-                            if grow > 0:
-                                self.client.run("select.modify.expand", radius=int(grow), applyAtCanvasBounds=False)
-                            if feather > 0:
-                                self.client.run(
-                                    "select.modify.feather", radius=float(feather), applyAtCanvasBounds=False
-                                )
-                        self.client.run("layer.layerMask.revealSelection", layer=layer_id)
+                        self._add_mask(scratch, layer_id, kind, grow, feather, mask_doc, mask_layer)
                 finally:
                     self._close(mask_doc)
                     self.client.run("document.activate", document=scratch)
@@ -479,6 +472,32 @@ class PhotoCraftBridge:
             if scratch is not None:
                 self._close(scratch)
             raise
+
+    def _add_mask(
+        self, scratch: int, layer_id: int, kind: str, grow: int, feather: float, mask_doc: int, mask_layer: int
+    ) -> None:
+        """Give ``layer_id`` (in the scratch document) the mask held by ``mask_layer``'s pixels.
+
+        The mask travels through the scratch document's selection for a moment, because
+        PhotoCraft adds a mask from a selection. The mask itself comes from the job's stored
+        selection or mask, never the user's. A click in PhotoCraft at that moment (a deselect,
+        say) can clear that selection under us ("no selection"), so the whole sequence is
+        loaded again and tried a few times before giving up."""
+        for attempt in range(MASK_ATTEMPTS):
+            try:
+                self.client.run("document.activate", document=scratch)
+                self.client.run("select.loadSelection", channel="transparency", layer=mask_layer, document=mask_doc)
+                if kind == "selection":
+                    if grow > 0:
+                        self.client.run("select.modify.expand", radius=int(grow), applyAtCanvasBounds=False)
+                    if feather > 0:
+                        self.client.run("select.modify.feather", radius=float(feather), applyAtCanvasBounds=False)
+                self.client.run("layer.layerMask.revealSelection", layer=layer_id)
+                return
+            except ControlError:
+                if attempt == MASK_ATTEMPTS - 1:
+                    raise
+                time.sleep(0.2)
 
     def _copy_in(self, image: PCImage, scratch: int, layer_id: int) -> int:
         """Copy ``layer_id`` from the scratch document into ``image``, above its active layer:
@@ -497,17 +516,27 @@ class PhotoCraftBridge:
         layers, group_name = image.pending, image.pending_group
         if not layers:
             return
-        image.pending, image.pending_group = [], ""
+        # The results stay pending until they are in the document, so a failure here can be
+        # tried again and never loses them.
         scratch, _ids, top = self._build(image, layers, group_name)
         try:
-            self.activate(image)
-            top_layer = self._top_layer(image)
-            if top_layer is not None:
-                self.client.run("layer.select", layer=top_layer)  # not a history step
-            copied = self._copy_in(image, scratch, top)
+            copied = self._copy_on_top(image, scratch, top)
         finally:
             self._close(scratch)
             self.activate(image)
+        image.pending, image.pending_group = [], ""
+        self._take_ids(image, layers, group_name, copied)
+        image._snapshot = None
+
+    def _copy_on_top(self, image: PCImage, scratch: int, top: int) -> int:
+        self.activate(image)
+        top_layer = self._top_layer(image)
+        if top_layer is not None:
+            self.client.run("layer.select", layer=top_layer)  # not a history step
+        return self._copy_in(image, scratch, top)
+
+    def _take_ids(self, image: PCImage, layers: list[PCLayer], group_name: str, copied: int) -> None:
+        """Note the ids the copied ``layers`` have in the document; the first is selected."""
         if group_name:
             rows = [row for row in self._flat_layers(image) if row.get("parent") == copied]
             if len(rows) != len(layers):
@@ -517,7 +546,6 @@ class PhotoCraftBridge:
         else:
             layers[0].id = copied
         self.client.run("layer.select", layer=layers[0].id)
-        image._snapshot = None
 
     def _top_layer(self, image: PCImage) -> int | None:
         """The topmost layer outside any group, so a result lands on top of the stack."""
@@ -593,11 +621,54 @@ class PhotoCraftBridge:
         self.client.run("history.deleteSnapshot", snapshot=snap)
         image._snapshot = None
 
-    def put_back(self, image: PCImage, layer: PCLayer, name: str) -> None:
-        """Add one result layer again, on its own and visible: one step."""
-        layer.id, layer.group, layer.visible, layer.name = None, None, True, name
-        image.pending, image.pending_group = [layer], ""
-        self.commit(image)
+    def keep_one(self, image: PCImage, since: int, layers: list[PCLayer], chosen: PCLayer, name: str) -> None:
+        """Keep: the job's result step (history step ``since``) becomes ``chosen`` alone, still
+        one step. The kept layer is built first, from the job's stored pixels and selection (the
+        live selection does not matter), and only then is the job's step taken back, so a
+        failure while building leaves the variations as they were. Should the copy fail after
+        that, the variations are put back (one step again) before the error is raised."""
+        kept = PCLayer(
+            None,
+            name,
+            chosen.origin,
+            chosen.rgba,
+            None,
+            True,
+            chosen.mask_kind,
+            chosen.grow,
+            chosen.feather,
+            chosen.mask,
+            chosen.selection,
+        )
+        scratch, _ids, top = self._build(image, [kept], "")
+        try:
+            self.rewind(image, since)
+            try:
+                copied = self._copy_on_top(image, scratch, top)
+            except BaseException:
+                self._restore(image, layers)
+                raise
+        finally:
+            self._close(scratch)
+            self.activate(image)
+        chosen.id, chosen.group, chosen.visible, chosen.name = copied, None, True, name
+        self.client.run("layer.select", layer=copied)
+        image._snapshot = None
+
+    def _restore(self, image: PCImage, layers: list[PCLayer]) -> None:
+        """Put variations that were taken back into the document again (one step)."""
+        saved = [(layer.id, layer.group, layer.visible) for layer in layers]
+        try:
+            for layer in layers:
+                layer.id, layer.group = None, None
+            group = re.sub(r" \(\d+\)$", "", layers[0].name) if len(layers) > 1 else ""
+            image.pending, image.pending_group = list(layers), group
+            self.commit(image)
+        except BaseException:
+            image.pending, image.pending_group = [], ""
+            for layer, (layer_id, group_id, visible) in zip(layers, saved, strict=True):
+                layer.id, layer.group, layer.visible = layer_id, group_id, visible
+            raise
 
     def show_variation(self, image: PCImage, layers: list[PCLayer], index: int) -> None:
         """The variations picker: only ``layers[index]`` visible (two steps, not one per layer)."""
@@ -662,7 +733,10 @@ class PhotoCraftBridge:
     def finish(self, image: PCImage) -> None:
         """End of a job: the results go into the document (a failed job leaves it untouched)."""
         try:
-            self.commit(image)
+            try:
+                self.commit(image)
+            except ControlError:
+                self.commit(image)  # still pending: once more (a click may have got in the way)
         finally:
             image.selection = None
             image._snapshot = None

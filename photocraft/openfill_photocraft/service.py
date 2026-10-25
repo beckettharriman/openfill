@@ -530,15 +530,20 @@ class Service:
             return
         shown = self.state.shown
         if which != "all" and self._unchanged_since_job():
+            # Everything here works from the job's stored layers (pixels, mask, selection), not
+            # from PhotoCraft's live selection, and the job is only forgotten once it worked: a
+            # failure leaves the variations in the document and in the picker.
             image, base = self.image, self._job_base
-            self._job_base = []
             if which == "none":
                 self.bridge.rewind(image, len(base))  # as if the job had not run: no step
                 self.layers = []
             elif not self._collapsed:
                 chosen = self.layers[shown]
-                self.bridge.rewind(image, len(base))
-                self.bridge.put_back(image, chosen, re.sub(r" \(\d+\)$", "", chosen.name))
+                try:
+                    self.bridge.keep_one(image, len(base), self.layers, chosen, re.sub(r" \(\d+\)$", "", chosen.name))
+                except BaseException:
+                    self._remember_history()
+                    raise
                 self.layers = [chosen]
             else:  # an expand: its canvas stays; the hidden variations go, still one step
                 for i, layer in enumerate(self.layers):
@@ -546,6 +551,7 @@ class Service:
                         self.client.run("layer.delete", layer=layer.id)
                 self.bridge.collapse(image, len(base), self.state.title or "OpenFill")
                 self.layers = [self.layers[shown]]
+            self._job_base = []
             with self.state.lock:
                 self.state.variations = []
             return
@@ -566,6 +572,14 @@ class Service:
         self.layers = [] if which != "all" else self.layers
         with self.state.lock:
             self.state.variations = []
+
+    def _remember_history(self) -> None:
+        """After a Keep that failed: the document's history as it is now, so Keep can be tried
+        again when the variations are still (or again) the job's last step."""
+        try:
+            self._expected_history = self.bridge.history(self.image)
+        except ControlError:
+            self._job_base = []
 
     def _unchanged_since_job(self) -> bool:
         """True when the document's history is still exactly as the last job and the picker
