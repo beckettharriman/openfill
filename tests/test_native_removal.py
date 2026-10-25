@@ -306,6 +306,64 @@ class BundledNodeInstallTests(unittest.TestCase):
             downloads.install_bundled_node("openfill-nodes", "999", self.nodes)
 
 
+class NodePackOnFirstUseTests(unittest.TestCase):
+    """A ComfyUI the user already had lacks OpenFill's node pack: the first Remove with LaMa
+    must put it in place (as the supervisor does before ComfyUI starts), not fail with
+    "needs the custom node pack(s) openfill-nodes"."""
+
+    def setUp(self):
+        import json
+        from types import SimpleNamespace
+
+        from openfill import app as app_mod
+
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        comfy = root / "ComfyUI_windows_portable"
+        (comfy / "python_embeded").mkdir(parents=True)
+        (comfy / "python_embeded" / "python.exe").write_text("", encoding="utf-8")
+        (comfy / "ComfyUI" / "custom_nodes").mkdir(parents=True)
+        (comfy / "ComfyUI" / "main.py").write_text("", encoding="utf-8")
+        lama = next(e for e in cat.load_catalog() if e.id == "lama-big")
+        for f in lama.files:
+            dest = comfy / "ComfyUI" / "models" / f.dest
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with open(dest, "wb") as fh:
+                fh.truncate(f.size)
+        self.nodes = comfy / "ComfyUI" / "custom_nodes"
+        for node in lama.requires_nodes:  # the other packs LaMa needs are there, as in a ComfyUI that ran it
+            if not node.bundled:
+                (self.nodes / node.folder).mkdir()
+        profile = root / "profile"
+        (profile / "openfill").mkdir(parents=True)
+        (profile / "openfill" / "config.json").write_text(
+            json.dumps({"comfy_dir": str(comfy), "url": "http://127.0.0.1:9"}), encoding="utf-8"
+        )
+        io = SimpleNamespace(profile_dir=lambda: str(profile), message=lambda _t: None)
+        self.app = app_mod.App(interactive=False, io=io, runner_cls=object)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_pack_is_put_in_place_while_comfyui_is_not_running(self):
+        self.assertFalse((self.nodes / "openfill-nodes").exists())
+        entry, _spec = self.app.resolve_model("lama-big")
+        self.assertEqual(entry.id, "lama-big")
+        self.assertEqual(
+            (self.nodes / "openfill-nodes" / "VERSION").read_text(encoding="utf-8").strip(),
+            downloads.bundled_node_version(),
+        )
+
+    def test_a_running_comfyui_keeps_the_install_nodes_message(self):
+        from openfill.backend import ModelMissing
+
+        self.app.server.is_healthy = lambda url=None: True
+        with self.assertRaises(ModelMissing) as caught:
+            self.app.resolve_model("lama-big")
+        self.assertIn("Install nodes", str(caught.exception))
+        self.assertFalse((self.nodes / "openfill-nodes").exists())
+
+
 class InpaintRequestTests(unittest.TestCase):
     def test_eraser_flags(self):
         self.assertTrue(ModelSpec(template="sdxl_eraser", arch="sdxl").eraser)

@@ -252,6 +252,8 @@ class App:
                 f"'{model_display_name(entry.name)}' is a companion file, not a model you can generate with"
             )
         status = cat.install_status(entry, self.models_root, self.custom_nodes_dir, self.catalog)
+        if status.missing_nodes and self._put_bundled_nodes(entry):
+            status = cat.install_status(entry, self.models_root, self.custom_nodes_dir, self.catalog)
         if not status.installed:
             if not self.has_model_for("fill"):
                 raise ModelMissing(cat.NO_MODEL_MESSAGE)
@@ -270,6 +272,27 @@ class App:
             )
         self._fetch_missing_previews(entry)
         return entry, cat.model_spec_for(entry, self.catalog, self.models_root)
+
+    def _put_bundled_nodes(self, entry: cat.ModelEntry) -> bool:
+        """Copy OpenFill's own node pack (it ships with the plug-in) into ComfyUI when ``entry``
+        needs it and it is missing, e.g. in a ComfyUI the user already had. Only while ComfyUI is
+        not running yet: it loads node packs when it starts, and the supervisor puts the pack in
+        place before each start anyway. A ComfyUI that is already running would not see it; then
+        the Models tab's Install nodes (which restarts it) stays the way. True when copied."""
+        bundled = [n for n in entry.requires_nodes if n.bundled and cat.node_missing(self.custom_nodes_dir, n)]
+        if not bundled or self.settings.backend != "comfyui" or comfy_layout(self.settings.comfy_dir) is None:
+            return False
+        try:
+            if self.server.is_healthy():
+                return False
+            from . import downloads
+
+            for node in bundled:
+                downloads.install_bundled_node(node.folder, node.commit, self.custom_nodes_dir, self.log.info)
+        except (OSError, RuntimeError, ValueError) as err:
+            self.log.warning("OpenFill's node pack not installed: %s", err)
+            return False
+        return True
 
     def _fetch_missing_previews(self, entry: cat.ModelEntry) -> None:
         """Queue the model's live-preview decoder (a few MB) when it is missing, e.g. for a model
