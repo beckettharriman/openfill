@@ -986,6 +986,24 @@ class ServiceSetupTests(unittest.TestCase):
         status = {"current": None, "history": [{"task_id": "t2", "state": "error", "message": "no network"}]}
         self.assertEqual(service.setup_progress(), {"error": "no network"})
 
+    def test_preflight_names_the_archive_it_would_download(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.service import Service
+
+        from openfill import comfy_setup
+
+        manifest = comfy_setup.load_manifest(ROOT / "models" / "comfy_setup.json")
+        for older in (False, True):
+            pre = SimpleNamespace(older_gpu=older, blocked=False, needs_cpu_choice=False, text=lambda: "")
+            service = Service.__new__(Service)
+            service.app = SimpleNamespace(setup_preflight=lambda d, pre=pre: (manifest, pre))
+            info = service.comfy_preflight()
+            want = manifest.for_older_gpus() if older else manifest
+            self.assertEqual(info["url"], want.archive_url)
+            self.assertEqual(info["bytes"], want.archive_size)
+            self.assertTrue(info["url"].startswith("https://github.com/comfyanonymous/ComfyUI/releases/download/"))
+
 
 class PageTests(unittest.TestCase):
     def test_key_is_required(self):

@@ -23,8 +23,6 @@ jobs:
         os: [ubuntu-latest]
         python-version: ["3.10", "3.12"]
         include:
-          # macOS (no /proc, its own paths) runs in the public gimp-openfill repo; this private
-          # repo gets no macOS runners. Put it back when this merges into gimp-openfill.
           # Windows is the main target: backslash paths, no fork, install.ps1.
           - os: windows-latest
             python-version: "3.12"
@@ -45,9 +43,28 @@ jobs:
           python -m pip install --quiet pillow
           python -m unittest photocraft/tests/test_companion.py -v
 
-  photocraft-windows-smoke:
-    # The PhotoCraft companion against a real PhotoCraft on Windows: its .msi, then
-    # "Install OpenFill for PhotoCraft.cmd", start, Filter menu entries, quit, uninstall.
+  test-macos:
+    # macOS has no /proc and its own paths. Only in the public repository: private
+    # repositories on this account get no macOS runners.
+    if: ${{ !github.event.repository.private }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests
+        run: python -m unittest discover -t . -s tests -v
+      - name: PhotoCraft companion tests
+        run: |
+          python -m pip install --quiet pillow
+          python -m unittest photocraft/tests/test_companion.py -v
+
+  photocraft-windows-fresh-install:
+    # A fresh install of the PhotoCraft companion from the release zip on a clean Windows
+    # runner: PhotoCraft's .msi, then the zip is made and unpacked, "Install OpenFill for
+    # PhotoCraft.cmd", start, Filter menu entries, the first-run states (no ComfyUI, no
+    # models, Download ComfyUI resolves its pinned archive), quit, uninstall. No GPU.
     runs-on: windows-latest
     timeout-minutes: 20
     env:
@@ -64,7 +81,9 @@ jobs:
           $msi = Join-Path $env:RUNNER_TEMP 'photocraft-0.12.0-windows-x64.msi'
           Start-Process msiexec.exe -Wait -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart'
           Get-ItemProperty 'HKLM:\Software\PhotoCraft' | Select-Object InstallDir
-      - name: Smoke test
+      - name: Fresh install from the zip
+        env:
+          OPENFILL_NO_FIXED_ROOTS: "1"
         run: |
           python -m pip install --quiet pillow
-          python photocraft/e2e/smoke_install.py
+          python photocraft/e2e/smoke_install.py --first-run

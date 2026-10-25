@@ -393,10 +393,13 @@ class Service:
 
         install_dir = comfy_setup.default_install_dir()
         manifest, pre = self.app.setup_preflight(install_dir)
-        size = comfy_setup.download_notice(manifest.for_older_gpus() if pre.older_gpu else manifest)
+        chosen = manifest.for_older_gpus() if pre.older_gpu else manifest
+        size = comfy_setup.download_notice(chosen)
         return {
             "folder": str(install_dir),
             "size": size,
+            "url": chosen.archive_url,
+            "bytes": chosen.archive_size,
             "blocked": pre.blocked,
             "cpu": pre.needs_cpu_choice,
             "older_gpu": pre.older_gpu,

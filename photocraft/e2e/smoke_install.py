@@ -3,7 +3,11 @@
 """Install, start, check and uninstall OpenFill for PhotoCraft against a real PhotoCraft
 (the Windows CI job runs it after installing PhotoCraft's .msi). No GPU or ComfyUI needed.
 
-    python photocraft/e2e/smoke_install.py
+    python photocraft/e2e/smoke_install.py [--first-run]
+
+With ``--first-run`` (a fresh machine: no ComfyUI, no models) it also checks what the panel
+shows the first time: the AI engine not found, no model installed, and on Windows that
+Download ComfyUI resolves the archive it would fetch (a HEAD request, nothing downloaded).
 """
 
 from __future__ import annotations
@@ -23,7 +27,64 @@ def step(text: str) -> None:
     print(f"== {text}", flush=True)
 
 
+def head(url: str) -> tuple[int, int]:
+    """Status and Content-Length of ``url`` after redirects, without downloading it."""
+
+    class KeepHead(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            new = super().redirect_request(req, fp, code, msg, headers, newurl)
+            if new is not None:
+                new.method = req.get_method()
+            return new
+
+    opener = urllib.request.build_opener(KeepHead)
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "openfill-smoke"})
+    with opener.open(req, timeout=60) as resp:
+        return resp.status, int(resp.headers.get("Content-Length") or -1)
+
+
+def first_run_checks(info: dict, state: dict) -> bool:
+    """The first-run states of a fresh install: no ComfyUI, no models, Download ComfyUI ready."""
+    ok = True
+
+    def get(path: str) -> dict:
+        req = urllib.request.Request(info["base"] + path, headers={"X-OpenFill-Key": info["key"]})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read())
+
+    step("first run: no ComfyUI")
+    print("comfyReady:", state.get("comfyReady"), "| comfyProblem:", state.get("comfyProblem"))
+    if state.get("comfyReady") or not state.get("comfyProblem"):
+        print("FAIL: a fresh install should report the AI engine as not found")
+        ok = False
+    step("first run: no models")
+    models = get("/api/models")
+    installed = [r["id"] for r in models.get("rows", []) if r.get("installed")]
+    print("rows:", len(models.get("rows", [])), "| installed:", installed, "| error:", models.get("error"))
+    if installed:
+        print("FAIL: a fresh install should have no model installed")
+        ok = False
+    if sys.platform == "win32":
+        step("first run: Download ComfyUI resolves its archive")
+        pre = get("/api/comfy/preflight")
+        print({k: pre.get(k) for k in ("folder", "size", "url", "bytes", "blocked", "cpu", "text")})
+        if not str(pre.get("folder", "")).lower().endswith(os.path.join("openfill", "comfyui").lower()):
+            print("FAIL: the ComfyUI folder is not under %LOCALAPPDATA%\\OpenFill")
+            ok = False
+        try:
+            status, length = head(pre["url"])
+            print("HEAD", status, length)
+            if status != 200 or length != pre["bytes"]:
+                print("FAIL: the archive URL does not answer with the pinned size")
+                ok = False
+        except Exception as err:  # noqa: BLE001
+            print("FAIL: the archive URL did not resolve:", err)
+            ok = False
+    return ok
+
+
 def main() -> int:
+    first_run = "--first-run" in sys.argv[1:]
     sys.path[:0] = [str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")]
     from openfill_photocraft import install
     from openfill_photocraft.bridge import default_profile
@@ -99,6 +160,8 @@ def main() -> int:
         ok = False
     if "OpenFill" not in entries:
         print("FAIL: no OpenFill entries in Filter > Plug-ins")
+        ok = False
+    if first_run and not first_run_checks(info, state):
         ok = False
 
     step("close PhotoCraft: OpenFill stops too")

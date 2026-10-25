@@ -218,6 +218,8 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
                     self._json(200, api.models())
                 elif path == "/api/settings":
                     self._json(200, api.settings())
+                elif path == "/api/comfy/preflight":  # what Download ComfyUI would fetch (read-only)
+                    self._json(200, api.service.comfy_preflight())
                 elif path == "/api/thumb":
                     data = api.thumbnail(int((parse_qs(urlparse(self.path).query).get("i") or ["0"])[0]))
                     if data:
