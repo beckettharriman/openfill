@@ -341,8 +341,14 @@ class NodePackOnFirstUseTests(unittest.TestCase):
         )
         io = SimpleNamespace(profile_dir=lambda: str(profile), message=lambda _t: None)
         self.app = app_mod.App(interactive=False, io=io, runner_cls=object)
+        self.log_file = str(profile / "openfill" / "openfill.log")
 
     def tearDown(self):
+        # The App's log file stays open (Windows cannot delete an open file): close our handler.
+        for handler in list(self.app.log.handlers):
+            if getattr(handler, "baseFilename", None) == self.log_file:
+                handler.close()
+                self.app.log.removeHandler(handler)
         self.tmp.cleanup()
 
     def test_the_pack_is_put_in_place_while_comfyui_is_not_running(self):
