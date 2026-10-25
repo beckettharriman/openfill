@@ -1080,9 +1080,10 @@ class OpenFill(Gimp.PlugIn):
         p.add_boolean_argument(
             "remove",
             "_Remove object (ignore prompt)",
-            "Erase what is selected and continue the background. Uses an installed "
-            "LaMa/MAT removal model when available, otherwise the chosen model with a "
-            "background prompt.",
+            "Erase what is selected and continue the background. With the active model an "
+            "installed LaMa runs at the image's own resolution (then MAT); a model picked "
+            "by id is used as picked (erasers with their own prompt, generation models "
+            "with a background prompt).",
             False,
             RW,
         )
