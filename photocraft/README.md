@@ -2,7 +2,7 @@
 
 Generative Fill, Remove object, Generative Expand and Text to Image for [PhotoCraft](https://github.com/storytold/photocraft), running on your own graphics card through a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Nothing leaves your computer.
 
-It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharriman/openfill#gimp-3): the same models, model manager, mask handling, seam correction and variations. Only the connection to the editor is different.
+It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharriman/openfill#install): the same models, model manager, mask handling, seam correction and variations. Only the connection to the editor is different.
 
 <img src="../docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
 

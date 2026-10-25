@@ -33,6 +33,7 @@ FILES = (
     "models/comfy_setup.json",
     "docs/security.md",
     "docs/models.md",
+    "docs/install.md",
 )
 PLUGIN_DIR = "gimp-openfill"
 # Copies placed inside the plug-in folder so it works wherever it is dropped.
