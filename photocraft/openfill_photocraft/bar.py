@@ -1209,7 +1209,7 @@ class Bar:
         threading.Thread(target=work, name="openfill-setup", daemon=True).start()
 
     def _comfy_help(self) -> None:
-        webbrowser.open("https://github.com/beckettharriman/gimp-openfill#install")
+        webbrowser.open("https://github.com/beckettharriman/openfill#photocraft")
 
     # updates ----------------------------------------------------------------------
 

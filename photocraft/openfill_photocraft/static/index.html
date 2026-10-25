@@ -300,7 +300,7 @@ function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.
   else if(dl){const pct=dl.statusText.startsWith("Downloading")?parseInt(dl.statusText.split(" ").pop()):0;html=`<div class="head">${svg("download",C.accent)}<span class="t">Downloading ${esc(short(dl.name))}</span><span class="r">${pct}%</span></div><div class="bar"><i style="width:${pct}%"></i></div><div class="small">You can keep working.</div>`}
   else if(models.length&&!models.some(r=>r.installed&&r.runnable&&(r.capabilities||[]).includes("fill")))html=`<div class="head">${svg("warn",C.warn)}<span class="t">No models installed</span></div><div class="small">Install at least one model to start. LaMa and DreamShaper 8 (2.2 GB) cover every tool.</div><div style="display:flex"><button class="btn accent flex" id="setup-models">Open model manager</button></div>`;
   if(c.dataset.html!==html){c.dataset.html=html;c.innerHTML=html;c.hidden=!html;
-    if($("setup-folder"))$("setup-folder").onclick=()=>{showGear("engine");$("s-comfy_dir").focus()};if($("setup-help"))$("setup-help").onclick=()=>window.open("https://github.com/beckettharriman/gimp-openfill#install");if($("setup-models"))$("setup-models").onclick=()=>showGear("models")}}
+    if($("setup-folder"))$("setup-folder").onclick=()=>{showGear("engine");$("s-comfy_dir").focus()};if($("setup-help"))$("setup-help").onclick=()=>window.open("https://github.com/beckettharriman/openfill#photocraft");if($("setup-models"))$("setup-models").onclick=()=>showGear("models")}}
 
 function fmt(s){s=Math.round(s);return Math.floor(s/60)+":"+String(s%60).padStart(2,"0")}
 async function tick(){

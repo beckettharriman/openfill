@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 CHUNK = 1024 * 1024
-USER_AGENT = "gimp-openfill/2.0 (+https://github.com/thndrbrrr/gimp-stable-boy)"
+USER_AGENT = "openfill/2.0 (+https://github.com/beckettharriman/openfill)"
 
 # The Hugging Face token is only ever sent to these hosts (and their subdomains),
 # only over https, and never forwarded on a redirect (the CDN URLs are pre-signed).

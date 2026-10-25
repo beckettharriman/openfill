@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0-beta.4] - 2026-10-25
 
 ### Added
 
@@ -49,9 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   took minutes. The Remove menu keeps the model choice: LaMa (default), MAT,
   the erasers and each generation model, used as picked. Picking a removal
   model in Fill uses it for that run without making it the active model.
-- License: Apache-2.0 (was GPL-3.0-or-later). OpenFill started as a port of
-  Stable Boy by Torben Giesselmann; none of its code remains, and the README
-  keeps the credit.
+- License: Apache-2.0 (was GPL-3.0-or-later). OpenFill started as a GIMP 3
+  port of Torben Giesselmann's GIMP plug-in; none of its code remains, and the
+  README keeps the credit.
+- The repository is now beckettharriman/openfill (was gimp-openfill) and also
+  holds OpenFill for PhotoCraft, which shares this engine.
 - A removal's layer is called Object Removal, whichever model made it. With an
   eraser it was named after the eraser's own trigger words ("Generative Fill:
   4K, high quality, masterpiece..."), and a fill model used to remove was
@@ -515,6 +517,8 @@ Rectangular selections as processing region; Windows startup fix.
 Initial release: text to image, image to image, inpainting, upscaling via the
 AUTOMATIC1111 WebUI API.
 
-[Unreleased]: https://github.com/beckettharriman/gimp-openfill/compare/v2.0.0-beta.2...HEAD
-[2.0.0-beta.2]: https://github.com/beckettharriman/gimp-openfill/releases/tag/v2.0.0-beta.2
-[2.0.0-beta.1]: https://github.com/beckettharriman/gimp-openfill/releases/tag/v2.0.0-beta.1
+[Unreleased]: https://github.com/beckettharriman/openfill/compare/v2.0.0-beta.4...HEAD
+[2.0.0-beta.4]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.4
+[2.0.0-beta.3]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.3
+[2.0.0-beta.2]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.2
+[2.0.0-beta.1]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.1
