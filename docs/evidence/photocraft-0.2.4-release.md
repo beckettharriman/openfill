@@ -10,6 +10,6 @@ The same ZIP was copied to the M3, its checksum compared, and its installer run 
 
 The earlier no-Tk integration check used a separate PhotoCraft instance on the same M3, served the fallback page and authenticated state API, and closed that test instance. The Windows command installer also selected portable ComfyUI Python without Tk in an isolated test.
 
-Local checks: 657 core tests (four skips), 65 companion tests (one skip), Ruff 0.14.0 lint/format and whitespace checks passed.
+Local checks: 657 core tests (four skips), 66 companion tests (two skips on Linux), Ruff 0.14.0 lint/format and whitespace checks passed.
 
 The Mac keeps a standard title bar on the expanded panel for native keyboard focus. The menu change addresses focus loss, not every possible backend stall. LaMa smoothing and generation quality are unchanged. No new image generation was required for this UI/setup release.

@@ -1490,7 +1490,7 @@ class DefaultBrowserTests(unittest.TestCase):
                 process.assert_not_called()
 
 
-@unittest.skipUnless(shutil.which("sh"), "needs a POSIX shell")
+@unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "Linux/macOS shell launchers")
 class ShellInterpreterTests(unittest.TestCase):
     def run_script(self, script, explicit):
         with tempfile.TemporaryDirectory(prefix="openfill python reuse ") as temp:
@@ -1575,3 +1575,38 @@ class MacInputTests(unittest.TestCase):
         select.pick.assert_called_once_with("DreamShaper")
         previous.focus_set.assert_called_once()
         self.assertIsNone(select._native_menu)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows command installer")
+class WindowsInterpreterTests(unittest.TestCase):
+    def test_explicit_comfy_python_without_tk(self):
+        with tempfile.TemporaryDirectory(prefix="openfill python reuse ") as temp:
+            root = Path(temp)
+            script = root / "Install OpenFill for PhotoCraft.cmd"
+            shutil.copy2(ROOT / "photocraft" / script.name, script)
+            package = root / "openfill_photocraft"
+            package.mkdir()
+            (package / "__init__.py").write_text("")
+            (package / "install.py").write_text(
+                "import json,os,sys; from pathlib import Path\n"
+                "def main(args):\n"
+                "    Path(os.environ['TEST_LOG']).write_text(json.dumps({'python':sys.executable,'args':args}))\n"
+                "    return 0\n"
+            )
+            (root / "tkinter.py").write_text("raise ImportError('test: no Tk')\n")
+            env = dict(
+                os.environ, OPENFILL_PYTHON=sys.executable, PYTHONPATH=str(root), TEST_LOG=str(root / "result.json")
+            )
+            result = subprocess.run(
+                [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", "call", str(script), "--test", "a path with spaces"],
+                env=env,
+                input="\n",
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            data = json.loads((root / "result.json").read_text())
+            self.assertEqual(data["python"], sys.executable)
+            self.assertEqual(data["args"], ["--test", "a path with spaces"])
+            self.assertNotIn("Adding Pillow", result.stdout)
