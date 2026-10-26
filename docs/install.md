@@ -7,7 +7,7 @@ The short steps are in the [README](../README.md#install). This page has the res
 - **A graphics card with 8 GB or more** for the SDXL and FLUX models: NVIDIA, or AMD Radeon RX 7000 or newer (see [AMD graphics cards](#amd-graphics-cards)). LaMa (Remove) and the SD 1.5 models run on less. Without a card ComfyUI can use, it runs on the processor, which takes minutes per fill.
 - **ComfyUI.** On Windows, OpenFill downloads it for you the first time (about 2 GB, about 7 GB unpacked). On Linux and macOS you set it up once (steps below). If you already have ComfyUI, point OpenFill at it.
 - **Disk space** for the models: from 0.2 GB (LaMa) to about 13 GB (FLUX.1 Fill Q6).
-- **For PhotoCraft:** PhotoCraft 0.12 to 0.16, Windows 10 or 11 or Linux, and Python 3.10 or newer with Tk and Pillow. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. The released version does not support macOS yet; the unreleased Mac launcher has passed testing on an M3. See [PhotoCraft on macOS](#photocraft-on-macos-unreleased).
+- **For PhotoCraft:** PhotoCraft 0.12 to 0.16, Windows 10 or 11 or Linux, and Python 3.10 or newer with Tk and Pillow. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. PhotoCraft 0.2.3 adds Apple Silicon support, tested on an M3. See [PhotoCraft on macOS](#photocraft-on-macos).
 - **For GIMP:** GIMP 3.2 or newer on Windows, Linux or macOS. OpenFill uses GIMP's own Python and needs no extra packages.
 
 The steps below mention the **model manager**: that's where you get models and see what fits your graphics card. In PhotoCraft it's the gear icon in the OpenFill panel, Models section (the **Open model manager** button on the first run goes there too). In GIMP it's `Filters > OpenFill > Generative Fill...`, Models tab.
@@ -18,7 +18,7 @@ The steps below mention the **model manager**: that's where you get models and s
 
 1. Install PhotoCraft (the `.msi` from its [releases page](https://github.com/storytold/photocraft/releases)).
 2. Install Python from [python.org](https://www.python.org/downloads/windows/) if you don't have it (the default options are fine).
-3. Unzip `openfill-photocraft-0.2.2.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
+3. Unzip `openfill-photocraft-0.2.3.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
 4. Open **PhotoCraft with OpenFill**. PhotoCraft opens with the OpenFill panel next to it.
 5. The first time, the panel asks for what's missing:
    - **AI engine not found**: press **Download ComfyUI**. It downloads and unpacks in the background into `%LOCALAPPDATA%\OpenFill\ComfyUI`. With an AMD Radeon RX 7000 or newer it gets ComfyUI's version for AMD cards. If you already have ComfyUI, press **Choose folder** and pick the folder that has `main.py` in it (or the portable folder).
@@ -29,7 +29,7 @@ If no Python with Tk is found, the installer uses ComfyUI's own Python and the p
 ### Linux
 
 1. On Fedora, install the panel's packages: `sudo dnf install python3-pillow python3-tkinter`.
-2. Unzip `openfill-photocraft-0.2.2.zip` and run `sh install.sh` in the unzipped folder. No PhotoCraft yet? The installer offers to download the official Linux build (SHA-256 checked, no admin rights).
+2. Unzip `openfill-photocraft-0.2.3.zip` and run `sh install.sh` in the unzipped folder. No PhotoCraft yet? The installer offers to download the official Linux build (SHA-256 checked, no admin rights).
 3. Open PhotoCraft the usual way: from the app menu, or by opening an image in the file manager. OpenFill comes with it.
 4. The first time, the panel asks for what's missing. ComfyUI: choose its folder, or follow ComfyUI's [manual install](https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux) first (AMD card: [AMD on Linux](#amd-on-linux)). Models: **Open model manager**.
 
@@ -83,14 +83,14 @@ On the M3, a 512 px fill with DreamShaper 8 takes 50 to 90 s once warm, Remove o
 
 GIMP's own Python can only be started by GIMP on macOS, so OpenFill runs its background helper (the supervisor that starts and stops ComfyUI and does the downloads) with ComfyUI's Python. OpenFill's windows show up in the Dock as "Python"; that is how GIMP runs Python plug-ins on macOS.
 
-### PhotoCraft on macOS (unreleased)
+### PhotoCraft on macOS
 
-Tested on a MacBook Air M3, 16 GB, macOS 14.7, with PhotoCraft 0.16.0. The public PhotoCraft companion 0.2.2 archive does not contain the Mac launcher. Use the [current source ZIP](https://github.com/beckettharriman/openfill/archive/refs/heads/main.zip), unzip it, and open its `photocraft` folder for the install command below.
+Tested on a MacBook Air M3, 16 GB, macOS 14.7, with PhotoCraft 0.16.0. Download [openfill-photocraft-0.2.3.zip](https://github.com/beckettharriman/openfill/releases/download/photocraft-v0.2.3/openfill-photocraft-0.2.3.zip) and unzip it.
 
 1. Get the macOS DMG from [PhotoCraft releases](https://github.com/storytold/photocraft/releases) and copy PhotoCraft to `/Applications` or `~/Applications`.
 2. Install Python 3.10 or newer from [python.org](https://www.python.org/downloads/macos/), which includes Tk. Run `python3 -m pip install Pillow`. If your ComfyUI Python already has Tk and Pillow, the installer can use it.
 3. Set up ComfyUI as described [above](#macos), or use your existing checkout and models. No second model download is needed when GIMP already uses that ComfyUI.
-4. In the checkout's `photocraft` folder, run `sh install.sh`. In a companion test archive, run it from the archive's top folder.
+4. Open Terminal in the unzipped `openfill-photocraft-0.2.3` folder and run `sh install.sh`.
 5. Open `~/Applications/PhotoCraft with OpenFill.app`. In Settings > Engine, choose `~/ComfyUI` if it is not found. Settings > Models lists your existing models; LaMa and DreamShaper 8 cover all four tools.
 6. Open an image, select an area, and try Fill or Remove. Expand adds canvas space; Create makes an image from a prompt.
 
@@ -214,6 +214,6 @@ Every error message ends with what to do next, and in GIMP the same advice shows
 - **PhotoCraft was opened another way:** open it with "PhotoCraft with OpenFill" (or the menu entry the installer set up on Linux). A PhotoCraft opened another way has no control channel; OpenFill notices and asks you to close it and open it again.
 - **Where things are kept:** `%APPDATA%\OpenFill for PhotoCraft` on Windows and `~/.config/openfill-photocraft` on Linux for the PhotoCraft version, `<GIMP profile>/openfill` for the GIMP plug-in. Settings in the GIMP plug-in are created the first time you change one; until then the defaults are used.
 
-### One-click uninstall (unreleased installer)
+### One-click uninstall (PhotoCraft 0.2.3)
 
 Close OpenFill, open **Uninstall OpenFill for PhotoCraft**, then confirm. On Windows it is in the Start menu; on Linux it is in the app menu; on macOS it is in `~/Applications`. PhotoCraft, settings and models stay in place. The command-line uninstall steps above still work for older installations. The Mac command-line uninstall and reinstall passed on the M3; the confirmation dialog still needs a hands-on check.
