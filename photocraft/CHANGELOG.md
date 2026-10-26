@@ -5,6 +5,25 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-10-25
+
+### Added
+
+- AMD graphics cards. I don't have an AMD card, so this is untested on real
+  AMD hardware so far; please tell me how it goes.
+  - On Windows, **Download ComfyUI** gets ComfyUI's own version for AMD cards
+    (ROCm 7.2.1, 1.6 GB) for a Radeon RX 7000 or RX 9000, Radeon PRO W7000,
+    or Ryzen AI 300 or Max chip, from the same ComfyUI release and checked the
+    same way as the NVIDIA one. The setup card says which one it gets. For an
+    older Radeon it says to follow the AMD steps in the install guide and
+    choose the folder.
+  - On Linux, a ComfyUI with PyTorch for ROCm works through **Choose folder**,
+    and **How to install** opens the AMD steps when the card is AMD.
+  - Models shows an AMD card's name and graphics memory
+    ("RX 7900 XT · 20 GB VRAM · ..."), and on an AMD card the GGUF models say
+    that they have been reported to give only noise on some Radeon cards.
+- The README says where the model manager is: the gear icon, Models.
+
 ## [0.2.1] - 2026-10-25
 
 ### Fixed

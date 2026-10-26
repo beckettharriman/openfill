@@ -12,7 +12,7 @@
 </div>
 
 > [!IMPORTANT]
-> **Beta.** OpenFill for PhotoCraft is at 0.2.1, a fix-up of its first release, and the GIMP plug-in is at 2.0.0-beta.5. Both work end to end on Windows with an 8 GB laptop GPU, which is what I build and test on, and on Linux. The GIMP plug-in also runs on macOS. Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
+> **Beta.** OpenFill for PhotoCraft is at 0.2.2 and the GIMP plug-in is at 2.0.0-beta.6, both now with support for AMD graphics cards. Both work end to end on Windows with an 8 GB NVIDIA laptop GPU, which is what I build and test on, and on Linux. AMD cards are not tested yet, as I don't have one. The GIMP plug-in also runs on macOS. Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
 
 ## Why I made this
 
@@ -35,19 +35,21 @@ Generation runs in ComfyUI on your machine, listening on `127.0.0.1` only. The n
 
 ## Install
 
-You need an NVIDIA graphics card (8 GB for the best models; Remove and SD 1.5 run on less) and Windows 10/11 or Linux. On Windows, OpenFill can download ComfyUI for you.
+You need an NVIDIA graphics card or an AMD Radeon RX 7000 or newer (8 GB for the best models; Remove and SD 1.5 run on less) and Windows 10/11 or Linux. On Windows, OpenFill can download ComfyUI for you, including ComfyUI's version for AMD cards. AMD support is new and untested on a real AMD card, see [AMD graphics cards](docs/install.md#amd-graphics-cards).
+
+The model manager in the steps below is where you get models: in PhotoCraft it's the gear icon in the OpenFill panel, Models section (the **Open model manager** button on the first run goes there too); in GIMP it's `Filters > OpenFill > Generative Fill...`, Models tab.
 
 **PhotoCraft (0.12 to 0.16)**
 
 1. Install PhotoCraft, and Python from [python.org](https://www.python.org/downloads/) if you don't have it.
-2. Download `openfill-photocraft-0.2.1.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it and run **Install OpenFill for PhotoCraft.cmd** (Linux: `sh install.sh`).
+2. Download `openfill-photocraft-0.2.2.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it and run **Install OpenFill for PhotoCraft.cmd** (Linux: `sh install.sh`).
 3. Open **PhotoCraft with OpenFill**. The first time, the panel offers **Download ComfyUI** on Windows (or **Choose folder** if you have it) and then **Open model manager** to get LaMa (0.2 GB) and DreamShaper 8 Inpainting (2 GB).
 
 More in [photocraft/README.md](photocraft/README.md).
 
 **GIMP 3.2**
 
-1. Download `openfill-2.0.0-beta.5.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it, and run `Install OpenFill.cmd` (or drag the `gimp-openfill` folder into GIMP's plug-ins folder; macOS and Linux: `sh install.sh`).
+1. Download `openfill-2.0.0-beta.6.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it, and run `Install OpenFill.cmd` (or drag the `gimp-openfill` folder into GIMP's plug-ins folder; macOS and Linux: `sh install.sh`).
 2. Restart GIMP and run `Filters > OpenFill > Generative Fill...`. If ComfyUI isn't found, **Download ComfyUI** sets it up (Windows), or **I already have ComfyUI** lets you pick one.
 3. Get LaMa and DreamShaper 8 Inpainting when the model manager opens. The first request starts the backend in about a minute; after that it's seconds.
 

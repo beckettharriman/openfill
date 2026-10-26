@@ -6,14 +6,14 @@ It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharrima
 
 <img src="../docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
 
-> **Version 0.2.1** (the first release, 0.2.0, with two fixes). It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. macOS is not supported yet.
+> **Version 0.2.2** (adds AMD graphics cards, untested on a real AMD card so far). It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. macOS is not supported yet.
 
 ## What you need
 
 - **PhotoCraft 0.12 to 0.16** (the Windows `.msi` or the Linux build from its [releases page](https://github.com/storytold/photocraft/releases)). The newest, 0.16.0, is fine.
 - **Windows 10 or 11, or Linux.**
-- **An NVIDIA graphics card**, 8 GB or more for the SDXL and FLUX models. LaMa (Remove) and the SD 1.5 models are fine on less. Without an NVIDIA card it runs on the processor, which is very slow.
-- **ComfyUI.** On Windows the OpenFill panel downloads it for you the first time (a 1.9 GB download, 6.7 GB unpacked). If you use OpenFill for GIMP, the same ComfyUI is found by itself.
+- **An NVIDIA graphics card, or an AMD Radeon RX 7000 or newer**, 8 GB or more for the SDXL and FLUX models. LaMa (Remove) and the SD 1.5 models are fine on less. AMD support is new and I haven't been able to test it on an AMD card yet ([AMD graphics cards](../docs/install.md#amd-graphics-cards)). Without a card ComfyUI can use, it runs on the processor, which is very slow.
+- **ComfyUI.** On Windows the OpenFill panel downloads it for you the first time (a 1.9 GB download, 6.7 GB unpacked; the version for AMD cards is 1.6 GB). If you use OpenFill for GIMP, the same ComfyUI is found by itself.
 - **Python 3.10 or newer** with Tk and Pillow, for the OpenFill panel. On Windows, the Python from python.org has Tk, and the installer adds Pillow if it is missing. On Fedora: `sudo dnf install python3-pillow python3-tkinter`.
 - **Disk space** for the models: from 0.2 GB (LaMa) to about 13 GB (FLUX.1 Fill Q6).
 
@@ -21,11 +21,13 @@ It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharrima
 
 1. Install PhotoCraft (the `.msi`).
 2. Install Python from [python.org](https://www.python.org/downloads/windows/) if you don't have it (the default options are fine).
-3. Unzip `openfill-photocraft-0.2.1.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
+3. Unzip `openfill-photocraft-0.2.2.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
 4. Open **PhotoCraft with OpenFill**. PhotoCraft opens with the OpenFill panel next to it.
 5. The first time, the panel asks for what's missing:
-   - **AI engine not found**: press **Download ComfyUI**. It downloads and unpacks in the background (a few minutes) into `%LOCALAPPDATA%\OpenFill\ComfyUI`. If you already have ComfyUI, press **Choose folder** instead and pick the folder that has `main.py` in it (or the portable folder).
+   - **AI engine not found**: press **Download ComfyUI**. It downloads and unpacks in the background (a few minutes) into `%LOCALAPPDATA%\OpenFill\ComfyUI`. With an AMD card it gets ComfyUI's version for AMD cards. If you already have ComfyUI, press **Choose folder** instead and pick the folder that has `main.py` in it (or the portable folder).
    - **No models installed**: press **Open model manager**. LaMa (removing things, 0.2 GB) and DreamShaper 8 Inpainting (fill, expand and create, 2 GB) cover every tool.
+
+The model manager is the gear icon in the OpenFill panel, Models section. The **Open model manager** button on the first run goes there too.
 
 If no Python with Tk is found, the installer uses ComfyUI's own Python and the panel opens as a small Edge window instead.
 
@@ -33,10 +35,10 @@ To remove it, run `Install OpenFill for PhotoCraft.cmd --uninstall` from a comma
 
 ## Install on Linux
 
-1. Unzip `openfill-photocraft-0.2.1.zip` and run `sh install.sh` in the unzipped folder.
+1. Unzip `openfill-photocraft-0.2.2.zip` and run `sh install.sh` in the unzipped folder.
    - No PhotoCraft yet? The installer offers to download it for you (the official Linux build, SHA-256 checked, no admin rights).
 2. Open PhotoCraft the usual way: from the app menu, or by opening an image in the file manager. OpenFill comes with it.
-3. The first time, the panel asks for what's missing. ComfyUI: choose its folder, or follow ComfyUI's [manual install](https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux) first. Models: **Open model manager**.
+3. The first time, the panel asks for what's missing. ComfyUI: choose its folder, or follow ComfyUI's [manual install](https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux) first (for an AMD card, with PyTorch for ROCm: [AMD on Linux](../docs/install.md#amd-on-linux)). Models: **Open model manager**.
 
 The installer gives PhotoCraft's menu entry to OpenFill (a copy in `~/.local/share/applications` that starts PhotoCraft through OpenFill). If you'd rather keep them apart, run `sh install.sh --separate-icon` and use "PhotoCraft with OpenFill" instead.
 
@@ -63,7 +65,7 @@ ComfyUI starts in the background when PhotoCraft opens, so the first Generate do
 
 ## Models
 
-The model manager shows what fits your graphics card. Each model has its own license; the model manager links to it.
+The model manager shows what fits your graphics card. Each model has its own license; the model manager links to it. On an AMD card it marks the GGUF models (FLUX.1 Fill GGUF, Qwen Image Edit), which have been reported to give only noise on some Radeon cards.
 
 | Model | Size | For | License |
 |---|---|---|---|

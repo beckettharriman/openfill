@@ -182,8 +182,10 @@ are in `docs/evidence/daytime-2026-10-09/catalog/`.
 
 ### Fits this PC (`openfill/hardware.py`)
 
-The graphics card and its memory come from `nvidia-smi`, else from a running
-ComfyUI's `/system_stats`, else they are unknown; system memory and the free
+The graphics card and its memory come from `nvidia-smi`, else from NVIDIA's
+NVML library, else from the operating system's adapter list (an AMD or Intel
+card: DXGI or the display driver's registry key on Windows, `/sys/class/drm`
+on Linux), else from a running ComfyUI's `/system_stats`, else they are unknown; system memory and the free
 space on the models drive come from the operating system. `hardware.fit`
 then says:
 

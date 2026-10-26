@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-beta.6] - 2026-10-25
+
+### Added
+
+- AMD graphics cards. I don't have an AMD card, so this is untested on real
+  AMD hardware so far; please tell me how it goes.
+  - OpenFill now reads an AMD card's name and graphics memory without AMD's
+    tools (DXGI or the display driver's registry key on Windows,
+    `/sys/class/drm` on Linux), so the Models tab shows it and Recommended for
+    this PC fits it.
+  - On Windows, Download ComfyUI gets ComfyUI's own version for AMD cards
+    (`ComfyUI_windows_portable_amd.7z`, ROCm 7.2.1) for a Radeon RX 7000 or
+    RX 9000, Radeon PRO W7000, or Ryzen AI 300 or Max chip. It comes from the
+    same ComfyUI release as the NVIDIA one and is checked against its size
+    and SHA-256 the same way. An older Radeon gets ComfyUI's AMD instructions
+    and "I already have ComfyUI".
+  - On Linux, ComfyUI with PyTorch for ROCm works as any other ComfyUI
+    folder. For an RX 6700 or 6600 (and the other RDNA 2 cards except the 6800
+    and 6900) OpenFill starts ComfyUI with `HSA_OVERRIDE_GFX_VERSION=10.3.0`,
+    and for a Radeon 780M or 760M with `11.0.0`, as ComfyUI's README says,
+    unless you set it yourself.
+  - On an AMD card the GGUF models (FLUX.1 Fill GGUF, Qwen Image Edit) say
+    that they have been reported to give only noise on some Radeon cards, and
+    are left out of Recommended for this PC.
+  - The steps for both are in docs/install.md, under AMD graphics cards.
+- The install guide says where the model manager is.
+
+### Changed
+
+- When ComfyUI's PyTorch has no code for an AMD card, the message says what
+  to get instead of pointing at the build for older NVIDIA cards.
+
 ## [2.0.0-beta.5] - 2026-10-25
 
 ### Fixed
@@ -529,7 +561,8 @@ Rectangular selections as processing region; Windows startup fix.
 Initial release: text to image, image to image, inpainting, upscaling via the
 AUTOMATIC1111 WebUI API.
 
-[Unreleased]: https://github.com/beckettharriman/openfill/compare/v2.0.0-beta.5...HEAD
+[Unreleased]: https://github.com/beckettharriman/openfill/compare/v2.0.0-beta.6...HEAD
+[2.0.0-beta.6]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.6
 [2.0.0-beta.5]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.5
 [2.0.0-beta.4]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.4
 [2.0.0-beta.3]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.3
