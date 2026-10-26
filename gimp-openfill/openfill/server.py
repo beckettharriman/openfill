@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 from .backend import BackendUnavailable, GenerationCancelled
 from .comfy_api import ComfyClient
-from .config import Paths, Settings, comfy_layout, comfy_problem, in_app_bundle
+from .config import Paths, Settings, comfy_layout, comfy_problem, in_app_bundle, windows_path_problem
 from .supervisor import WATCHERS_DIRNAME, pid_is_python
 
 ProgressCallback = Callable[[float, str], None]
@@ -200,6 +200,9 @@ class ServerManager:
                 f"{comfy_problem(self.settings.comfy_dir)} Install ComfyUI there or set the ComfyUI folder in "
                 "Filters > OpenFill > Generative Fill Settings."
             )
+        problem = windows_path_problem(layout["python"])
+        if problem:
+            raise BackendUnavailable(problem)
         self.paths.ensure()
         self._drop_stale_cpu_flag()
         url = self.settings.url

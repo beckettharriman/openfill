@@ -1,0 +1,11 @@
+{
+  "success_enum_value": 3,
+  "enum_checked_in": "GIMP 3.2.6 python-fu-eval on the test Mac",
+  "all_four_operations_success": true,
+  "all_four_added_one_layer": true,
+  "expand_size": [
+    576,
+    384
+  ],
+  "note": "Raw report ok=false is a harness string-comparison bug: this GIMP renders PDBStatusType.SUCCESS as 3, not a name containing SUCCESS."
+}

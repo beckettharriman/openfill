@@ -46,6 +46,14 @@ def find_photocraft(explicit: str | None) -> list[str] | None:
     if found:
         return [found]
     home = Path.home()
+    if sys.platform == "darwin":
+        # Finder-launched apps should not search protected Desktop/Downloads folders.
+        for folder in (Path("/Applications"), home / "Applications"):
+            for name in ("PhotoCraft", "photocraft"):
+                binary = folder / "PhotoCraft.app/Contents/MacOS" / name
+                if binary.is_file() and os.access(binary, os.X_OK):
+                    return [str(binary)]
+        return None
     candidates = [
         Path("/usr/bin/photocraft"),
         Path("/opt/photocraft/bin/photocraft"),
@@ -74,8 +82,6 @@ def find_photocraft(explicit: str | None) -> list[str] | None:
         for folder in (home / "Downloads", home / "Desktop", home / "Documents", home, Path("C:/"), Path("C:/AI")):
             if folder.is_dir():  # the portable zip, unpacked
                 candidates += sorted(folder.glob("photocraft*/photocraft.exe"), reverse=True)
-    if sys.platform == "darwin":
-        candidates += [Path("/Applications/PhotoCraft.app/Contents/MacOS/photocraft")]
     for path in candidates:
         if path.is_file() and os.access(path, os.X_OK):
             return [str(path)]
@@ -420,6 +426,9 @@ def main(argv: list[str] | None = None) -> int:
 
             bar = holder["bar"] = Bar(service, watcher, url, profile)
         except Exception as err:  # noqa: BLE001 - no Tk or no display: use the page
+            import traceback
+
+            traceback.print_exc()
             print("no OpenFill window (", err, "); using the page")
             bar = None
     try:

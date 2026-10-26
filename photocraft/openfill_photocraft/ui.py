@@ -1124,7 +1124,7 @@ class Popdown(tk.Toplevel):
         super().__init__(select, bg=BG)
         self.select = select
         self.withdraw()
-        self.overrideredirect(True)
+        self.tk.call("wm", "overrideredirect", self._w, True)
         try:
             self.attributes("-topmost", True)
         except tk.TclError:
@@ -1246,7 +1246,8 @@ def make_borderless(window: tk.Wm) -> str:
                 return "motif"
         except Exception:  # noqa: BLE001 - fall back to override-redirect
             pass
-    window.overrideredirect(True)
+    # Aqua Tk can return "None" for this setter; tkinter tries to parse it as a boolean.
+    window.tk.call("wm", "overrideredirect", window._w, True)
     return "override"
 
 

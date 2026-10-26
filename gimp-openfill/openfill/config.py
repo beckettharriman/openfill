@@ -355,6 +355,33 @@ def comfy_layout(comfy_dir: str | Path) -> dict[str, Path] | None:
     return {"python": python, "main": main, "cwd": cwd}
 
 
+def windows_path_problem(python: Path, platform: str | None = None) -> str:
+    """Check the path to a deeply nested dependency before Windows startup.
+
+    Keep the user's spelling: resolving a short junction defeats its purpose.
+    This is a conservative compatibility check, not a claim that every Windows
+    installation enforces MAX_PATH.
+    """
+    if (platform or sys.platform) != "win32":
+        return ""
+    site = python.parent
+    if site.name.lower() == "scripts":
+        site = site.parent
+    dependency = (
+        site
+        / "Lib/site-packages/transformers/models/audio_spectrogram_transformer/feature_extraction_audio_spectrogram_transformer.py"
+    )
+    length = len(str(dependency.absolute()).encode("utf-16-le")) // 2
+    if length < 260:
+        return ""
+    return (
+        f"The ComfyUI install path is too long for reliable Windows startup ({length} characters "
+        "for a Transformers file; the Windows compatibility limit is 259). "
+        "Use a shorter folder such as C:\\AI\\ComfyUI, or a short directory junction to the existing "
+        "installation, then choose that folder in OpenFill Settings. Keep your models with ComfyUI."
+    )
+
+
 def in_app_bundle(path: str | Path) -> bool:
     """``path`` lies inside a macOS ``.app`` bundle (``GIMP.app/Contents/...``)."""
     return any(part.endswith(".app") for part in Path(path).parts)

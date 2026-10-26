@@ -4,7 +4,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) ![PhotoCraft 0.12 to 0.16](https://img.shields.io/badge/PhotoCraft-0.12%20to%200.16-444.svg) ![GIMP 3.2](https://img.shields.io/badge/GIMP-3.2-444.svg) ![Python + ComfyUI](https://img.shields.io/badge/made%20with-Python%20%2B%20ComfyUI-orange.svg) ![Local](https://img.shields.io/badge/100%25-local-30d158.svg) ![Beta](https://img.shields.io/badge/status-beta-e8a33d.svg)
 
-*Generative fill, expand and object removal for PhotoCraft and GIMP 3, running on your graphics card. You own the whole pipeline, nothing leaves your computer.*
+*Generative fill, expand and object removal for PhotoCraft and GIMP 3, running on your graphics card. Local generation stays on your computer.*
 
 <img src="docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: an object removed and a selection filled from a prompt"><br>
 **Remove objects, fill a selection from a prompt, and expand the canvas, right inside your editor.**<br>
@@ -12,7 +12,7 @@
 </div>
 
 > [!IMPORTANT]
-> **Beta.** OpenFill for PhotoCraft is at 0.2.2 and the GIMP plug-in is at 2.0.0-beta.6, both now with support for AMD graphics cards. Both work end to end on Windows with an 8 GB NVIDIA laptop GPU, which is what I build and test on, and on Linux. AMD cards are not tested yet, as I don't have one. The GIMP plug-in also runs on macOS. Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
+> **Beta.** OpenFill for PhotoCraft is at 0.2.2 and the GIMP plug-in is at 2.0.0-beta.6, both now with support for AMD graphics cards. Both work end to end on Windows with an 8 GB NVIDIA laptop GPU, which is what I build and test on, and on Linux. A user has also tested all four operations on an RX 7800 XT; see [the report](https://github.com/beckettharriman/openfill/issues/3). The GIMP plug-in also runs on macOS. The unreleased PhotoCraft Mac launcher passed all four tools on an M3; [Mac setup and test results](docs/install.md#photocraft-on-macos-unreleased). Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
 
 ## Why I made this
 
@@ -35,7 +35,7 @@ Generation runs in ComfyUI on your machine, listening on `127.0.0.1` only. The n
 
 ## Install
 
-You need an NVIDIA graphics card or an AMD Radeon RX 7000 or newer (8 GB for the best models; Remove and SD 1.5 run on less) and Windows 10/11 or Linux. On Windows, OpenFill can download ComfyUI for you, including ComfyUI's version for AMD cards. AMD support is new and untested on a real AMD card, see [AMD graphics cards](docs/install.md#amd-graphics-cards).
+You need an NVIDIA graphics card or an AMD Radeon RX 7000 or newer (8 GB for the best models; Remove and SD 1.5 run on less) and Windows 10/11 or Linux. On Windows, OpenFill can download ComfyUI for you, including ComfyUI's version for AMD cards. AMD support is new, with one RX 7800 XT user report; see [AMD graphics cards](docs/install.md#amd-graphics-cards).
 
 The model manager in the steps below is where you get models: in PhotoCraft it's the gear icon in the OpenFill panel, Models section (the **Open model manager** button on the first run goes there too); in GIMP it's `Filters > OpenFill > Generative Fill...`, Models tab.
 

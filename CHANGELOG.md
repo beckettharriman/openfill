@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Detect long Windows paths before ComfyUI startup or download and explain the shorter-folder fix.
+- Add PhotoCraft installation on Apple Silicon, tested with all four tools on an M3 MacBook Air.
+- Fix Finder Python architecture, Aqua panel startup and PhotoCraft discovery on macOS.
+- Add uninstall launchers on Windows, Linux and macOS, preserving settings and models.
+- Document downloads, model sizes, existing-engine limits and tested Mac setup.
+
 ## [2.0.0-beta.6] - 2026-10-25
 
 ### Added

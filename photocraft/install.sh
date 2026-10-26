@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install OpenFill for PhotoCraft for this user (Linux): run  sh install.sh
+# Install OpenFill for PhotoCraft for this user (Linux or macOS): run  sh install.sh
 # Options: --get-photocraft (download PhotoCraft without asking), --separate-icon, --uninstall
 # SPDX-License-Identifier: Apache-2.0
 DIR=$(cd "$(dirname "$0")" && pwd)
@@ -16,5 +16,9 @@ for need in 'import tkinter' ''; do
   done
 done
 echo "OpenFill needs Python 3.10 or newer with Pillow and Tk." >&2
-echo "On Fedora: sudo dnf install python3-pillow python3-tkinter   (Ubuntu: sudo apt install python3-pil python3-tk)" >&2
+if [ "$(uname -s)" = Darwin ]; then
+  echo "Install Python from python.org (includes Tk), then run: python3 -m pip install Pillow" >&2
+else
+  echo "On Fedora: sudo dnf install python3-pillow python3-tkinter   (Ubuntu: sudo apt install python3-pil python3-tk)" >&2
+fi
 exit 1

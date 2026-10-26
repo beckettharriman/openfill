@@ -30,7 +30,7 @@ from urllib.request import urlopen
 
 from . import downloads, hardware
 from .catalog import NodeSpec, human_size
-from .config import comfy_layout
+from .config import comfy_layout, windows_path_problem
 
 MANIFEST_FILENAME = "comfy_setup.json"
 GB = 1024**3
@@ -455,6 +455,9 @@ def preflight(
             "amd" if getattr(hw, "gpu_vendor", "") == "amd" else "unknown",
         )
     checks: list[Check] = []
+    path_problem = windows_path_problem(comfy_dir_for(target, manifest) / "python_embeded" / "python.exe", platform)
+    if path_problem:
+        checks.append(Check("path", "block", path_problem))
     kind = gpu_kind(
         adapters,
         bool(getattr(hw, "gpu_name", None) and getattr(hw, "gpu_source", "") in ("nvidia-smi", "nvml")),

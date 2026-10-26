@@ -1,0 +1,26 @@
+[
+  {
+    "operation": "fill",
+    "remove": false,
+    "seconds": 18.2,
+    "result": "done"
+  },
+  {
+    "operation": "fill",
+    "remove": true,
+    "seconds": 3.0,
+    "result": "done"
+  },
+  {
+    "operation": "expand",
+    "remove": false,
+    "seconds": 14.1,
+    "result": "done"
+  },
+  {
+    "operation": "txt2img",
+    "remove": false,
+    "seconds": 7.0,
+    "result": "done"
+  }
+]

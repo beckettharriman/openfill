@@ -67,6 +67,30 @@ class EnsureRunningTests(ManagerCase):
         self.assertIn("Check backend", text)
 
 
+class LongPathTests(ManagerCase):
+    def test_long_windows_path_stops_before_spawn(self):
+        layout = dict(FAKE_LAYOUT, python=Path("C:/" + "deep/" * 40 + "python_embeded/python.exe"))
+        with (
+            mock.patch.object(server, "comfy_layout", return_value=layout),
+            mock.patch("openfill.config.sys.platform", "win32"),
+            mock.patch.object(ServerManager, "_spawn_detached") as spawn,
+            self.assertRaisesRegex(BackendUnavailable, "short directory junction"),
+        ):
+            self.manager.start()
+        spawn.assert_not_called()
+
+    def test_short_junction_spelling_is_kept(self):
+        from openfill.config import windows_path_problem
+
+        with mock.patch.object(Path, "resolve", side_effect=AssertionError("do not resolve junctions")):
+            self.assertEqual(windows_path_problem(Path("C:/AI/ComfyUI/python_embeded/python.exe"), "win32"), "")
+
+    def test_long_linux_path_is_allowed(self):
+        from openfill.config import windows_path_problem
+
+        self.assertEqual(windows_path_problem(Path("/" + "deep/" * 50 + "venv/bin/python"), "linux"), "")
+
+
 class PortProbeTests(ManagerCase):
     def setUp(self):
         super().setUp()

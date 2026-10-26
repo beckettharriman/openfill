@@ -219,6 +219,21 @@ class PreflightTests(unittest.TestCase):
         hw = hw or Hardware()
         return comfy_setup.preflight(self.m, hw, adapters, free, Path("C:/x"), 8188, port_in_use, platform="win32")
 
+    def test_long_path_blocks_before_download(self):
+        pf = comfy_setup.preflight(
+            self.m,
+            self.nvidia(),
+            ["NVIDIA GeForce RTX 4070"],
+            50 * GB,
+            Path("C:/") / ("nested" * 35),
+            8188,
+            False,
+            platform="win32",
+        )
+        self.assertTrue(pf.blocked)
+        self.assertIn("too long", pf.text())
+        self.assertIn("junction", pf.text())
+
     def test_macos_blocks_the_windows_download(self):
         pf = comfy_setup.preflight(self.m, Hardware(), None, 50 * GB, Path("/x"), 8188, False, platform="darwin")
         self.assertTrue(pf.blocked)

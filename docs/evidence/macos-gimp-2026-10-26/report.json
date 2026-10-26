@@ -1,0 +1,166 @@
+{
+  "started": "2026-10-26 13:09:19",
+  "gimp_pid": 92118,
+  "cases": [
+    {
+      "case": "fill",
+      "procedure": "python-fu-openfill-generative-fill",
+      "args": {
+        "prompt": "a large grey boulder on grass, photo",
+        "variations": 1,
+        "seed": 12345,
+        "model": "active"
+      },
+      "status": "3",
+      "error": "",
+      "seconds": 38.6,
+      "layers_before": 1,
+      "layers": [
+        {
+          "name": "Generative Fill: a large grey boulder on grass, photo",
+          "mask": true,
+          "group": false
+        },
+        {
+          "name": "Background",
+          "mask": false,
+          "group": false
+        }
+      ],
+      "size": [
+        512,
+        384
+      ]
+    },
+    {
+      "case": "remove",
+      "procedure": "python-fu-openfill-generative-fill",
+      "args": {
+        "prompt": "",
+        "variations": 1,
+        "seed": 1,
+        "model": "active",
+        "remove": true
+      },
+      "status": "3",
+      "error": "",
+      "seconds": 1.9,
+      "layers_before": 2,
+      "layers": [
+        {
+          "name": "Object Removal",
+          "mask": true,
+          "group": false
+        },
+        {
+          "name": "Generative Fill: a large grey boulder on grass, photo",
+          "mask": true,
+          "group": false
+        },
+        {
+          "name": "Background",
+          "mask": false,
+          "group": false
+        }
+      ],
+      "size": [
+        512,
+        384
+      ]
+    },
+    {
+      "case": "expand",
+      "procedure": "python-fu-openfill-generative-expand",
+      "args": {
+        "prompt": "",
+        "variations": 1,
+        "left": 0,
+        "top": 0,
+        "right": 64,
+        "bottom": 0,
+        "seed": 7,
+        "model": "active"
+      },
+      "status": "3",
+      "error": "",
+      "seconds": 25.5,
+      "layers_before": 3,
+      "layers": [
+        {
+          "name": "Generative Expand",
+          "mask": true,
+          "group": false
+        },
+        {
+          "name": "Object Removal",
+          "mask": true,
+          "group": false
+        },
+        {
+          "name": "Generative Fill: a large grey boulder on grass, photo",
+          "mask": true,
+          "group": false
+        },
+        {
+          "name": "Background",
+          "mask": false,
+          "group": false
+        }
+      ],
+      "size": [
+        576,
+        384
+      ]
+    },
+    {
+      "case": "create",
+      "procedure": "python-fu-openfill-text-to-image",
+      "args": {
+        "prompt": "a small wooden cabin in a meadow, photo",
+        "variations": 1,
+        "width": 512,
+        "height": 384,
+        "target": "layer",
+        "seed": 3,
+        "model": "active"
+      },
+      "status": "3",
+      "error": "",
+      "seconds": 24.6,
+      "layers_before": 4,
+      "layers": [
+        {
+          "name": "Text to Image: a small wooden cabin in a meadow, photo",
+          "mask": false,
+          "group": false
+        },
+        {
+          "name": "Generative Expand",
+          "mask": true,
+          "group": false
+        },
+        {
+          "name": "Object Removal",
+          "mask": true,
+          "group": false
+        },
+        {
+          "name": "Generative Fill: a large grey boulder on grass, photo",
+          "mask": true,
+          "group": false
+        },
+        {
+          "name": "Background",
+          "mask": false,
+          "group": false
+        }
+      ],
+      "size": [
+        576,
+        384
+      ]
+    }
+  ],
+  "ok": false,
+  "finished": "2026-10-26 13:10:51"
+}

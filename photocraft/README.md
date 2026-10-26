@@ -1,12 +1,12 @@
 # OpenFill for PhotoCraft
 
-Generative Fill, Remove object, Generative Expand and Text to Image for [PhotoCraft](https://github.com/storytold/photocraft), running on your own graphics card through a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Nothing leaves your computer.
+Generative Fill, Remove object, Generative Expand and Text to Image for [PhotoCraft](https://github.com/storytold/photocraft), running on your own graphics card through a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Local generation stays on your computer.
 
 It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharriman/openfill#install): the same models, model manager, mask handling, seam correction and variations. Only the connection to the editor is different.
 
 <img src="../docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
 
-> **Version 0.2.2** (adds AMD graphics cards, untested on a real AMD card so far). It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. macOS is not supported yet.
+> **Version 0.2.2** (adds AMD graphics cards; an RX 7800 XT user has now tested all four operations). It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. The released version does not support macOS yet. The unreleased Mac launcher passed Fill, Remove, Expand and Create on an M3 MacBook Air; see [the test results](../docs/evidence/macos-photocraft-2026-10-26/).
 
 ## What you need
 
@@ -43,6 +43,10 @@ To remove it, run `Install OpenFill for PhotoCraft.cmd --uninstall` from a comma
 The installer gives PhotoCraft's menu entry to OpenFill (a copy in `~/.local/share/applications` that starts PhotoCraft through OpenFill). If you'd rather keep them apart, run `sh install.sh --separate-icon` and use "PhotoCraft with OpenFill" instead.
 
 To remove it: `openfill-photocraft-uninstall`. Your settings and models stay.
+
+## Install on macOS (unreleased)
+
+Download the [current source ZIP](https://github.com/beckettharriman/openfill/archive/refs/heads/main.zip) and open its `photocraft` folder; the public 0.2.2 release archive does not include the Mac launcher. Follow [the Mac setup steps](../docs/evidence/macos-photocraft-checklist.md). Tested with PhotoCraft 0.16.0 on Apple Silicon. The panel floats independently; following PhotoCraft when it moves or minimizes is currently Windows-only.
 
 ## Using it
 
@@ -122,3 +126,5 @@ Tests: `python -m unittest photocraft/tests/test_companion.py` (no PhotoCraft ne
 ## Credits and license
 
 OpenFill for PhotoCraft is Apache-2.0 (see `LICENSE`). It runs on [ComfyUI](https://github.com/comfyanonymous/ComfyUI), [comfyui-inpaint-nodes](https://github.com/Acly/comfyui-inpaint-nodes) by Acly (LaMa, MAT and the Fooocus inpaint patch) and [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) by city96 (the FLUX and Qwen GGUF files), which OpenFill adds to ComfyUI when a model needs them. The models belong to their authors under the licenses above. PhotoCraft is by its own authors; OpenFill is not affiliated with it.
+
+The unreleased installer adds **Uninstall OpenFill for PhotoCraft** to the Windows Start menu, Linux app menu and macOS `~/Applications`. Open it and confirm; PhotoCraft, settings and models stay. The Mac installer and command-line uninstall passed on an M3; the confirmation dialog still needs a hands-on check.

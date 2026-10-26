@@ -5,6 +5,14 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Detect long Windows paths before ComfyUI startup or download and explain the shorter-folder fix.
+- Add PhotoCraft installation on Apple Silicon, tested with all four tools on an M3 MacBook Air.
+- Fix Finder Python architecture, Aqua panel startup and PhotoCraft discovery on macOS.
+- Add uninstall launchers on Windows, Linux and macOS, preserving settings and models.
+- Document downloads, model sizes, existing-engine limits and tested Mac setup.
+
 ## [0.2.2] - 2026-10-25
 
 ### Added

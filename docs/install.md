@@ -4,10 +4,10 @@ The short steps are in the [README](../README.md#install). This page has the res
 
 ## What you need
 
-- **A graphics card with 8 GB or more** for the SDXL and FLUX models: NVIDIA, or AMD Radeon RX 7000 or newer (new, and not tested on an AMD card yet; see [AMD graphics cards](#amd-graphics-cards)). LaMa (Remove) and the SD 1.5 models run on less. Without a card ComfyUI can use, it runs on the processor, which takes minutes per fill.
+- **A graphics card with 8 GB or more** for the SDXL and FLUX models: NVIDIA, or AMD Radeon RX 7000 or newer (see [AMD graphics cards](#amd-graphics-cards)). LaMa (Remove) and the SD 1.5 models run on less. Without a card ComfyUI can use, it runs on the processor, which takes minutes per fill.
 - **ComfyUI.** On Windows, OpenFill downloads it for you the first time (about 2 GB, about 7 GB unpacked). On Linux and macOS you set it up once (steps below). If you already have ComfyUI, point OpenFill at it.
 - **Disk space** for the models: from 0.2 GB (LaMa) to about 13 GB (FLUX.1 Fill Q6).
-- **For PhotoCraft:** PhotoCraft 0.12 to 0.16, Windows 10 or 11 or Linux, and Python 3.10 or newer with Tk and Pillow. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. macOS is not supported yet.
+- **For PhotoCraft:** PhotoCraft 0.12 to 0.16, Windows 10 or 11 or Linux, and Python 3.10 or newer with Tk and Pillow. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. The released version does not support macOS yet; the unreleased Mac launcher has passed testing on an M3. See [PhotoCraft on macOS](#photocraft-on-macos-unreleased).
 - **For GIMP:** GIMP 3.2 or newer on Windows, Linux or macOS. OpenFill uses GIMP's own Python and needs no extra packages.
 
 The steps below mention the **model manager**: that's where you get models and see what fits your graphics card. In PhotoCraft it's the gear icon in the OpenFill panel, Models section (the **Open model manager** button on the first run goes there too). In GIMP it's `Filters > OpenFill > Generative Fill...`, Models tab.
@@ -79,9 +79,24 @@ Tested end to end on a MacBook Air M3 (16 GB, macOS 14.7) with GIMP 3.2.6. The D
 3. Run `sh install.sh` in the unzipped release or a clone. It finds `~/ComfyUI` by itself (otherwise add `--comfy-dir <folder>`).
 4. Restart GIMP and run `Filters > OpenFill > Generative Fill...`; get LaMa and DreamShaper 8 Inpainting when the model manager opens.
 
-On the M3, a 512 px fill with DreamShaper 8 takes 50 to 90 s once warm, Remove object with LaMa about 5 s, and the first request of a session another 20 to 70 s while ComfyUI loads. A selection larger than about 700 px is filled in tiles, which takes several minutes per tile pass on a Mac; fill large areas in a few smaller pieces. Intel Macs are untested.
+On the M3, a 512 px fill with DreamShaper 8 takes 50 to 90 s once warm, Remove object with LaMa about 5 s, and the first request of a session another 20 to 70 s while ComfyUI loads. A selection larger than about 700 px is filled in tiles, which takes several minutes per tile pass on a Mac; fill large areas in a few smaller pieces. Intel Macs are untested. A fresh [2.0.0-beta.6 check](evidence/macos-gimp-2026-10-26/) on October 26 used a smaller 512 × 384 scene at 25 steps: Fill 38.6 s including startup, LaMa Remove 1.9 s, Expand right by 64 pixels 25.5 s, and Create as a layer 24.6 s. These runs use different settings from the earlier timings.
 
 GIMP's own Python can only be started by GIMP on macOS, so OpenFill runs its background helper (the supervisor that starts and stops ComfyUI and does the downloads) with ComfyUI's Python. OpenFill's windows show up in the Dock as "Python"; that is how GIMP runs Python plug-ins on macOS.
+
+### PhotoCraft on macOS (unreleased)
+
+Tested on a MacBook Air M3, 16 GB, macOS 14.7, with PhotoCraft 0.16.0. The public PhotoCraft companion 0.2.2 archive does not contain the Mac launcher. Use the [current source ZIP](https://github.com/beckettharriman/openfill/archive/refs/heads/main.zip), unzip it, and open its `photocraft` folder for the install command below.
+
+1. Get the macOS DMG from [PhotoCraft releases](https://github.com/storytold/photocraft/releases) and copy PhotoCraft to `/Applications` or `~/Applications`.
+2. Install Python 3.10 or newer from [python.org](https://www.python.org/downloads/macos/), which includes Tk. Run `python3 -m pip install Pillow`. If your ComfyUI Python already has Tk and Pillow, the installer can use it.
+3. Set up ComfyUI as described [above](#macos), or use your existing checkout and models. No second model download is needed when GIMP already uses that ComfyUI.
+4. In the checkout's `photocraft` folder, run `sh install.sh`. In a companion test archive, run it from the archive's top folder.
+5. Open `~/Applications/PhotoCraft with OpenFill.app`. In Settings > Engine, choose `~/ComfyUI` if it is not found. Settings > Models lists your existing models; LaMa and DreamShaper 8 cover all four tools.
+6. Open an image, select an area, and try Fill or Remove. Expand adds canvas space; Create makes an image from a prompt.
+
+The panel floats independently on macOS. Its automatic following of PhotoCraft when moving or minimizing is Windows-only. Install does not replace PhotoCraft or change file associations. To remove OpenFill, close its PhotoCraft session and open `~/Applications/Uninstall OpenFill for PhotoCraft.app`, or run `sh install.sh --uninstall` from the source/archive folder. Settings, PhotoCraft and ComfyUI models stay in place.
+
+At eight steps with a 512 × 384 image, the M3 checks took 20.1 s for Fill, 4.0 s for LaMa Remove, 14.1 s for a 32-pixel Expand on every edge, and 12.1 s for Create. These are small functional checks; eight-step Expand showed edge artifacts. Larger images and more steps take longer. Undo, cancellation, Finder launch, native settings/model lists, engine start/stop, and uninstall/reinstall were also checked. See [the evidence and remaining checks](evidence/macos-photocraft-2026-10-26/). Other Apple chips and Intel Macs have not been tested.
 
 ### Linux and Flatpak
 
@@ -93,15 +108,45 @@ sh install.sh --comfy-dir ~/ComfyUI
 
 `install.sh` finds the GIMP 3 profile on Linux and in the Flatpak (`~/.config/GIMP/3.2`). Point `--comfy-dir` at a ComfyUI checkout with a `venv` (it also finds one in `~/ComfyUI`). Tested on Fedora with the GIMP 3.2.6 Flatpak: Generative Fill starts ComfyUI from inside the sandbox and stops it when GIMP closes. The graphics card is read from the NVIDIA driver's own library, or for an AMD card from `/sys/class/drm`, so the Recommended for this PC list is right even inside the Flatpak, which has no `nvidia-smi`. A venv made with `uv venv` has no pip; OpenFill adds it with `ensurepip` when it needs to. The Download ComfyUI button is Windows-only.
 
+## Use a ComfyUI you already have
+
+For a normal portable or manual installation:
+
+1. Find the folder you use to start ComfyUI. A portable installation contains both `python_embeded` and `ComfyUI`. A manual installation contains `main.py` and a `venv` or `.venv` folder.
+2. In PhotoCraft, open OpenFill and press **Choose folder**. After setup, use the gear icon, **Engine**, **Browse**, then save. In GIMP, use **I already have ComfyUI** on the setup screen or change the ComfyUI folder in Generative Fill Settings.
+3. Select that folder. Keep its Python environment and models in place.
+4. Open **Models**. Supported files appear there. OpenFill recognises SD 1.5 inpainting, SDXL and FLUX.1 Fill files; not every model that ComfyUI runs is supported.
+5. Pick an installed model and try a small selection. A model may need extra files or nodes, which Models will show.
+
+Choosing a folder saves its location. Later, generation and model installation can add OpenFill's node pack, other required nodes or Python packages to that engine. For an engine managed by another app, use the guidance below first. Models stored only through `extra_model_paths.yaml` are not all discovered by OpenFill's local scanner yet.
+
+### Krita AI Diffusion (Acly)
+
+Do not choose Krita's managed server folder as OpenFill's engine. Its Python and model layout differs, and OpenFill may install nodes or Python packages that affect Krita. Use **Download ComfyUI** or a separate manual/portable ComfyUI for OpenFill. Sharing Krita's checkpoints without copying is still under testing and is not included in this checkout.
+
+### ComfyUI Desktop
+
+**Choose folder does not support the older Electron Desktop layout.** Its data folder has `.venv` and models, while `main.py` lives in the application resources. Selecting either half does not give OpenFill the right Python, model paths and launch options together. Earlier automatic discovery of Desktop's data folder was not sufficient to establish support.
+
+A newer Desktop installation that has `main.py` and `.venv` together inside its actual ComfyUI checkout passes the normal folder check. That is layout detection, not an end-to-end Desktop compatibility test, and Desktop-managed shared model paths are not automatically imported. For now use a separate portable or manual ComfyUI for OpenFill.
+
 ## What Download ComfyUI does (Windows)
 
 It checks your graphics card, free disk space and port 8188 first, then fetches the official Windows portable build (about 2 GB, about 7 GB unpacked) into `%LOCALAPPDATA%\OpenFill\ComfyUI`, checks it against a published SHA-256, unpacks it with Windows' own `tar.exe`, adds the inpaint nodes at a pinned commit and OpenCV, and remembers the folder. Git is not needed. OpenFill for PhotoCraft and OpenFill for GIMP use the same folder.
 
 With an AMD Radeon RX 7000 or newer it fetches ComfyUI's version for AMD cards instead, from the same release and checked the same way (see [AMD graphics cards](#amd-graphics-cards)). For an older Radeon it points to ComfyUI's AMD instructions, after which you choose "I already have ComfyUI". Without a card it can use, it says so and offers the download only as "very slow" (the processor does the work).
 
+The download includes ComfyUI and its own Python with the packages needed to run it. You do not need to install the ComfyUI Desktop app separately. It does not include image models. Open the model manager afterwards and choose what to download: LaMa is about 0.2 GB and DreamShaper 8 Inpainting about 2 GB. Larger models and their extra files are listed in [Models](models.md#models-and-their-licenses).
+
+### Long Windows paths
+
+Keep ComfyUI near the drive root, for example `C:\AI\ComfyUI`. Deeply nested folders can cause a missing-file error during startup, including a Transformers file with `audio_spectrogram_transformer` in its name. This can happen before the graphics card does any work.
+
+OpenFill checks the projected dependency path before downloading or starting ComfyUI. If it is too long, use a shorter location and choose it in OpenFill. For an existing portable installation, close its engine first and move the whole portable folder, including Python and models, to the shorter location. For an installation managed by another app, keep its files in place; a short Windows directory junction can provide another path to the same folder. Do not move only the models or change graphics drivers to address this error.
+
 ## AMD graphics cards
 
-New in OpenFill for PhotoCraft 0.2.2 and OpenFill for GIMP 2.0.0-beta.6. I don't have an AMD card (both my laptops are NVIDIA), so none of this has been tested on a real AMD card yet. If you try it, please tell me how it went on [Issues](https://github.com/beckettharriman/openfill/issues), good or bad.
+New in OpenFill for PhotoCraft 0.2.2 and OpenFill for GIMP 2.0.0-beta.6. A user [tested PhotoCraft 0.2.2 on an RX 7800 XT](https://github.com/beckettharriman/openfill/issues/3): Create, Fill, Remove and Expand worked with DreamShaper and LaMa after shortening the engine path. Other AMD cards and models still need testing. If you try it, please tell me how it went on [Issues](https://github.com/beckettharriman/openfill/issues), good or bad.
 
 ComfyUI runs on AMD cards through ROCm, AMD's version of CUDA. LaMa, MAT, the SD 1.5 and SDXL models and the Fooocus inpaint patch are plain PyTorch, so they should work the same as on NVIDIA. The GGUF versions of FLUX.1 Fill and Qwen Image Edit go through ComfyUI-GGUF, which has an open report of noise-only images on an RX 7900 with ROCm ([issue 300](https://github.com/city96/ComfyUI-GGUF/issues/300)). On an AMD card the model manager says so next to them and leaves them out of Recommended for this PC. OpenFill reads the card's name and graphics memory without AMD's tools (from DXGI or the driver's registry key on Windows, `/sys/class/drm` on Linux), so Recommended for this PC fits AMD cards too.
 
@@ -168,3 +213,7 @@ Every error message ends with what to do next, and in GIMP the same advice shows
 
 - **PhotoCraft was opened another way:** open it with "PhotoCraft with OpenFill" (or the menu entry the installer set up on Linux). A PhotoCraft opened another way has no control channel; OpenFill notices and asks you to close it and open it again.
 - **Where things are kept:** `%APPDATA%\OpenFill for PhotoCraft` on Windows and `~/.config/openfill-photocraft` on Linux for the PhotoCraft version, `<GIMP profile>/openfill` for the GIMP plug-in. Settings in the GIMP plug-in are created the first time you change one; until then the defaults are used.
+
+### One-click uninstall (unreleased installer)
+
+Close OpenFill, open **Uninstall OpenFill for PhotoCraft**, then confirm. On Windows it is in the Start menu; on Linux it is in the app menu; on macOS it is in `~/Applications`. PhotoCraft, settings and models stay in place. The command-line uninstall steps above still work for older installations. The Mac command-line uninstall and reinstall passed on the M3; the confirmation dialog still needs a hands-on check.

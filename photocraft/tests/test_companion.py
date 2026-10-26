@@ -16,6 +16,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")]
@@ -780,6 +781,223 @@ class InstallTests(unittest.TestCase):
                         os.environ.pop(key, None)
                     else:
                         os.environ[key] = value
+
+
+class UnixUninstallTests(unittest.TestCase):
+    def test_linux_entry_and_cleanup_preserve_user_data(self):
+        from openfill_photocraft import install
+
+        with tempfile.TemporaryDirectory(prefix="uninstall linux ") as tmp:
+            root = Path(tmp)
+            with (
+                mock.patch.object(install, "data_home", return_value=root),
+                mock.patch.object(install, "bin_dir", return_value=root / "bin"),
+                mock.patch.object(install, "refresh_menus"),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                app = install.share_dir() / "app"
+                app.mkdir(parents=True)
+                config = install.share_dir() / "config.json"
+                config.write_text("keep")
+                install.write_command(app, sys.executable)
+                entry = install.install_uninstall_entry()
+                self.assertIn("--uninstall-dialog", entry.read_text())
+                self.assertIn("Terminal=false", entry.read_text())
+                install.uninstall()
+                self.assertFalse(entry.exists())
+                self.assertFalse(app.exists())
+                self.assertEqual(config.read_text(), "keep")
+
+    def test_linux_confirmation_cancel_remove_and_failure(self):
+        from openfill_photocraft import install
+
+        with (
+            mock.patch.object(install.sys, "platform", "linux"),
+            mock.patch("tkinter.Tk") as root,
+            mock.patch("tkinter.messagebox.askyesno") as ask,
+            mock.patch("tkinter.messagebox.showinfo") as success,
+            mock.patch("tkinter.messagebox.showerror") as error,
+            mock.patch.object(install, "uninstall") as remove,
+        ):
+            ask.return_value = False
+            self.assertEqual(install.uninstall_dialog(), 0)
+            remove.assert_not_called()
+            ask.return_value = True
+            self.assertEqual(install.uninstall_dialog(), 0)
+            remove.assert_called_once_with()
+            success.assert_called_once()
+            remove.side_effect = PermissionError("close it first")
+            self.assertEqual(install.uninstall_dialog(), 1)
+            error.assert_called_once()
+            self.assertEqual(root.return_value.destroy.call_count, 3)
+
+    def test_mac_confirmation_cancel_and_remove(self):
+        from openfill_photocraft import install
+
+        with (
+            mock.patch.object(install.sys, "platform", "darwin"),
+            mock.patch.object(install.subprocess, "run") as run,
+            mock.patch.object(install, "uninstall_mac") as remove,
+        ):
+            run.return_value.returncode = 1
+            install.uninstall_dialog()
+            remove.assert_not_called()
+            run.return_value.returncode = 0
+            install.uninstall_dialog()
+            remove.assert_called_once()
+
+
+class WindowsUninstallTests(unittest.TestCase):
+    def test_install_adds_uninstall_shortcut_and_removal_preserves_settings(self):
+        from openfill_photocraft import install
+
+        with tempfile.TemporaryDirectory(prefix="openfill windows ") as tmp:
+            home = Path(tmp)
+            app = home / "app"
+            links = [home / "start/PhotoCraft with OpenFill.lnk", home / "desktop/PhotoCraft with OpenFill.lnk"]
+            settings = home / "config.json"
+            settings.write_text("keep")
+
+            def shortcut(link, *args):
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.touch()
+
+            with (
+                mock.patch.object(install, "windows_home", return_value=home),
+                mock.patch.object(install, "windows_shortcut_paths", return_value=links),
+                mock.patch.object(install, "copy_app", side_effect=lambda p: p.mkdir(parents=True)),
+                mock.patch.object(install, "make_shortcut", side_effect=shortcut) as make,
+                mock.patch("openfill_photocraft.__main__.find_photocraft", return_value=("PhotoCraft.exe", [])),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(install.install_windows("C:/Python/python.exe"), 0)
+                uninstaller = install.windows_uninstall_shortcut()
+                self.assertTrue(uninstaller.is_file())
+                self.assertEqual(make.call_count, 3)
+                self.assertIn(install.UNINSTALL_BOOT, make.call_args.args[2])
+                compile((app / install.UNINSTALL_BOOT).read_text(), install.UNINSTALL_BOOT, "exec")
+                install.uninstall_windows()
+                self.assertFalse(app.exists())
+                self.assertFalse(uninstaller.exists())
+                self.assertEqual(settings.read_text(), "keep")
+
+    def test_native_dialog_cancel_success_and_error(self):
+        import ctypes
+
+        from openfill_photocraft import install
+
+        with (
+            mock.patch.object(ctypes, "windll", create=True) as dll,
+            mock.patch.object(install, "uninstall_windows") as remove,
+        ):
+            message = dll.user32.MessageBoxW
+            message.return_value = 7
+            self.assertEqual(install.uninstall_windows_dialog(), 0)
+            remove.assert_not_called()
+            message.return_value = 6
+            self.assertEqual(install.uninstall_windows_dialog(), 0)
+            remove.assert_called_once()
+            self.assertEqual(message.call_args.args[2], "OpenFill removed")
+            remove.side_effect = PermissionError("Close OpenFill first")
+            self.assertEqual(install.uninstall_windows_dialog(), 1)
+            self.assertEqual(message.call_args.args[2], "Could not remove OpenFill")
+
+
+class MacInstallTests(unittest.TestCase):
+    def test_mac_discovery_checks_applications_without_scanning_personal_folders(self):
+        from openfill_photocraft import __main__ as launch
+
+        binary = Path("/test/Applications/PhotoCraft.app/Contents/MacOS/PhotoCraft")
+        with (
+            mock.patch.object(launch.sys, "platform", "darwin"),
+            mock.patch.object(launch.shutil, "which", return_value=None),
+            mock.patch.dict(launch.os.environ, {"PHOTOCRAFT_BIN": ""}),
+            mock.patch.object(launch.Path, "home", return_value=Path("/test")),
+            mock.patch.object(launch.Path, "is_file", autospec=True, side_effect=lambda p: p == binary),
+            mock.patch.object(launch.os, "access", return_value=True),
+            mock.patch.object(launch.Path, "glob", side_effect=AssertionError("must not scan folders")),
+        ):
+            self.assertEqual(launch.find_photocraft(None), [str(binary)])
+
+    def test_finder_launcher_keeps_python_architecture(self):
+        from openfill_photocraft import install
+
+        with (
+            mock.patch.object(install.sys, "platform", "darwin"),
+            mock.patch.object(install.platform, "machine", return_value="arm64"),
+        ):
+            self.assertEqual(install.mac_python_command("/a path/python"), "/usr/bin/arch -arm64 '/a path/python'")
+
+    def test_aqua_borderless_setter_does_not_parse_none_as_boolean(self):
+        from openfill_photocraft import ui
+
+        window = mock.Mock()
+        window._w = ".pill"
+        window.tk.call.return_value = "None"
+        with mock.patch.object(ui.sys, "platform", "darwin"):
+            self.assertEqual(ui.make_borderless(window), "override")
+        window.tk.call.assert_called_once_with("wm", "overrideredirect", ".pill", True)
+        window.overrideredirect.assert_not_called()
+
+    def test_install_launch_and_uninstall_preserve_settings(self):
+        import plistlib
+        import subprocess
+
+        from openfill_photocraft import install
+
+        with tempfile.TemporaryDirectory(prefix="openfill mac ") as tmp:
+            root = Path(tmp)
+            bundle = root / "Applications/PhotoCraft with OpenFill.app"
+            home = root / "Library/Application Support/OpenFill for PhotoCraft"
+            home.mkdir(parents=True)
+            config = home / "config.json"
+            config.write_text("keep settings")
+            # A shell interpreter double records argv, including a path with spaces.
+            python = root / "fake python"
+            output = root / "args"
+            python.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > ' + __import__("shlex").quote(str(output)) + "\n")
+            python.chmod(0o755)
+            with (
+                mock.patch.object(install, "mac_app", return_value=bundle),
+                mock.patch.object(install, "mac_home", return_value=home),
+                mock.patch("openfill_photocraft.__main__.find_photocraft", return_value=["PhotoCraft"]),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(install.install_mac(str(python)), 0)
+                info = plistlib.loads((bundle / "Contents/Info.plist").read_bytes())
+                self.assertEqual(info["CFBundleIdentifier"], install.MAC_BUNDLE_ID)
+                subprocess.run([str(bundle / "Contents/MacOS/openfill-photocraft"), "a picture.png"], check=True)
+                self.assertEqual(output.read_text().splitlines(), ["-m", "openfill_photocraft", "a picture.png"])
+                self.assertTrue((home / "app/openfill_photocraft").is_dir())
+                remove_bundle = install.mac_uninstall_app()
+                info = plistlib.loads((remove_bundle / "Contents/Info.plist").read_bytes())
+                self.assertEqual(info["CFBundleIdentifier"], install.MAC_BUNDLE_ID + ".uninstall")
+                subprocess.run([str(remove_bundle / "Contents/MacOS/openfill-uninstall")], check=True)
+                self.assertEqual(
+                    output.read_text().splitlines(), ["-m", "openfill_photocraft.install", "--uninstall-dialog"]
+                )
+                install.uninstall_mac()
+                self.assertFalse(remove_bundle.exists())
+                self.assertFalse(bundle.exists())
+                self.assertFalse((home / "app").exists())
+                self.assertEqual(config.read_text(), "keep settings")
+
+    def test_unrelated_app_is_not_replaced(self):
+        from openfill_photocraft import install
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "existing.app"
+            bundle.mkdir()
+            (bundle / "keep").write_text("user file")
+            with (
+                mock.patch.object(install, "mac_app", return_value=bundle),
+                mock.patch("openfill_photocraft.__main__.find_photocraft", return_value=["PhotoCraft"]),
+                mock.patch.object(install, "copy_app") as copy,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(install.install_mac("python3"), 1)
+                copy.assert_not_called()
+                self.assertEqual((bundle / "keep").read_text(), "user file")
 
 
 class BarLogicTests(unittest.TestCase):

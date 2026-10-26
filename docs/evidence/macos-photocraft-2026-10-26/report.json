@@ -1,0 +1,106 @@
+[
+  {
+    "case": "fill",
+    "state": "done",
+    "seconds": 20.1,
+    "message": "Added layer: Generative Fill: a red balloon in the sky",
+    "history_before": [
+      "Open",
+      "Rectangular Marquee"
+    ],
+    "history_after": [
+      "Open",
+      "Rectangular Marquee",
+      "Duplicate Layer"
+    ],
+    "layers_before": 1,
+    "layers_after": 2,
+    "size": [
+      512,
+      384
+    ],
+    "variations": 0
+  },
+  {
+    "case": "remove",
+    "state": "done",
+    "seconds": 4.0,
+    "message": "Added layer: Object Removal",
+    "history_before": [
+      "Open",
+      "Rectangular Marquee",
+      "Duplicate Layer",
+      "Rectangular Marquee"
+    ],
+    "history_after": [
+      "Open",
+      "Rectangular Marquee",
+      "Duplicate Layer",
+      "Rectangular Marquee",
+      "Duplicate Layer"
+    ],
+    "layers_before": 2,
+    "layers_after": 3,
+    "size": [
+      512,
+      384
+    ],
+    "variations": 0
+  },
+  {
+    "case": "expand",
+    "state": "done",
+    "seconds": 14.1,
+    "message": "Canvas is now 576 x 448",
+    "history_before": [
+      "Open",
+      "Rectangular Marquee",
+      "Duplicate Layer",
+      "Rectangular Marquee",
+      "Duplicate Layer",
+      "Deselect"
+    ],
+    "history_after": [
+      "Open",
+      "Rectangular Marquee",
+      "Duplicate Layer",
+      "Rectangular Marquee",
+      "Duplicate Layer",
+      "Deselect",
+      "Generative Expand"
+    ],
+    "layers_before": 3,
+    "layers_after": 4,
+    "size": [
+      576,
+      448
+    ],
+    "variations": 0
+  },
+  {
+    "case": "create",
+    "state": "done",
+    "seconds": 12.1,
+    "message": "Done",
+    "history_before": [
+      "Open",
+      "Rectangular Marquee",
+      "Duplicate Layer",
+      "Rectangular Marquee",
+      "Duplicate Layer",
+      "Deselect",
+      "Generative Expand"
+    ],
+    "history_after": [
+      "Open",
+      "Rename Layer"
+    ],
+    "layers_before": 4,
+    "layers_after": 1,
+    "size": [
+      512,
+      384
+    ],
+    "variations": 0
+  }
+]

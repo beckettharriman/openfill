@@ -28,6 +28,8 @@ import hashlib
 import json
 import os
 import platform
+import plistlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -38,6 +40,7 @@ from pathlib import Path
 
 DESKTOP_ID = "ai.storyteller.photocraft.desktop"
 SEPARATE_ID = "openfill-photocraft.desktop"
+UNINSTALL_ID = "openfill-photocraft-uninstall.desktop"
 MARKER = "X-OpenFill-Launcher=true"
 RELEASES = "https://api.github.com/repos/storytold/photocraft/releases/latest"
 
@@ -300,6 +303,7 @@ def ask(question: str) -> bool:
 
 WINDOWS_NAME = "PhotoCraft with OpenFill"
 BOOT = "OpenFill for PhotoCraft.pyw"
+UNINSTALL_BOOT = "Uninstall OpenFill for PhotoCraft.pyw"
 
 
 def windows_home() -> Path:
@@ -313,6 +317,34 @@ def windows_shortcut_paths() -> list[Path]:
         appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / f"{WINDOWS_NAME}.lnk",
         desktop / f"{WINDOWS_NAME}.lnk",
     ]
+
+
+def windows_uninstall_shortcut() -> Path:
+    return windows_shortcut_paths()[0].with_name("Uninstall OpenFill for PhotoCraft.lnk")
+
+
+def uninstall_windows_dialog() -> int:
+    import ctypes
+
+    message = ctypes.windll.user32.MessageBoxW
+    if (
+        message(
+            None,
+            "Close OpenFill first. Remove OpenFill for PhotoCraft?\n\n"
+            "PhotoCraft, your settings and ComfyUI models stay in place.",
+            "Remove OpenFill?",
+            0x24,  # yes/no, question
+        )
+        != 6
+    ):
+        return 0
+    try:
+        uninstall_windows()
+    except OSError as err:
+        message(None, str(err), "Could not remove OpenFill", 0x10)
+        return 1
+    message(None, "PhotoCraft, your settings and models are still there.", "OpenFill removed", 0x40)
+    return 0
 
 
 def _ps_quote(text: str) -> str:
@@ -350,33 +382,146 @@ def install_windows(python: str) -> int:
         "raise SystemExit(main(sys.argv[1:]))\n",
         encoding="utf-8",
     )
+    (app / UNINSTALL_BOOT).write_text(
+        "import os, sys\n"
+        "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n"
+        "from openfill_photocraft.install import uninstall_windows_dialog\n"
+        "raise SystemExit(uninstall_windows_dialog())\n",
+        encoding="utf-8",
+    )
     pythonw = Path(python).with_name("pythonw.exe")
     target = str(pythonw if pythonw.is_file() else python)
     for link in windows_shortcut_paths():
         make_shortcut(link, target, f'"{app / BOOT}"', app, f"{found[0]},0")
         print(f"shortcut: {link}")
+    make_shortcut(windows_uninstall_shortcut(), target, f'"{app / UNINSTALL_BOOT}"', app, f"{found[0]},0")
     print(f"OpenFill installed in {app}")
     print(f"Open '{WINDOWS_NAME}' from the Start menu or the desktop.")
-    print("To remove it: run this installer again with --uninstall.")
+    print("To remove it: open Uninstall OpenFill for PhotoCraft in the Start menu.")
     return 0
 
 
 def uninstall_windows() -> int:
-    for link in windows_shortcut_paths():
+    app = windows_home() / "app"
+    if app.exists():
+        shutil.rmtree(app)
+    for link in [*windows_shortcut_paths(), windows_uninstall_shortcut()]:
         if link.is_file():
             link.unlink()
             print(f"removed {link}")
-    shutil.rmtree(windows_home() / "app", ignore_errors=True)
     print("OpenFill for PhotoCraft is removed. Your settings stay in %APPDATA%\\OpenFill for PhotoCraft;")
     print("models stay in your ComfyUI folder.")
+    return 0
+
+
+MAC_BUNDLE_ID = "com.openfill.photocraft"
+
+
+def mac_app() -> Path:
+    return Path.home() / "Applications" / "PhotoCraft with OpenFill.app"
+
+
+def mac_uninstall_app() -> Path:
+    return mac_app().with_name("Uninstall OpenFill for PhotoCraft.app")
+
+
+def mac_home() -> Path:
+    return Path.home() / "Library" / "Application Support" / "OpenFill for PhotoCraft"
+
+
+def owns_mac_app(bundle: Path) -> bool:
+    try:
+        info = plistlib.loads((bundle / "Contents/Info.plist").read_bytes())
+        return info.get("CFBundleIdentifier") in (MAC_BUNDLE_ID, MAC_BUNDLE_ID + ".uninstall")
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return False
+
+
+def mac_python_command(python: str) -> str:
+    # Finder may start a script bundle under Rosetta even with an ARM Python venv.
+    machine = platform.machine()
+    if sys.platform == "darwin" and machine in ("arm64", "x86_64"):
+        return shlex.join(["/usr/bin/arch", "-" + machine, python])
+    return shlex.quote(python)
+
+
+def install_mac(python: str) -> int:
+    from openfill_photocraft.__main__ import find_photocraft
+
+    if not find_photocraft(None):
+        print("Install PhotoCraft in Applications, then run this installer again.")
+        return 1
+    bundle = mac_app()
+    if bundle.exists() and not owns_mac_app(bundle):
+        print(f"{bundle} already exists and is not an OpenFill launcher. Rename it first.")
+        return 1
+    uninstaller = mac_uninstall_app()
+    if uninstaller.exists() and not owns_mac_app(uninstaller):
+        print(f"{uninstaller} already exists and is not an OpenFill launcher. Rename it first.")
+        return 1
+    app = mac_home() / "app"
+    copy_app(app)
+    contents = bundle / "Contents"
+    executable = contents / "MacOS" / "openfill-photocraft"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text(
+        "#!/bin/sh\n"
+        f"export PYTHONPATH={shlex.quote(str(app))}\n"
+        f'exec {mac_python_command(python)} -m openfill_photocraft "$@"\n',
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    (contents / "Info.plist").write_bytes(
+        plistlib.dumps(
+            {
+                "CFBundleIdentifier": MAC_BUNDLE_ID,
+                "CFBundleName": "PhotoCraft with OpenFill",
+                "CFBundleExecutable": executable.name,
+                "CFBundlePackageType": "APPL",
+                "CFBundleVersion": "1",
+                "NSHighResolutionCapable": True,
+            }
+        )
+    )
+    uninstall_contents = uninstaller / "Contents"
+    uninstall_executable = uninstall_contents / "MacOS" / "openfill-uninstall"
+    uninstall_executable.parent.mkdir(parents=True, exist_ok=True)
+    uninstall_executable.write_text(
+        "#!/bin/sh\n"
+        f"export PYTHONPATH={shlex.quote(str(app))}\n"
+        f"exec {mac_python_command(python)} -m openfill_photocraft.install --uninstall-dialog\n",
+        encoding="utf-8",
+    )
+    uninstall_executable.chmod(0o755)
+    info = plistlib.loads((contents / "Info.plist").read_bytes())
+    info.update(
+        CFBundleIdentifier=MAC_BUNDLE_ID + ".uninstall",
+        CFBundleName="Uninstall OpenFill for PhotoCraft",
+        CFBundleExecutable=uninstall_executable.name,
+    )
+    (uninstall_contents / "Info.plist").write_bytes(plistlib.dumps(info))
+    print(f"Open {bundle}. To remove OpenFill, open {uninstaller}.")
+    return 0
+
+
+def uninstall_mac() -> int:
+    app = mac_home() / "app"
+    if app.exists():
+        shutil.rmtree(app)
+    for bundle in (mac_app(), mac_uninstall_app()):
+        if owns_mac_app(bundle):
+            shutil.rmtree(bundle)
+    print("OpenFill is removed. PhotoCraft, settings and ComfyUI models stay in place.")
     return 0
 
 
 def install(get_photocraft: bool, separate: bool, python: str) -> int:
     if sys.platform == "win32":
         return install_windows(python)
+    if sys.platform == "darwin":
+        return install_mac(python)
     if sys.platform != "linux":
-        print("This installer is for Linux and Windows. On a Mac run openfill-photocraft.sh.")
+        print("This installer supports Windows, Linux and macOS.")
         return 2
     sys.path.insert(0, str(source_root()))
     from openfill_photocraft.__main__ import find_photocraft
@@ -396,19 +541,96 @@ def install(get_photocraft: bool, separate: bool, python: str) -> int:
     copy_app(app)
     command = write_command(app, python)
     entry = install_entry(command, photocraft, separate)
+    install_uninstall_entry()
     print(f"OpenFill installed in {app}")
     print(f"Menu entry: {entry}")
     if separate:
         print("Open 'PhotoCraft with OpenFill' from your app menu.")
     else:
         print("Open PhotoCraft as usual (app menu, or an image from the file manager): OpenFill comes with it.")
-    print("To remove OpenFill: openfill-photocraft-uninstall")
+    print("To remove OpenFill: open Uninstall OpenFill for PhotoCraft in your app menu.")
     return 0
 
 
+def install_uninstall_entry() -> Path:
+    path = data_home() / "applications" / UNINSTALL_ID
+    if path.exists() and MARKER not in path.read_text(encoding="utf-8"):
+        raise FileExistsError(f"{path} is not an OpenFill launcher")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    command = str(bin_dir() / "openfill-photocraft-uninstall")
+    command = (
+        command.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$").replace("%", "%%")
+    )
+    path.write_text(
+        "[Desktop Entry]\nType=Application\nName=Uninstall OpenFill for PhotoCraft\n"
+        f'Exec="{command}" --uninstall-dialog\nTerminal=false\nIcon=edit-delete\n'
+        f"Categories=Utility;\n{MARKER}\n",
+        encoding="utf-8",
+    )
+    refresh_menus(path.parent)
+    return path
+
+
+def uninstall_dialog() -> int:
+    if sys.platform == "win32":
+        return uninstall_windows_dialog()
+    prompt = "Close OpenFill first. Remove OpenFill for PhotoCraft? PhotoCraft, settings and models stay in place."
+    if sys.platform == "darwin":
+        confirmed = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'display dialog "' + prompt + '" buttons {"Cancel", "Remove"} default button "Cancel"',
+            ],
+            capture_output=True,
+        )
+        if confirmed.returncode:
+            return 0
+        try:
+            uninstall_mac()
+        except OSError:
+            subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    'display dialog "Could not remove OpenFill. Close it and try again." buttons {"OK"}',
+                ],
+                check=False,
+            )
+            return 1
+        subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'display dialog "OpenFill removed. PhotoCraft, settings and models are still there." buttons {"OK"}',
+            ],
+            check=False,
+        )
+        return 0
+    import tkinter as tk
+    from tkinter import messagebox
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        if not messagebox.askyesno("Remove OpenFill?", prompt, parent=root):
+            return 0
+        uninstall()
+        messagebox.showinfo("OpenFill removed", "PhotoCraft, settings and models are still there.", parent=root)
+        return 0
+    except OSError as err:
+        messagebox.showerror("Could not remove OpenFill", str(err), parent=root)
+        return 1
+    finally:
+        root.destroy()
+
+
 def uninstall(with_photocraft: bool = False) -> int:
+    app = share_dir() / "app"
+    if app.exists():
+        shutil.rmtree(app)
     folder = data_home() / "applications"
-    for name in (DESKTOP_ID, SEPARATE_ID):
+    for name in (DESKTOP_ID, SEPARATE_ID, UNINSTALL_ID):
         entry = folder / name
         if entry.is_file() and MARKER in entry.read_text(encoding="utf-8", errors="replace"):
             entry.unlink()
@@ -421,7 +643,6 @@ def uninstall(with_photocraft: bool = False) -> int:
         path = bin_dir() / name
         if path.is_file() and "openfill" in path.read_text(encoding="utf-8", errors="replace").lower():
             path.unlink()
-    shutil.rmtree(share_dir() / "app", ignore_errors=True)
     downloaded = sorted(share_dir().glob("photocraft-*"))
     if with_photocraft:
         for folder_ in downloaded:
@@ -453,8 +674,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--with-photocraft", action="store_true", help="with --uninstall: the PhotoCraft it downloaded too"
     )
+    parser.add_argument("--uninstall-dialog", action="store_true", help="confirm removal in a window")
     args = parser.parse_args(argv)
+    if args.uninstall_dialog:
+        return uninstall_dialog()
     if args.uninstall:
+        if sys.platform == "darwin":
+            return uninstall_mac()
         return uninstall_windows() if sys.platform == "win32" else uninstall(args.with_photocraft)
     return install(args.get_photocraft, args.separate_icon, sys.executable)
 
