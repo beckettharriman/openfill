@@ -571,7 +571,7 @@ class Bar:
         self.pill.title("OpenFill")
         self.pill.resizable(False, False)
         self.pill.protocol("WM_DELETE_WINDOW", self.hide)
-        ui.make_borderless(self.pill)  # a chip, not a window: it is tied to PhotoCraft's
+        ui.make_borderless(self.pill, keyboard=False)  # a chip, not a window: it is tied to PhotoCraft's
         self.pill.attributes("-topmost", True)  # dropped when tied to PhotoCraft (Windows)
         self.pill.withdraw()
         self.pill_canvas = tk.Canvas(

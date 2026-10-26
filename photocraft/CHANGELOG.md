@@ -5,6 +5,14 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-10-26
+
+- Fix Mac prompt typing by keeping the expanded panel keyboard-focusable.
+- Use the native Mac model menu and restore focus after selection or cancellation.
+- Open the no-Tk panel in the default browser on Windows, macOS and Linux.
+- Let an explicitly selected ComfyUI Python run OpenFill without installing another Python.
+- Fix Linux/macOS interpreter fallback and paths containing spaces; document setup and PhotoCraft update discovery.
+
 ## [0.2.3] - 2026-10-26
 
 - Detect long Windows paths before ComfyUI startup or download and explain the shorter-folder fix.

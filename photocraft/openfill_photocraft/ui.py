@@ -1063,13 +1063,17 @@ class Select(tk.Canvas):
         self.values: list[str] = []
         self.value = ""
         self.popdown: Popdown | None = None
+        self._native_menu: tk.Menu | None = None
         self.bind("<Button-1>", lambda _e: self.toggle())
         self._draw()
 
     def _draw(self) -> None:
         self.delete("all")
         self.create_image(
-            0, 0, image=rrect(self.w, 32, 4, PANEL, self.bgc, ACCENT if self.popdown else LINE), anchor="nw"
+            0,
+            0,
+            image=rrect(self.w, 32, 4, PANEL, self.bgc, ACCENT if self.popdown or self._native_menu else LINE),
+            anchor="nw",
         )
         f = fonts(self).body
         self.create_text(10, 16, text=ellipsize(self.value, f, self.w - 38), font=f, fill=TEXT, anchor="w")
@@ -1092,10 +1096,49 @@ class Select(tk.Canvas):
             return
         if not self.values and not self.manage:
             return
+        if sys.platform == "darwin":
+            self._mac_menu()
+            return
         self.popdown = Popdown(self)
         self._draw()
 
+    def _mac_menu(self) -> None:
+        """Let Aqua manage selection and dismissal instead of grabbing a borderless window."""
+        menu = self._native_menu = tk.Menu(self, tearoff=False)
+        selected = tk.StringVar(self, value=self.value)
+        picked: list[str] = []
+        for value in self.values:
+            menu.add_radiobutton(label=value, value=value, variable=selected, command=lambda v=value: picked.append(v))
+        if self.manage:
+            if self.values:
+                menu.add_separator()
+            menu.add_command(label=MANAGE, command=lambda: picked.append(MANAGE))
+        previous = self.focus_get()
+        self._draw()
+        try:
+            # Aqua returns after the native menu has been dismissed. Defer actions
+            # until then, so they cannot destroy a menu during native tracking.
+            menu.tk_popup(self.winfo_rootx(), self.winfo_rooty() + 32)
+        finally:
+            self.close()
+            try:
+                self.winfo_toplevel().focus_force()
+                if previous is not None and previous.winfo_exists():
+                    previous.focus_set()
+            except tk.TclError:
+                pass
+        if picked:
+            self.pick(picked[-1])
+
     def close(self) -> None:
+        if self._native_menu is not None:
+            menu, self._native_menu = self._native_menu, None
+            try:
+                menu.unpost()
+                menu.destroy()
+            except tk.TclError:
+                pass
+            self._draw()
         if self.popdown is not None:
             pop, self.popdown = self.popdown, None
             pop.destroy_quietly()
@@ -1231,15 +1274,20 @@ class Popdown(tk.Toplevel):
 # ---- borderless windows --------------------------------------------------------------------------
 
 
-def make_borderless(window: tk.Wm) -> str:
+def make_borderless(window: tk.Wm, *, keyboard: bool = True) -> str:
     """No title bar or frame: OpenFill's own header is the drag handle.
 
     On X11 (and XWayland) the window manager is asked through _MOTIF_WM_HINTS to leave out
     its decorations, so the window stays a normal managed window (it gets keyboard focus,
-    a taskbar entry and Alt+Tab). Where that cannot be set, and on Windows and macOS, Tk's
+    a taskbar entry and Alt+Tab). macOS keeps a normal titled window so it can receive
+    keyboard input. Where X11 hints cannot be set, and on Windows, Tk's
     override-redirect is used; on Windows the bar is then tied to PhotoCraft's window (an
     owned window), which keeps it above PhotoCraft and minimizes and restores it with it.
-    Returns "motif" or "override". Call it before the window is first shown."""
+    Returns "motif", "managed" or "override". Call it before the window is first shown."""
+    if sys.platform == "darwin" and keyboard:
+        # Aqua override-redirect windows cannot become key windows. Tk focus_force
+        # alone can report a focused Text widget while native typing never arrives.
+        return "managed"
     if sys.platform.startswith("linux") or "bsd" in sys.platform:
         try:
             if str(window.tk.call("tk", "windowingsystem")) == "x11" and _motif_hints(window):

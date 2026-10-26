@@ -938,7 +938,7 @@ class MacInstallTests(unittest.TestCase):
         window._w = ".pill"
         window.tk.call.return_value = "None"
         with mock.patch.object(ui.sys, "platform", "darwin"):
-            self.assertEqual(ui.make_borderless(window), "override")
+            self.assertEqual(ui.make_borderless(window, keyboard=False), "override")
         window.tk.call.assert_called_once_with("wm", "overrideredirect", ".pill", True)
         window.overrideredirect.assert_not_called()
 
@@ -1537,3 +1537,41 @@ class ShellInterpreterTests(unittest.TestCase):
         result = subprocess.run(["sh", str(ROOT / "photocraft/install.sh")], env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertIn("OPENFILL_PYTHON", result.stderr)
+
+
+class MacInputTests(unittest.TestCase):
+    def test_mac_keyboard_window_stays_managed(self):
+        from openfill_photocraft import ui
+
+        window = mock.Mock()
+        with mock.patch.object(ui.sys, "platform", "darwin"):
+            self.assertEqual(ui.make_borderless(window), "managed")
+            window.tk.call.assert_not_called()
+            self.assertEqual(ui.make_borderless(window, keyboard=False), "override")
+            window.tk.call.assert_called_once_with("wm", "overrideredirect", window._w, True)
+
+    def test_native_menu_defers_action_until_dismissed_and_restores_focus(self):
+        from openfill_photocraft import ui
+
+        select = mock.Mock()
+        select.values, select.value, select.manage = ["LaMa", "DreamShaper"], "LaMa", None
+        select._native_menu, select.popdown = None, None
+        menu = mock.Mock()
+        select.winfo_rootx.return_value, select.winfo_rooty.return_value = 10, 20
+        previous = select.focus_get.return_value
+        commands = []
+        menu.add_radiobutton.side_effect = lambda **kw: commands.append(kw["command"])
+        select.close.side_effect = lambda: ui.Select.close(select)
+
+        def choose(*_args):
+            commands[1]()
+            select.pick.assert_not_called()
+            menu.destroy.assert_not_called()
+
+        menu.tk_popup.side_effect = choose
+        with mock.patch.object(ui.tk, "Menu", return_value=menu), mock.patch.object(ui.tk, "StringVar"):
+            ui.Select._mac_menu(select)
+        menu.destroy.assert_called_once()
+        select.pick.assert_called_once_with("DreamShaper")
+        previous.focus_set.assert_called_once()
+        self.assertIsNone(select._native_menu)

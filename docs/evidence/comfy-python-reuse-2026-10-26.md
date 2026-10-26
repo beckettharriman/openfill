@@ -1,6 +1,6 @@
 # Reusing ComfyUI's Python, 2026-10-26
 
-Unreleased changes after PhotoCraft 0.2.3. No release number assigned.
+Included in PhotoCraft 0.2.4.
 
 The no-Tk panel now opens through Python's default-browser handler. It no longer searches for Edge, Chrome or another installed browser. The same fallback is used on Windows, macOS and Linux.
 

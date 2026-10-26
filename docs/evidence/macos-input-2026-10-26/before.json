@@ -1,0 +1,1 @@
+{"mode": "legacy", "before": {"windows": [{"canBecomeKeyWindow": false, "isKeyWindow": false, "styleMask": 14}], "focus": ".!promptbox.!text", "grab": "None"}, "typed": "a", "cycles": [], "native_typed": "a", "after": {"windows": [{"canBecomeKeyWindow": false, "isKeyWindow": false, "styleMask": 14}], "focus": ".!promptbox.!text", "grab": "None"}}

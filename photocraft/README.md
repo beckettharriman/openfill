@@ -6,7 +6,7 @@ It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharrima
 
 <img src="../docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
 
-> **Version 0.2.3** adds Apple Silicon support, easier uninstall and a check for long Windows install paths. It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. The Mac version passed Fill, Remove, Expand and Create on an M3 MacBook Air; see [the test results](../docs/evidence/macos-photocraft-2026-10-26/).
+> **Version 0.2.4** fixes Mac prompt typing and model-menu focus, and lets you reuse ComfyUI's Python with the fallback panel in your default browser. It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. The Mac version passed Fill, Remove, Expand and Create on an M3 MacBook Air; see [the test results](../docs/evidence/macos-photocraft-2026-10-26/).
 
 ## What you need
 
@@ -21,7 +21,7 @@ It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharrima
 
 1. Install PhotoCraft (the `.msi`).
 2. If you already have ComfyUI, you can use its Python without installing another one; see [using ComfyUI's Python](#use-comfyuis-python). Otherwise, install Python from [python.org](https://www.python.org/downloads/windows/).
-3. Unzip `openfill-photocraft-0.2.3.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
+3. Unzip `openfill-photocraft-0.2.4.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
 4. Open **PhotoCraft with OpenFill**. PhotoCraft opens with the OpenFill panel next to it.
 5. The first time, the panel asks for what's missing:
    - **AI engine not found**: press **Download ComfyUI**. It downloads and unpacks in the background (a few minutes) into `%LOCALAPPDATA%\OpenFill\ComfyUI`. With an AMD card it gets ComfyUI's version for AMD cards. If you already have ComfyUI, press **Choose folder** instead and pick the folder that has `main.py` in it (or the portable folder).
@@ -36,7 +36,7 @@ To remove it, run `Install OpenFill for PhotoCraft.cmd --uninstall` from a comma
 
 ## Use ComfyUI's Python
 
-The default-browser fallback and explicit interpreter priority described here are unreleased changes after 0.2.3.
+The default-browser fallback and explicit interpreter priority require OpenFill for PhotoCraft 0.2.4 or newer.
 
 You do not need a second Python installation. OpenFill can run in ComfyUI's Python environment on Windows, macOS and Linux. It needs Python 3.10 or newer and Pillow, which ComfyUI normally already has. Selecting this interpreter does not change ComfyUI's packages.
 
@@ -65,7 +65,7 @@ The launcher looks for PhotoCraft each time it starts, rather than storing a ver
 
 ## Install on Linux
 
-1. Unzip `openfill-photocraft-0.2.3.zip` and run `sh install.sh` in the unzipped folder.
+1. Unzip `openfill-photocraft-0.2.4.zip` and run `sh install.sh` in the unzipped folder.
    - No PhotoCraft yet? The installer offers to download it for you (the official Linux build, SHA-256 checked, no admin rights).
 2. Open PhotoCraft the usual way: from the app menu, or by opening an image in the file manager. OpenFill comes with it.
 3. The first time, the panel asks for what's missing. ComfyUI: choose its folder, or follow ComfyUI's [manual install](https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux) first (for an AMD card, with PyTorch for ROCm: [AMD on Linux](../docs/install.md#amd-on-linux)). Models: **Open model manager**.
@@ -81,7 +81,7 @@ Tested with PhotoCraft 0.16.0 on a MacBook Air M3, 16 GB, macOS 14.7.
 1. Install PhotoCraft from its [macOS DMG](https://github.com/storytold/photocraft/releases) in `/Applications` or `~/Applications`.
 2. Install Python 3.10 or newer from [python.org](https://www.python.org/downloads/macos/), which includes Tk, then run `python3 -m pip install Pillow`. You can instead use your existing ComfyUI Python with Pillow; Tk is optional. See [using ComfyUI's Python](#use-comfyuis-python).
 3. Set up ComfyUI using the [Mac engine steps](https://github.com/beckettharriman/openfill/blob/main/docs/install.md#macos), or use your existing ComfyUI and models.
-4. Download [openfill-photocraft-0.2.3.zip](https://github.com/beckettharriman/openfill/releases/download/photocraft-v0.2.3/openfill-photocraft-0.2.3.zip), unzip it, and run `sh install.sh` from the unzipped `openfill-photocraft-0.2.3` folder.
+4. Download [openfill-photocraft-0.2.4.zip](https://github.com/beckettharriman/openfill/releases/download/photocraft-v0.2.4/openfill-photocraft-0.2.4.zip), unzip it, and run `sh install.sh` from the unzipped `openfill-photocraft-0.2.4` folder.
 5. Open `~/Applications/PhotoCraft with OpenFill.app`. In the gear menu, Engine lets you choose your ComfyUI folder; Models lists LaMa and DreamShaper 8.
 
 The panel floats independently; following PhotoCraft when it moves or minimizes is Windows-only. To remove OpenFill, open `~/Applications/Uninstall OpenFill for PhotoCraft.app`, or run `sh install.sh --uninstall`. PhotoCraft, settings and models stay.
