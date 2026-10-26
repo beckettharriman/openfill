@@ -966,16 +966,18 @@ class MacInstallTests(unittest.TestCase):
                 self.assertEqual(install.install_mac(str(python)), 0)
                 info = plistlib.loads((bundle / "Contents/Info.plist").read_bytes())
                 self.assertEqual(info["CFBundleIdentifier"], install.MAC_BUNDLE_ID)
-                subprocess.run([str(bundle / "Contents/MacOS/openfill-photocraft"), "a picture.png"], check=True)
-                self.assertEqual(output.read_text().splitlines(), ["-m", "openfill_photocraft", "a picture.png"])
+                if os.name != "nt":  # Windows cannot execute a Unix shell launcher.
+                    subprocess.run([str(bundle / "Contents/MacOS/openfill-photocraft"), "a picture.png"], check=True)
+                    self.assertEqual(output.read_text().splitlines(), ["-m", "openfill_photocraft", "a picture.png"])
                 self.assertTrue((home / "app/openfill_photocraft").is_dir())
                 remove_bundle = install.mac_uninstall_app()
                 info = plistlib.loads((remove_bundle / "Contents/Info.plist").read_bytes())
                 self.assertEqual(info["CFBundleIdentifier"], install.MAC_BUNDLE_ID + ".uninstall")
-                subprocess.run([str(remove_bundle / "Contents/MacOS/openfill-uninstall")], check=True)
-                self.assertEqual(
-                    output.read_text().splitlines(), ["-m", "openfill_photocraft.install", "--uninstall-dialog"]
-                )
+                if os.name != "nt":  # Windows cannot execute a Unix shell launcher.
+                    subprocess.run([str(remove_bundle / "Contents/MacOS/openfill-uninstall")], check=True)
+                    self.assertEqual(
+                        output.read_text().splitlines(), ["-m", "openfill_photocraft.install", "--uninstall-dialog"]
+                    )
                 install.uninstall_mac()
                 self.assertFalse(remove_bundle.exists())
                 self.assertFalse(bundle.exists())
