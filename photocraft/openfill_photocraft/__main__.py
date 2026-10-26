@@ -110,32 +110,9 @@ def _registry_install_dir() -> str | None:
     return None
 
 
-def app_window(url: str) -> bool:
-    """Open ``url`` as a small app window (Edge or Chrome without tabs or address bar), for
-    when Python has no Tk for the OpenFill bar. False when no such browser is found."""
-    names = ["msedge", "chrome", "chromium", "chromium-browser", "google-chrome", "brave-browser"]
-    paths = [shutil.which(n) for n in names]
-    if sys.platform == "win32":
-        for base in (
-            os.environ.get("PROGRAMFILES(X86)"),
-            os.environ.get("PROGRAMFILES"),
-            os.environ.get("LOCALAPPDATA"),
-        ):
-            if base:
-                paths += [
-                    str(Path(base) / "Microsoft" / "Edge" / "Application" / "msedge.exe"),
-                    str(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe"),
-                ]
-    for path in paths:
-        if path and Path(path).is_file():
-            subprocess.Popen(
-                [path, f"--app={url}", "--window-size=480,820"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=sys.platform != "win32",
-            )
-            return True
-    return False
+def open_panel(url: str) -> bool:
+    """Use the user's default browser when the native panel is unavailable."""
+    return webbrowser.open(url, new=2)
 
 
 def photocraft_settings_dir() -> Path | None:
@@ -446,8 +423,8 @@ def main(argv: list[str] | None = None) -> int:
     service.warm_up()
     if os.environ.get("OPENFILL_NO_BROWSER"):
         pass  # tests and headless use: the address is in page-url.txt
-    elif args.page or (bar is None and not app_window(url + "#fill")):
-        webbrowser.open(url)
+    elif args.page or bar is None:
+        open_panel(url + "#fill")
 
     def alive() -> bool:
         if process is not None:

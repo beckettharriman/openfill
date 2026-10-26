@@ -5,6 +5,16 @@ rem SPDX-License-Identifier: Apache-2.0
 setlocal EnableDelayedExpansion
 set "DIR=%~dp0"
 set "PY="
+rem An explicit ComfyUI Python takes priority, even without Tk.
+if defined OPENFILL_PYTHON (
+  "%OPENFILL_PYTHON%" -c "import sys, PIL; sys.exit(sys.version_info < (3, 10))" >nul 2>&1
+  if errorlevel 1 (
+    echo OPENFILL_PYTHON must point to Python 3.10 or newer with Pillow.
+    pause
+    exit /b 1
+  )
+  set "PY=%OPENFILL_PYTHON%"
+)
 set "CHECK=import sys, PIL, tkinter; sys.exit(sys.version_info < (3, 10))"
 for %%P in ("%OPENFILL_PYTHON%" "%USERPROFILE%\Documents\ComfyUI\.venv\Scripts\python.exe" "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" "%LOCALAPPDATA%\Programs\Python\Python311\python.exe") do (
   if not defined PY if exist "%%~P" "%%~P" -c "%CHECK%" >nul 2>&1 && set "PY=%%~P"
@@ -23,7 +33,7 @@ if not defined PY (
     )
   )
 )
-rem Without Tk the OpenFill panel opens as a small Edge window instead: ComfyUI's own Python works.
+rem Without Tk the OpenFill panel opens as a tab in the user's default browser instead: ComfyUI's own Python works.
 set "CHECK=import sys, PIL; sys.exit(sys.version_info < (3, 10))"
 for %%P in ("%LOCALAPPDATA%\OpenFill\ComfyUI\ComfyUI_windows_portable\python_embeded\python.exe" "C:\AI\ComfyUI\ComfyUI_windows_portable\python_embeded\python.exe" "C:\ComfyUI_windows_portable\python_embeded\python.exe" "%USERPROFILE%\ComfyUI_windows_portable\python_embeded\python.exe" "%USERPROFILE%\Downloads\ComfyUI_windows_portable\python_embeded\python.exe" "%USERPROFILE%\Desktop\ComfyUI_windows_portable\python_embeded\python.exe") do (
   if not defined PY if exist "%%~P" "%%~P" -c "%CHECK%" >nul 2>&1 && set "PY=%%~P"

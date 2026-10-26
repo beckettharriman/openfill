@@ -8,7 +8,9 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -21,6 +23,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")]
 
+from openfill_photocraft import __main__ as launch  # noqa: E402
 from openfill_photocraft import control  # noqa: E402
 from openfill_photocraft.bridge import BridgeError, PhotoCraftBridge  # noqa: E402
 from PIL import Image  # noqa: E402
@@ -1471,3 +1474,66 @@ class LaunchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DefaultBrowserTests(unittest.TestCase):
+    def test_default_browser_on_each_platform(self):
+        for platform in ("win32", "darwin", "linux"):
+            with (
+                self.subTest(platform=platform),
+                mock.patch.object(sys, "platform", platform),
+                mock.patch.object(launch.webbrowser, "open", return_value=True) as browser,
+                mock.patch.object(launch.subprocess, "Popen") as process,
+            ):
+                self.assertTrue(launch.open_panel("http://127.0.0.1:1234/#fill"))
+                browser.assert_called_once_with("http://127.0.0.1:1234/#fill", new=2)
+                process.assert_not_called()
+
+
+@unittest.skipUnless(shutil.which("sh"), "needs a POSIX shell")
+class ShellInterpreterTests(unittest.TestCase):
+    def run_script(self, script, explicit):
+        with tempfile.TemporaryDirectory(prefix="openfill python reuse ") as temp:
+            root = Path(temp)
+            shutil.copy2(ROOT / "photocraft" / script, root / script)
+            package = root / "openfill_photocraft"
+            package.mkdir()
+            (package / "__init__.py").write_text("")
+            recorder = "import json,os,sys; from pathlib import Path; Path(os.environ['TEST_LOG']).write_text(json.dumps(sys.argv))\n"
+            (package / "install.py").write_text(recorder)
+            (package / "__main__.py").write_text(recorder)
+            # Every interpreter sees Pillow but cannot import Tk.
+            (root / "PIL.py").write_text("")
+            (root / "tkinter.py").write_text("raise ImportError('test: no Tk')\n")
+            env = dict(os.environ, PYTHONPATH=str(root), TEST_LOG=str(root / "result.json"))
+            env.pop("OPENFILL_PYTHON", None)
+            if explicit:
+                python = root / "Comfy Python"
+                python.symlink_to(sys.executable)
+                env["OPENFILL_PYTHON"] = str(python)
+            result = subprocess.run(
+                ["sh", str(root / script), "--test-argument", "a path with spaces"],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = json.loads((root / "result.json").read_text())
+            self.assertEqual(args[1:], ["--test-argument", "a path with spaces"])
+
+    def test_explicit_no_tk_python_with_spaces(self):
+        for script in ("install.sh", "openfill-photocraft.sh"):
+            with self.subTest(script=script):
+                self.run_script(script, True)
+
+    def test_auto_fallback_without_tk(self):
+        for script in ("install.sh", "openfill-photocraft.sh"):
+            with self.subTest(script=script):
+                self.run_script(script, False)
+
+    def test_invalid_explicit_python_does_not_silently_switch(self):
+        env = dict(os.environ, OPENFILL_PYTHON="/not/an/interpreter")
+        result = subprocess.run(["sh", str(ROOT / "photocraft/install.sh")], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("OPENFILL_PYTHON", result.stderr)

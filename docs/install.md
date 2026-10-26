@@ -7,7 +7,7 @@ The short steps are in the [README](../README.md#install). This page has the res
 - **A graphics card with 8 GB or more** for the SDXL and FLUX models: NVIDIA, or AMD Radeon RX 7000 or newer (see [AMD graphics cards](#amd-graphics-cards)). LaMa (Remove) and the SD 1.5 models run on less. Without a card ComfyUI can use, it runs on the processor, which takes minutes per fill.
 - **ComfyUI.** On Windows, OpenFill downloads it for you the first time (about 2 GB, about 7 GB unpacked). On Linux and macOS you set it up once (steps below). If you already have ComfyUI, point OpenFill at it.
 - **Disk space** for the models: from 0.2 GB (LaMa) to about 13 GB (FLUX.1 Fill Q6).
-- **For PhotoCraft:** PhotoCraft 0.12 to 0.16, Windows 10 or 11 or Linux, and Python 3.10 or newer with Tk and Pillow. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. PhotoCraft 0.2.3 adds Apple Silicon support, tested on an M3. See [PhotoCraft on macOS](#photocraft-on-macos).
+- **For PhotoCraft:** PhotoCraft 0.12 to 0.16, Windows 10 or 11 or Linux, and Python 3.10 or newer with Pillow. ComfyUI's existing Python works; Tk is optional. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. PhotoCraft 0.2.3 adds Apple Silicon support, tested on an M3. See [PhotoCraft on macOS](#photocraft-on-macos).
 - **For GIMP:** GIMP 3.2 or newer on Windows, Linux or macOS. OpenFill uses GIMP's own Python and needs no extra packages.
 
 The steps below mention the **model manager**: that's where you get models and see what fits your graphics card. In PhotoCraft it's the gear icon in the OpenFill panel, Models section (the **Open model manager** button on the first run goes there too). In GIMP it's `Filters > OpenFill > Generative Fill...`, Models tab.
@@ -17,23 +17,53 @@ The steps below mention the **model manager**: that's where you get models and s
 ### Windows
 
 1. Install PhotoCraft (the `.msi` from its [releases page](https://github.com/storytold/photocraft/releases)).
-2. Install Python from [python.org](https://www.python.org/downloads/windows/) if you don't have it (the default options are fine).
+2. If you already have ComfyUI, you can use its Python without installing another one; see [using ComfyUI's Python](#use-comfyuis-python). Otherwise, install Python from [python.org](https://www.python.org/downloads/windows/).
 3. Unzip `openfill-photocraft-0.2.3.zip` and double-click **Install OpenFill for PhotoCraft.cmd**. It adds **PhotoCraft with OpenFill** to the Start menu and the desktop.
 4. Open **PhotoCraft with OpenFill**. PhotoCraft opens with the OpenFill panel next to it.
 5. The first time, the panel asks for what's missing:
    - **AI engine not found**: press **Download ComfyUI**. It downloads and unpacks in the background into `%LOCALAPPDATA%\OpenFill\ComfyUI`. With an AMD Radeon RX 7000 or newer it gets ComfyUI's version for AMD cards. If you already have ComfyUI, press **Choose folder** and pick the folder that has `main.py` in it (or the portable folder).
    - **No models installed**: press **Open model manager** and get LaMa (removing things, 0.2 GB) and DreamShaper 8 Inpainting (fill, expand and create, 2 GB).
 
-If no Python with Tk is found, the installer uses ComfyUI's own Python and the panel opens as a small Edge window instead.
+If the selected Python has no Tk, the OpenFill panel opens in a tab in your default browser. PhotoCraft stays in its own window. No browser is installed or chosen for you. See [using ComfyUI's Python](#use-comfyuis-python).
 
 ### Linux
 
-1. On Fedora, install the panel's packages: `sudo dnf install python3-pillow python3-tkinter`.
+1. Use your existing ComfyUI Python as described below. If you prefer a separate Python and native panel, on Fedora run `sudo dnf install python3-pillow python3-tkinter`.
 2. Unzip `openfill-photocraft-0.2.3.zip` and run `sh install.sh` in the unzipped folder. No PhotoCraft yet? The installer offers to download the official Linux build (SHA-256 checked, no admin rights).
 3. Open PhotoCraft the usual way: from the app menu, or by opening an image in the file manager. OpenFill comes with it.
 4. The first time, the panel asks for what's missing. ComfyUI: choose its folder, or follow ComfyUI's [manual install](https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux) first (AMD card: [AMD on Linux](#amd-on-linux)). Models: **Open model manager**.
 
 The installer gives PhotoCraft's menu entry to OpenFill (a copy in `~/.local/share/applications` that starts PhotoCraft through OpenFill). If you'd rather keep them apart, run `sh install.sh --separate-icon` and use "PhotoCraft with OpenFill" instead.
+
+
+## Use ComfyUI's Python
+
+The default-browser fallback and explicit interpreter priority described here are unreleased changes after 0.2.3.
+
+You do not need a second Python installation. OpenFill can run in ComfyUI's Python environment on Windows, macOS and Linux. It needs Python 3.10 or newer and Pillow, which ComfyUI normally already has. Selecting this interpreter does not change ComfyUI's packages.
+
+Open a terminal in the unzipped OpenFill folder. Set the path to the Python you already use for ComfyUI, then run the installer.
+
+Windows portable ComfyUI, in **Command Prompt**:
+
+```bat
+set "OPENFILL_PYTHON=C:\ComfyUI_windows_portable\python_embeded\python.exe"
+"Install OpenFill for PhotoCraft.cmd"
+```
+
+macOS or Linux, for example:
+
+```sh
+OPENFILL_PYTHON="$HOME/ComfyUI/.venv/bin/python" sh install.sh
+```
+
+Change the example path to match your installation. A virtual environment may be named `venv` instead of `.venv`; Windows virtual environments use `Scripts\python.exe`. Paths with spaces work. The launcher remembers the chosen Python. If you move or remove that environment, rerun the installer with its new path.
+
+With Tk available, OpenFill shows its separate panel. Without Tk, it opens the same controls in a normal tab in your default browser on all three platforms. The page runs locally. Keep PhotoCraft open while using it. To try this without installing launchers on macOS or Linux, set the same variable and run `sh openfill-photocraft.sh`.
+
+### After updating PhotoCraft
+
+The launcher looks for PhotoCraft each time it starts, rather than storing a version number. An update in the usual installed location should be found automatically. OpenFill keeps its ComfyUI folder setting and models separate from the PhotoCraft installation. Explicit `--photocraft` or `PHOTOCRAFT_BIN` paths take priority. Portable copies, moved apps or old symlinks may still point to an older version, so keep one intended copy in the standard location or update that explicit path. A future PhotoCraft API change may still need an OpenFill update; automatic discovery is not a compatibility guarantee.
 
 ## OpenFill for GIMP 3
 
@@ -88,7 +118,7 @@ GIMP's own Python can only be started by GIMP on macOS, so OpenFill runs its bac
 Tested on a MacBook Air M3, 16 GB, macOS 14.7, with PhotoCraft 0.16.0. Download [openfill-photocraft-0.2.3.zip](https://github.com/beckettharriman/openfill/releases/download/photocraft-v0.2.3/openfill-photocraft-0.2.3.zip) and unzip it.
 
 1. Get the macOS DMG from [PhotoCraft releases](https://github.com/storytold/photocraft/releases) and copy PhotoCraft to `/Applications` or `~/Applications`.
-2. Install Python 3.10 or newer from [python.org](https://www.python.org/downloads/macos/), which includes Tk. Run `python3 -m pip install Pillow`. If your ComfyUI Python already has Tk and Pillow, the installer can use it.
+2. Install Python 3.10 or newer from [python.org](https://www.python.org/downloads/macos/), which includes Tk. Run `python3 -m pip install Pillow`. You can instead use your existing ComfyUI Python with Pillow; Tk is optional. See [using ComfyUI's Python](#use-comfyuis-python).
 3. Set up ComfyUI as described [above](#macos), or use your existing checkout and models. No second model download is needed when GIMP already uses that ComfyUI.
 4. Open Terminal in the unzipped `openfill-photocraft-0.2.3` folder and run `sh install.sh`.
 5. Open `~/Applications/PhotoCraft with OpenFill.app`. In Settings > Engine, choose `~/ComfyUI` if it is not found. Settings > Models lists your existing models; LaMa and DreamShaper 8 cover all four tools.
