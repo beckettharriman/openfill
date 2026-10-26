@@ -1,0 +1,11 @@
+GIMP is started as MacOS application
+GIMP-Message: Welcome to GIMP 3.2.6!
+
+[mac-e2e] fill: 3 38.6s 
+[mac-e2e] remove: 3 1.9s 
+[mac-e2e] expand: 3 25.5s 
+[mac-e2e] create: 3 24.6s 
+batch command executed successfully
+/Applications/GIMP.app/Contents/MacOS/gimp-console-3.2: GEGL-WARNING: (../gegl/buffer/gegl-tile-handler-cache.c:1076):gegl_tile_cache_destroy: runtime check failed: (g_queue_is_empty (&cache_queue))
+To debug GeglBuffer leaks, set the environment variable GEGL_DEBUG to "buffer-alloc"
+EEEEeEeek! 29 GeglBuffers leaked
