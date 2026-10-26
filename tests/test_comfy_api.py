@@ -345,6 +345,21 @@ class GpuErrorClassificationTests(unittest.TestCase):
         self.assertFalse(e.is_out_of_memory)
         self.assertFalse(e.is_unsupported_gpu)
 
+    def test_amd_card_without_rocm_code(self):
+        from openfill import ui_text
+
+        e = self.err("HIP error: invalid device function")
+        self.assertTrue(e.is_unsupported_gpu)
+        self.assertFalse(e.is_out_of_memory)
+        self.assertTrue(
+            self.err("hipErrorNoBinaryForGpu: Unable to find code object for all current devices!").is_unsupported_gpu
+        )
+        text = ui_text.unsupported_gpu_message("HIP error: invalid device function")
+        self.assertIn("AMD", text)
+        self.assertIn("RX 7000", text)
+        self.assertNotIn("cu126", text)
+        self.assertIn("cu126", ui_text.unsupported_gpu_message("sm_61 is not compatible"))
+
     def test_startup_warning_in_the_log(self):
         from openfill.comfy_api import unsupported_gpu_line
 

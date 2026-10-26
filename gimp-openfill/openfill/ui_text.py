@@ -561,8 +561,9 @@ def cpu_backend_message(flags: str) -> str:
         f"because of '{flags}' in Generative Fill Settings > Extra ComfyUI options; remove it if you have a "
         "supported graphics card"
         if flags
-        else "because its PyTorch cannot use your graphics card (an AMD or Intel card needs ComfyUI's own "
-        "instructions for that card; the Windows download is for NVIDIA cards)"
+        else "because its PyTorch cannot use your graphics card (an AMD card needs PyTorch for ROCm: on Windows "
+        "Download ComfyUI gets ComfyUI's version for AMD cards for a Radeon RX 7000 or newer; an Intel card or an "
+        "older Radeon needs ComfyUI's own instructions for that card)"
     )
     return (
         f"ComfyUI is running on the processor, not the graphics card, {why}. Every generation will be many "
@@ -572,6 +573,14 @@ def cpu_backend_message(flags: str) -> str:
 
 def unsupported_gpu_message(detail: str) -> str:
     """What to tell the user when ComfyUI's PyTorch has no code for the graphics card."""
+    if "hip" in detail.lower():
+        return (
+            "ComfyUI cannot use this AMD graphics card: its PyTorch for ROCm has no code for it, so every "
+            "generation would fail. ComfyUI's version for AMD cards on Windows runs on Radeon RX 7000 and RX 9000 "
+            "cards and Ryzen AI 300 and Max chips. For an older Radeon follow ComfyUI's instructions for AMD cards "
+            "(on Linux an RX 6700 or 6600 also needs HSA_OVERRIDE_GFX_VERSION=10.3.0, which OpenFill sets when it "
+            f"starts ComfyUI), then choose its folder. (PyTorch said: {detail})"
+        )
     return (
         "ComfyUI cannot use this graphics card: its PyTorch was made for newer cards, so every generation "
         "would fail. NVIDIA cards older than the RTX 20 series (GTX 10 and earlier) need ComfyUI's build for "

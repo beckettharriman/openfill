@@ -370,6 +370,7 @@ class CpuBackendMessageTests(unittest.TestCase):
         self.assertIn("--cpu", ut.cpu_backend_message("--cpu"))
         self.assertIn("Extra ComfyUI options", ut.cpu_backend_message("--cpu"))
         self.assertIn("PyTorch", ut.cpu_backend_message(""))
+        self.assertIn("ROCm", ut.cpu_backend_message(""))  # an AMD card: what it needs
         for flags in ("", "--cpu"):
             self.assertNotIn("\\u2014", ut.cpu_backend_message(flags))
 

@@ -25,7 +25,17 @@
         "sha256": "c42e7d5f6a5e931f6551dcf102d739a55c5f4a4df921f748e1de9de9f648d6a2"
       }
     },
-    "amd_instructions": "https://github.com/comfyanonymous/ComfyUI#amd-gpus-windows-and-linux"
+    "amd": {
+      "note": "ComfyUI's build for AMD cards from the same release (PyTorch 2.9.1 with ROCm 7.2.1). It carries code for gfx1100-1102 (RX 7000), gfx1150-1151 (Ryzen AI 300 and Ryzen AI Max) and gfx1200-1201 (RX 9000) only; older Radeons need ComfyUI's manual install (amd_instructions).",
+      "unpacked_bytes": 6153559583,
+      "asset": {
+        "name": "ComfyUI_windows_portable_amd.7z",
+        "url": "https://github.com/comfyanonymous/ComfyUI/releases/download/v0.39.0/ComfyUI_windows_portable_amd.7z",
+        "size": 1621312076,
+        "sha256": "19be1e3c8690c4f9eeefb0f2ee8f835a98e2fbf33cd9b80d0ca309f4c86d37c1"
+      }
+    },
+    "amd_instructions": "https://github.com/comfyanonymous/ComfyUI#amd-gpus-windows-rocm-100"
   },
   "nodes": [
     {"repo": "https://github.com/Acly/comfyui-inpaint-nodes", "folder": "comfyui-inpaint-nodes", "commit": "5b7681746fe19e563113d27366ba85236bc1ba5b", "license": "GPL-3.0"}

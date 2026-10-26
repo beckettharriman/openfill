@@ -617,10 +617,19 @@ class App:
             port_answers(host, port, timeout=0.5),
         )
 
-    def queue_comfy_setup(self, install_dir: Path, cpu: bool = False, older_gpu: bool = False) -> str:
-        """Queue the download and install of the pinned ComfyUI as a background task."""
+    def queue_comfy_setup(
+        self, install_dir: Path, cpu: bool = False, older_gpu: bool = False, amd: bool = False
+    ) -> str:
+        """Queue the download and install of the pinned ComfyUI as a background task (``amd``:
+        ComfyUI's build for AMD cards; ``older_gpu``: the build for older NVIDIA cards)."""
         return self.server.queue_task(
-            {"type": "setup_comfy", "install_dir": str(install_dir), "cpu": bool(cpu), "older_gpu": bool(older_gpu)}
+            {
+                "type": "setup_comfy",
+                "install_dir": str(install_dir),
+                "cpu": bool(cpu),
+                "older_gpu": bool(older_gpu),
+                "amd": bool(amd),
+            }
         )
 
     # features ------------------------------------------------------------

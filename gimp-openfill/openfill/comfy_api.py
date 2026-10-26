@@ -42,6 +42,8 @@ UNSUPPORTED_GPU_SIGNS = (
     "no kernel image is available",
     "cudaerrornokernelimagefordevice",
     "is not compatible with the current pytorch installation",
+    "hip error: invalid device function",  # ROCm: PyTorch has no code for this AMD card
+    "hiperrornobinaryforgpu",
 )
 
 

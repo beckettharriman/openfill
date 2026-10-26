@@ -28,7 +28,7 @@ from PIL import Image, ImageDraw
 
 from . import ui
 from .menu import Watcher
-from .modelinfo import hardware_line, needed_by
+from .modelinfo import choose_card_line, download_card_line, hardware_line, needed_by
 from .service import Service
 from .ui import ACCENT, BAD, BG, CW, DIM, LABEL_W, LINE, OK, PAD, PANEL, TEXT, WARN, W, photo
 
@@ -148,13 +148,14 @@ def expand_margins(width: int, height: int, preset: tuple[int, int] | None) -> t
 class Refresher:
     """Slow facts for the panel, looked up off the UI thread every few seconds."""
 
-    CACHED = ("comfy_ok", "models", "active", "active_name", "rows", "hardware")
+    CACHED = ("comfy_ok", "models", "active", "active_name", "rows", "hardware", "gpu_vendor")
 
     def __init__(self, service: Service, cache: Path | None = None) -> None:
         self.service = service
         self.cache = cache
         self.facts: dict[str, Any] = self._load_cache()
         self._hardware: str | None = self.facts.get("hardware") or None
+        self._vendor: str | None = self.facts.get("gpu_vendor") or None  # nvidia, amd, intel, apple, none
         self._saved = ""
         self._preflight: dict[str, Any] | None = None  # what a ComfyUI download would be (Windows)
         self.lock = threading.Lock()
@@ -229,6 +230,7 @@ class Refresher:
                     facts["preflight"] = self._preflight
                 except Exception as err:  # noqa: BLE001 - the card offers the folder choice anyway
                     facts["setup"] = {"error": str(err)}
+            facts["gpu_vendor"] = self._gpu_vendor()
             return facts
         rows = app.model_rows(None)
         status = app.task_status()
@@ -275,15 +277,30 @@ class Refresher:
             if not row["runnable"]:
                 row["neededBy"] = needed_by(list(app.catalog), row["id"])
         facts["rows"] = rows
-        if self._hardware is None:
+        if self._hardware is None or self._vendor is None:
             try:
                 from openfill import hardware
 
-                self._hardware = hardware_line(hardware.detect(app.models_root, app.server.url()))
+                hw = hardware.detect(app.models_root, app.server.url())
+                self._hardware, self._vendor = hardware_line(hw), hw.gpu_vendor
             except Exception:  # noqa: BLE001 - only shown in the Models view
-                self._hardware = ""
+                self._hardware, self._vendor = "", ""
         facts["hardware"] = self._hardware
+        facts["gpu_vendor"] = self._vendor
+        if self._vendor == "amd":
+            cat.add_amd_notes(rows, app.catalog)  # what may not work on an AMD card
         return facts
+
+    def _gpu_vendor(self) -> str:
+        """Who made the graphics card (``Hardware.gpu_vendor``), detected once."""
+        if self._vendor is None:
+            try:
+                from openfill import hardware
+
+                self._vendor = hardware.detect(None, None).gpu_vendor
+            except Exception:  # noqa: BLE001 - only changes a few words of the setup card
+                self._vendor = ""
+        return self._vendor
 
 
 def cover(image: Image.Image, width: int, height: int, radius: int = 0, bg: str = PANEL) -> Image.Image:
@@ -1209,7 +1226,9 @@ class Bar:
         threading.Thread(target=work, name="openfill-setup", daemon=True).start()
 
     def _comfy_help(self) -> None:
-        webbrowser.open("https://github.com/beckettharriman/openfill/blob/main/docs/install.md#openfill-for-photocraft")
+        amd = (self.refresher.get() or {}).get("gpu_vendor") == "amd"
+        anchor = "amd-graphics-cards" if amd else "openfill-for-photocraft"
+        webbrowser.open(f"https://github.com/beckettharriman/openfill/blob/main/docs/install.md#{anchor}")
 
     # updates ----------------------------------------------------------------------
 
@@ -1369,12 +1388,7 @@ class Bar:
                 (),
             )
         elif facts and not facts.get("comfy_ok", True) and pre and not pre.get("blocked"):
-            line = (
-                f"OpenFill runs on ComfyUI. Download it ({pre['size']}, into {pre['folder']}), "
-                "or choose the folder of one you have."
-            )
-            if pre.get("cpu"):
-                line += " No NVIDIA graphics card was found: it would run on the processor, which is very slow."
+            line = download_card_line(pre)
             if setup.get("error"):
                 line = f"The download stopped: {setup['error']} " + line
             key = (
@@ -1389,7 +1403,7 @@ class Bar:
                 ),
             )
         elif facts and not facts.get("comfy_ok", True):
-            line = "OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it."
+            line = choose_card_line(facts.get("gpu_vendor") == "amd" and sys.platform != "win32")
             if pre.get("blocked") and pre.get("text"):
                 line = pre["text"] + " " + line
             key = (

@@ -858,6 +858,47 @@ class ModelInfoTests(unittest.TestCase):
         none = SimpleNamespace(gpu_name=None, vram_bytes=0, ram_bytes=16 * gb, disk_free_bytes=None)
         self.assertEqual(hardware_line(none), "No graphics card found · 16 GB RAM")
 
+    def test_hardware_line_for_an_amd_card(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.modelinfo import hardware_line
+
+        gb = 1024**3
+        hw = SimpleNamespace(
+            gpu_name="AMD Radeon RX 7900 XT", vram_bytes=20 * gb, ram_bytes=32 * gb, disk_free_bytes=None
+        )
+        self.assertEqual(hardware_line(hw), "RX 7900 XT · 20 GB VRAM · 32 GB RAM")
+        apu = SimpleNamespace(gpu_name="AMD Radeon(TM) 8060S Graphics", vram_bytes=0, ram_bytes=0, disk_free_bytes=None)
+        self.assertEqual(hardware_line(apu), "Radeon 8060S Graphics")
+
+    def test_amd_note_in_the_model_detail(self):
+        from openfill_photocraft.modelinfo import model_detail
+
+        row = {
+            "capabilities": ["fill"],
+            "size": "10.0 GB",
+            "amd_note": "on AMD cards GGUF models have been reported to give only noise",
+        }
+        self.assertEqual(
+            model_detail(row), "Fill, remove · 10.0 GB · on AMD cards GGUF models have been reported to give only noise"
+        )
+
+    def test_setup_card_lines(self):
+        from openfill_photocraft.modelinfo import choose_card_line, download_card_line
+
+        base = {"size": "about 1.9 GB", "folder": r"C:\Users\a\AppData\Local\OpenFill\ComfyUI"}
+        self.assertNotIn("very slow", download_card_line(base))
+        self.assertIn("No NVIDIA", download_card_line({**base, "cpu": True, "gpu": "none"}))
+        amd = download_card_line({**base, "size": "about 1.5 GB", "amd": True, "gpu": "amd"})
+        self.assertIn("version for AMD cards (about 1.5 GB", amd)
+        self.assertIn("not tested on an AMD card", amd)
+        old = download_card_line({**base, "cpu": True, "gpu": "amd"})
+        self.assertIn("RX 7000 or newer", old)
+        self.assertIn("very slow", old)
+        self.assertNotIn("No NVIDIA", old)
+        self.assertIn("ROCm", choose_card_line(True))
+        self.assertNotIn("ROCm", choose_card_line(False))
+
     def test_model_detail_and_needed_by(self):
         from types import SimpleNamespace
 
@@ -1117,12 +1158,20 @@ class ServiceSetupTests(unittest.TestCase):
         from openfill import comfy_setup
 
         manifest = comfy_setup.load_manifest(ROOT / "models" / "comfy_setup.json")
-        for older in (False, True):
-            pre = SimpleNamespace(older_gpu=older, blocked=False, needs_cpu_choice=False, text=lambda: "")
+        for older, amd in ((False, False), (True, False), (False, True)):
+            pre = SimpleNamespace(
+                older_gpu=older,
+                amd_build=amd,
+                gpu="amd" if amd else "nvidia",
+                blocked=False,
+                needs_cpu_choice=False,
+                text=lambda: "",
+            )
             service = Service.__new__(Service)
             service.app = SimpleNamespace(setup_preflight=lambda d, pre=pre: (manifest, pre))
             info = service.comfy_preflight()
-            want = manifest.for_older_gpus() if older else manifest
+            want = manifest.for_amd() if amd else manifest.for_older_gpus() if older else manifest
+            self.assertEqual(info["amd"], amd)
             self.assertEqual(info["url"], want.archive_url)
             self.assertEqual(info["bytes"], want.archive_size)
             self.assertTrue(info["url"].startswith("https://github.com/comfyanonymous/ComfyUI/releases/download/"))

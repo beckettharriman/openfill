@@ -393,7 +393,7 @@ class Service:
 
         install_dir = comfy_setup.default_install_dir()
         manifest, pre = self.app.setup_preflight(install_dir)
-        chosen = manifest.for_older_gpus() if pre.older_gpu else manifest
+        chosen = manifest.chosen(pre.older_gpu, getattr(pre, "amd_build", False))
         size = comfy_setup.download_notice(chosen)
         return {
             "folder": str(install_dir),
@@ -403,6 +403,8 @@ class Service:
             "blocked": pre.blocked,
             "cpu": pre.needs_cpu_choice,
             "older_gpu": pre.older_gpu,
+            "amd": bool(getattr(pre, "amd_build", False)),
+            "gpu": getattr(pre, "gpu", ""),
             "text": pre.text(),
         }
 
@@ -416,7 +418,7 @@ class Service:
         if pre["blocked"]:
             raise RuntimeError(pre["text"] or "ComfyUI cannot be installed here.")
         self.setup_task = self.app.queue_comfy_setup(
-            comfy_setup.default_install_dir(), bool(pre["cpu"]), bool(pre["older_gpu"])
+            comfy_setup.default_install_dir(), bool(pre["cpu"]), bool(pre["older_gpu"]), bool(pre["amd"])
         )
         return self.setup_task
 

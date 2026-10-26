@@ -83,7 +83,10 @@ class Api:
         try:
             from openfill import hardware
 
-            hw = hardware_line(hardware.detect(app.models_root, app.server.url()))
+            detected = hardware.detect(app.models_root, app.server.url())
+            hw = hardware_line(detected)
+            if detected.is_amd:
+                cat.add_amd_notes(rows, app.catalog)  # what may not work on an AMD card
         except Exception:  # noqa: BLE001
             hw = None
         return {"rows": rows, "current": current, "pending": pending, "hardware": hw}

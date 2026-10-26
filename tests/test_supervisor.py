@@ -124,3 +124,43 @@ class StartLockAndWatcherTests(unittest.TestCase):
         self.assertFalse((folder / "999999").exists())  # dead entry removed
         self.assertEqual(supervisor.live_watchers(self.base), [])  # this process is not a GIMP
         self.assertFalse((folder / str(os.getpid())).exists())
+
+
+class BackendEnvTests(unittest.TestCase):
+    """An AMD card's ROCm setting reaches ComfyUI only, on top of the usual clean environment."""
+
+    def test_extra_env_reaches_the_child(self):
+        import tempfile
+        from unittest import mock
+
+        seen = {}
+
+        class FakePopen:
+            pid = 4242
+
+            def __init__(self, cmd, **kw):
+                seen.update(kw["env"])
+
+        with tempfile.TemporaryDirectory() as d:
+            log = supervisor.Logger(Path(d) / "s.log", "t")
+            backend = supervisor.Backend(
+                ["python"], d, str(Path(d) / "c.log"), log, {"HSA_OVERRIDE_GFX_VERSION": "10.3.0"}
+            )
+            with (
+                mock.patch.object(supervisor.subprocess, "Popen", FakePopen),
+                mock.patch.object(supervisor, "_job_object_for_child", lambda pid: None),
+                mock.patch.dict(os.environ, {"PYTHONPATH": "/gimp"}),
+            ):
+                backend.start()
+            backend.log_file.close()
+        self.assertEqual(seen["HSA_OVERRIDE_GFX_VERSION"], "10.3.0")
+        self.assertNotIn("PYTHONPATH", seen)
+
+    def test_no_extra_env_by_default(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            backend = supervisor.Backend(
+                ["python"], d, str(Path(d) / "c.log"), supervisor.Logger(Path(d) / "s.log", "t")
+            )
+        self.assertEqual(backend.extra_env, {})

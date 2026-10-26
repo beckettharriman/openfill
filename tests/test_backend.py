@@ -215,3 +215,9 @@ class GpuErrorWordingTests(unittest.TestCase):
         self.assertNotIn("out of memory", text)
         self.assertIn("ComfyUI_windows_portable_nvidia_cu126.7z", text)
         self.assertIn("no kernel image", text)
+
+    def test_unsupported_amd_card_says_what_to_get(self):
+        text = backend.describe_error(backend.UnsupportedGpu("HIP error: invalid device function"))
+        self.assertIn("AMD", text)
+        self.assertIn("RX 7000", text)
+        self.assertNotIn("cu126", text)

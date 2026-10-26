@@ -56,7 +56,7 @@ from typing import Any
 from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from openfill import catalog, comfy_setup, downloads, local_models  # noqa: E402
+from openfill import catalog, comfy_setup, downloads, hardware, local_models  # noqa: E402
 from openfill.config import Settings, comfy_layout  # noqa: E402
 from openfill.log import redact  # noqa: E402
 
@@ -275,9 +275,12 @@ class Logger:
 class Backend:
     """The ComfyUI child process."""
 
-    def __init__(self, cmd: list[str], cwd: str, log_path: str, log: Logger) -> None:
+    def __init__(
+        self, cmd: list[str], cwd: str, log_path: str, log: Logger, extra_env: dict[str, str] | None = None
+    ) -> None:
         self.cmd = cmd
         self.cwd = cwd
+        self.extra_env = dict(extra_env or {})  # set for ComfyUI only (an AMD card's ROCm settings)
         self.log_path = log_path
         self.log = log
         self.child: subprocess.Popen | None = None
@@ -295,6 +298,7 @@ class Backend:
         env.pop("PYTHONPATH", None)  # GIMP's interpreter paths must not leak into ComfyUI
         env.pop("PYTHONHOME", None)
         env["PYTHONIOENCODING"] = "utf-8"
+        env.update(self.extra_env)
         self.log_file = open(self.log_path, "ab", buffering=0)  # noqa: SIM115 - kept open for the child's lifetime
         self.log(f"starting backend: {' '.join(self.cmd)}")
         self.child = subprocess.Popen(
@@ -703,7 +707,10 @@ class TaskWorker:
     def _setup_comfy(self, task: dict[str, Any]) -> None:
         """Download and install the pinned ComfyUI (see comfy_setup.py), then save it as the ComfyUI folder."""
         manifest = comfy_setup.load_manifest()
-        if task.get("older_gpu"):
+        if task.get("amd"):
+            manifest = manifest.for_amd()  # ROCm PyTorch: runs Radeon RX 7000 and RX 9000 cards
+            self.log(f"AMD card: using {manifest.archive_name}")
+        elif task.get("older_gpu"):
             manifest = manifest.for_older_gpus()  # CUDA 12.6 PyTorch: runs GTX 10 and older NVIDIA cards
             self.log(f"older NVIDIA card: using {manifest.archive_name}")
         install_dir = Path(str(task.get("install_dir") or ""))
@@ -952,7 +959,14 @@ def _run_backend(
 
     # OpenFill's own node pack (native-resolution LaMa) is copied in before ComfyUI loads its nodes.
     downloads.ensure_bundled_nodes(Path(args.main).resolve().parent / "custom_nodes", log)
-    backend = Backend(cmd, args.cwd, str(base / "comfyui.log"), log)
+    try:
+        extra_env = hardware.rocm_env()  # Linux, an AMD card PyTorch's ROCm build has no code for
+    except Exception as err:  # noqa: BLE001 - ComfyUI starts without it
+        log(f"could not check the AMD card: {err}", "WARN")
+        extra_env = {}
+    for key, value in extra_env.items():
+        log(f"AMD card: starting ComfyUI with {key}={value} (as ComfyUI's README says for this card)")
+    backend = Backend(cmd, args.cwd, str(base / "comfyui.log"), log, extra_env)
     backend.start()
     watch_name = process_name(args.watch_pid) if args.watch_pid else None
     log(f"watching gimp pid {args.watch_pid} ({watch_name or 'name unknown'})")

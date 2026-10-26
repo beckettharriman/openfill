@@ -7,9 +7,11 @@ free disk space on the models drive, operating system.
 Detection is best effort and never raises: the graphics card comes from
 ``nvidia-smi`` when it is installed, otherwise from NVIDIA's management
 library (NVML, which the driver ships; inside the GIMP Flatpak it is there
-when nvidia-smi is not), otherwise from a running ComfyUI's
-``/system_stats``, otherwise from the chip on an Apple silicon Mac,
-otherwise it is unknown. :func:`fit` is a pure function
+when nvidia-smi is not), otherwise from the operating system's list of
+graphics adapters (AMD and Intel cards: DXGI or the display driver's registry
+key on Windows, ``/sys/class/drm`` on Linux; no vendor tools needed),
+otherwise from a running ComfyUI's ``/system_stats``, otherwise from the chip
+on an Apple silicon Mac, otherwise it is unknown. :func:`fit` is a pure function
 that turns a catalog entry and a :class:`Hardware` into a :class:`FitVerdict`
 (runs comfortably, runs with offloading, too big, unknown).
 
@@ -23,6 +25,7 @@ import ctypes
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -65,8 +68,14 @@ class Hardware:
     ram_bytes: int | None = None
     disk_free_bytes: int | None = None
     os_name: str = ""
-    gpu_source: str = ""  # "nvidia-smi", "nvml", "comfyui", "apple-silicon" or "" (unknown)
+    gpu_source: str = ""  # "nvidia-smi", "nvml", "dxgi", "registry", "sysfs", "comfyui", "apple-silicon" or ""
     compute_capability: float | None = None  # NVIDIA CUDA compute capability, e.g. 6.1 (GTX 10) or 8.9 (RTX 40)
+    gpu_vendor: str = ""  # "nvidia", "amd", "intel", "apple", "none" (no graphics card found) or "" (unknown)
+
+    @property
+    def is_amd(self) -> bool:
+        """An AMD Radeon card does the work (ROCm on Linux and Windows)."""
+        return self.gpu_vendor == "amd"
 
     @property
     def vram_gb(self) -> float | None:
@@ -102,6 +111,7 @@ class Hardware:
             "disk_free_bytes": self.disk_free_bytes,
             "os_name": self.os_name,
             "gpu_source": self.gpu_source,
+            "gpu_vendor": self.gpu_vendor,
         }
 
 
@@ -227,6 +237,420 @@ def gpu_from_nvml(loader: Callable[[], Any] = _load_nvml) -> tuple[str, int] | N
         except (OSError, AttributeError):
             pass
     return best
+
+
+# PCI vendor ids of the graphics cards OpenFill tells apart.
+VENDOR_IDS = {0x10DE: "nvidia", 0x1002: "amd", 0x1022: "amd", 0x8086: "intel"}
+SOFTWARE_VENDOR_ID = 0x1414  # Microsoft Basic Render Driver (no real card)
+
+
+def vendor_from_name(name: str | None) -> str:
+    """``nvidia`` / ``amd`` / ``intel`` / ``apple`` from an adapter name, else ``""``."""
+    low = (name or "").lower()
+    if "nvidia" in low or "geforce" in low or "quadro" in low:
+        return "nvidia"
+    if "amd" in low or "radeon" in low or "ati " in low:
+        return "amd"
+    if "intel" in low or low.startswith("arc ") or " arc " in low:
+        return "intel"
+    if low.startswith("apple") or low.startswith("mps"):
+        return "apple"
+    return ""
+
+
+@dataclass(frozen=True)
+class Adapter:
+    """A graphics adapter the operating system lists. ``vram_bytes`` is its own memory, None when unknown."""
+
+    vendor: str  # nvidia, amd, intel or ""
+    name: str
+    vram_bytes: int | None
+    source: str  # dxgi, registry or sysfs
+
+
+def pick_adapter(adapters: list[Adapter] | None) -> Adapter | None:
+    """The card that would do the work: the most graphics memory, AMD and NVIDIA before Intel
+    (a laptop's Intel chip next to a Radeon). Adapters of unknown vendor are skipped."""
+    known = [a for a in adapters or [] if a.vendor in ("nvidia", "amd", "intel")]
+    if not known:
+        return None
+    return max(known, key=lambda a: (a.vendor != "intel", a.vram_bytes or 0))
+
+
+# Windows: DXGI lists the active adapters with their own memory as a 64-bit number.
+# (Win32_VideoController.AdapterRAM is 32 bits and stops at 4 GB, so it is not used.)
+class _Luid(ctypes.Structure):
+    _fields_ = [("LowPart", ctypes.c_ulong), ("HighPart", ctypes.c_long)]
+
+
+class _DxgiAdapterDesc1(ctypes.Structure):
+    _fields_ = [
+        ("Description", ctypes.c_wchar * 128),
+        ("VendorId", ctypes.c_uint),
+        ("DeviceId", ctypes.c_uint),
+        ("SubSysId", ctypes.c_uint),
+        ("Revision", ctypes.c_uint),
+        ("DedicatedVideoMemory", ctypes.c_size_t),
+        ("DedicatedSystemMemory", ctypes.c_size_t),
+        ("SharedSystemMemory", ctypes.c_size_t),
+        ("AdapterLuid", _Luid),
+        ("Flags", ctypes.c_uint),
+    ]
+
+
+class _Guid(ctypes.Structure):
+    _fields_ = [
+        ("Data1", ctypes.c_ulong),
+        ("Data2", ctypes.c_ushort),
+        ("Data3", ctypes.c_ushort),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+_IID_IDXGIFACTORY1 = (0x770AAE78, 0xF26F, 0x4DBA, (0xA8, 0x29, 0x25, 0x3C, 0x83, 0xD1, 0xB3, 0x87))
+_DXGI_ERROR_NOT_FOUND = 0x887A0002
+_DXGI_ADAPTER_FLAG_SOFTWARE = 2
+
+
+def _com_call(obj: ctypes.c_void_p, index: int, restype: Any, *argtypes: Any) -> Any:
+    """Method ``index`` of the COM object ``obj``'s vtable, as a callable taking the remaining arguments."""
+    vtable = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+    proto = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)  # type: ignore[attr-defined]
+    fn = proto(vtable[index])
+    return lambda *args: fn(obj, *args)
+
+
+def dxgi_descs() -> list[tuple[str, int, int, int]]:
+    """``(description, vendor id, dedicated video memory, flags)`` of each DXGI adapter (Windows only)."""
+    if sys.platform != "win32":
+        return []
+    dxgi = ctypes.WinDLL("dxgi")  # type: ignore[attr-defined]
+    d1, d2, d3, d4 = _IID_IDXGIFACTORY1
+    iid = _Guid(d1, d2, d3, (ctypes.c_ubyte * 8)(*d4))
+    factory = ctypes.c_void_p()
+    if dxgi.CreateDXGIFactory1(ctypes.byref(iid), ctypes.byref(factory)) != 0 or not factory.value:
+        return []
+    out: list[tuple[str, int, int, int]] = []
+    try:
+        enum_adapters1 = _com_call(factory, 12, ctypes.c_long, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p))
+        for i in range(16):
+            adapter = ctypes.c_void_p()
+            hr = enum_adapters1(i, ctypes.byref(adapter)) & 0xFFFFFFFF
+            if hr == _DXGI_ERROR_NOT_FOUND or hr != 0 or not adapter.value:
+                break
+            try:
+                desc = _DxgiAdapterDesc1()
+                if _com_call(adapter, 10, ctypes.c_long, ctypes.POINTER(_DxgiAdapterDesc1))(ctypes.byref(desc)) == 0:
+                    out.append((desc.Description, int(desc.VendorId), int(desc.DedicatedVideoMemory), int(desc.Flags)))
+            finally:
+                _com_call(adapter, 2, ctypes.c_ulong)()  # Release
+    finally:
+        _com_call(factory, 2, ctypes.c_ulong)()
+    return out
+
+
+def adapters_from_dxgi(descs: Callable[[], list[tuple[str, int, int, int]]] = dxgi_descs) -> list[Adapter]:
+    """The real graphics adapters DXGI lists (the software renderer left out)."""
+    out = []
+    for name, vendor_id, vram, flags in descs() or []:
+        if vendor_id == SOFTWARE_VENDOR_ID or flags & _DXGI_ADAPTER_FLAG_SOFTWARE:
+            continue
+        vendor = VENDOR_IDS.get(vendor_id, "") or vendor_from_name(name)
+        out.append(Adapter(vendor, str(name).strip(), int(vram) if vram > 0 else None, "dxgi"))
+    return out
+
+
+DISPLAY_CLASS_KEY = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+
+
+def registry_display_keys() -> list[dict[str, Any]]:
+    """The values of each display adapter's driver key (``0000``, ``0001``...) under
+    :data:`DISPLAY_CLASS_KEY` (Windows only): DriverDesc, MatchingDeviceId,
+    HardwareInformation.qwMemorySize, HardwareInformation.MemorySize, HardwareInformation.AdapterString."""
+    if sys.platform != "win32":
+        return []
+    import winreg
+
+    wanted = (
+        "DriverDesc",
+        "MatchingDeviceId",
+        "HardwareInformation.qwMemorySize",
+        "HardwareInformation.MemorySize",
+        "HardwareInformation.AdapterString",
+    )
+    out = []
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, DISPLAY_CLASS_KEY) as root:
+        for i in range(64):
+            try:
+                sub = winreg.EnumKey(root, i)
+            except OSError:
+                break
+            if not sub.isdigit():
+                continue
+            try:
+                with winreg.OpenKey(root, sub) as key:
+                    values = {}
+                    for name in wanted:
+                        try:
+                            values[name] = winreg.QueryValueEx(key, name)[0]
+                        except OSError:
+                            continue
+                    out.append(values)
+            except OSError:
+                continue
+    return out
+
+
+def _reg_text(value: Any) -> str:
+    if isinstance(value, bytes):  # AdapterString is often REG_BINARY UTF-16
+        return value.decode("utf-16-le", "replace").rstrip("\x00").strip()
+    return str(value or "").strip()
+
+
+def _reg_int(value: Any) -> int | None:
+    if isinstance(value, bytes):
+        value = int.from_bytes(value[:8], "little") if value else None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def adapters_from_registry(keys: Callable[[], list[dict[str, Any]]] = registry_display_keys) -> list[Adapter]:
+    """Graphics adapters from the display drivers' registry keys. The 64-bit
+    ``qwMemorySize`` first; the 32-bit ``MemorySize`` stops at 4 GB."""
+    out = []
+    for values in keys() or []:
+        name = _reg_text(values.get("DriverDesc")) or _reg_text(values.get("HardwareInformation.AdapterString"))
+        if not name or "microsoft basic" in name.lower():
+            continue
+        match = str(values.get("MatchingDeviceId") or "").lower()
+        vendor = ""
+        for vid, v in VENDOR_IDS.items():
+            if f"ven_{vid:04x}" in match:
+                vendor = v
+                break
+        vendor = vendor or vendor_from_name(name)
+        vram = _reg_int(values.get("HardwareInformation.qwMemorySize"))
+        if vram is None:
+            vram = _reg_int(values.get("HardwareInformation.MemorySize"))
+        out.append(Adapter(vendor, name, vram, "registry"))
+    return out
+
+
+# Linux: the kernel's DRM devices. amdgpu writes the card's memory to mem_info_vram_total.
+SYSFS_DRM = Path("/sys/class/drm")
+PCI_IDS = (Path("/usr/share/hwdata/pci.ids"), Path("/usr/share/misc/pci.ids"), Path("/usr/share/pci.ids"))
+
+
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+
+
+def pci_ids_name(vendor_id: int, device_id: int, files: tuple[Path, ...] = PCI_IDS) -> str:
+    """The device's name in the pci.ids database (``Navi 31 [Radeon RX 7900 XT/7900 XTX/7900 GRE/7900M]``
+    becomes ``Radeon RX 7900 XT/7900 XTX/7900 GRE/7900M``), or ``""``."""
+    vend, dev = f"{vendor_id:04x}", f"\t{device_id:04x}  "
+    for f in files:
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                inside = False
+                for line in fh:
+                    if not line.strip() or line.startswith("#"):
+                        continue
+                    if not line.startswith("\t"):
+                        if inside:
+                            break
+                        inside = line.startswith(vend + "  ")
+                    elif inside and line.lower().startswith(dev):
+                        name = line[len(dev) :].strip()
+                        if "[" in name and name.endswith("]"):
+                            name = name[name.index("[") + 1 : -1]
+                        return name
+        except OSError:
+            continue
+    return ""
+
+
+def parse_rocm_smi(text: str) -> dict[str, tuple[str, int | None]]:
+    """``{card: (name, vram bytes)}`` from ``rocm-smi --showproductname --showmeminfo vram --json``."""
+    try:
+        data = json.loads(text or "{}")
+    except ValueError:
+        return {}
+    out: dict[str, tuple[str, int | None]] = {}
+    for card, info in data.items() if isinstance(data, dict) else []:
+        if not isinstance(info, dict) or not str(card).startswith("card"):
+            continue
+        name = ""
+        for key in ("Card Series", "Card series", "Card SKU", "Card Model", "Card model"):
+            value = str(info.get(key) or "").strip()
+            if value and not value.lower().startswith(("0x", "n/a")):
+                name = value
+                break
+        vram = _reg_int(info.get("VRAM Total Memory (B)"))
+        out[str(card)] = (name, vram)
+    return out
+
+
+def rocm_smi_cards(runner: Callable[..., Any] = subprocess.run) -> dict[str, tuple[str, int | None]]:
+    """What ``rocm-smi`` says about each AMD card, or ``{}`` when it is not installed."""
+    exe = shutil.which("rocm-smi")
+    if exe is None:
+        return {}
+    try:
+        r = runner(
+            [exe, "--showproductname", "--showmeminfo", "vram", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    return parse_rocm_smi(r.stdout or "") if getattr(r, "returncode", 1) == 0 else {}
+
+
+def adapters_from_sysfs(
+    root: Path = SYSFS_DRM,
+    pci_name: Callable[[int, int], str] = pci_ids_name,
+    rocm: Callable[[], dict[str, tuple[str, int | None]]] = rocm_smi_cards,
+) -> list[Adapter]:
+    """Graphics cards under ``/sys/class/drm/card*/device`` (Linux). The name is the
+    driver's ``product_name`` when it has one, else rocm-smi's, else the pci.ids name."""
+    out = []
+    try:
+        cards = sorted(p for p in root.iterdir() if p.name.startswith("card") and p.name[4:].isdigit())
+    except OSError:
+        return []
+    smi: dict[str, tuple[str, int | None]] | None = None
+    for card in cards:
+        dev = card / "device"
+        try:
+            vendor_id = int(_read(dev / "vendor") or "0", 16)
+            device_id = int(_read(dev / "device") or "0", 16)
+        except ValueError:
+            continue
+        vendor = VENDOR_IDS.get(vendor_id, "")
+        if not vendor:
+            continue
+        vram = _reg_int(_read(dev / "mem_info_vram_total"))
+        name = _read(dev / "product_name")
+        if not name and vendor == "amd":
+            if smi is None:
+                try:
+                    smi = rocm() or {}
+                except Exception:  # noqa: BLE001 - rocm-smi is optional
+                    smi = {}
+            name = (smi.get(card.name) or ("", None))[0]
+        if not name:
+            name = pci_name(vendor_id, device_id)
+        prefix = {"amd": "AMD", "nvidia": "NVIDIA", "intel": "Intel"}[vendor]
+        if not name:
+            name = f"{prefix} graphics card"
+        elif not name.lower().startswith(prefix.lower()):
+            name = f"{prefix} {name}"
+        out.append(Adapter(vendor, name, vram, "sysfs"))
+    return out
+
+
+def os_adapters(platform_name: str = sys.platform) -> list[Adapter] | None:
+    """The graphics adapters the operating system lists: DXGI, else the registry (Windows);
+    sysfs (Linux). None when they could not be listed (and on macOS, where Apple silicon
+    has its own path)."""
+    if platform_name == "win32":
+        asked = False
+        for source in (adapters_from_dxgi, adapters_from_registry):
+            try:
+                found = source()
+                asked = True
+            except Exception:  # noqa: BLE001 - try the next source
+                continue
+            if found:
+                return found
+        return [] if asked else None
+    if platform_name.startswith("linux"):
+        return adapters_from_sysfs() if SYSFS_DRM.is_dir() else None
+    return None
+
+
+# ---------------------------------------------------------------- AMD ----
+# ComfyUI's Windows build for AMD cards (ROCm 7.2) carries code for RDNA 3 (RX 7000),
+# RDNA 3.5 (Ryzen AI 300 and Ryzen AI Max) and RDNA 4 (RX 9000) only: gfx1100-1102,
+# gfx1150-1151 and gfx1200-1201.
+_AMD_BUILD_YES = re.compile(
+    r"\brx\s*[79]\d{3}|\bpro\s*w7\d{3}|\bai\s*pro\s*r9\d{3}|\br9[67]00\b|\b(?:890m|880m|8060s|8050s|8040s)\b"
+)
+_AMD_BUILD_NO = re.compile(
+    r"\brx\s*[56]\d{3}|\brx\s*[45]\d0\b|\bvega\b|\bradeon\s*vii\b|\bpro\s*w[56]\d{3}|\b(?:r[579]|hd)\s*\d"
+    r"|\b(?:780m|760m|740m|680m|660m|610m)\b"
+)
+
+
+def amd_build_support(name: str | None) -> str:
+    """Whether ComfyUI's build for AMD cards runs on the Radeon called ``name``:
+    ``yes`` (RX 7000, RX 9000, Ryzen AI 300 and Max), ``no`` (older Radeons) or
+    ``unknown`` (a name that does not say, such as "AMD Radeon(TM) Graphics")."""
+    low = (name or "").lower()
+    if _AMD_BUILD_YES.search(low):
+        return "yes"
+    if _AMD_BUILD_NO.search(low):
+        return "no"
+    return "unknown"
+
+
+KFD_NODES = Path("/sys/class/kfd/kfd/topology/nodes")
+
+
+def amd_gfx_targets(root: Path = KFD_NODES) -> list[int]:
+    """The ``gfx_target_version`` of each AMD GPU the ROCm kernel driver lists (Linux),
+    such as 110000 for gfx1100 or 100301 for gfx1031. The processor's node (0) is left out."""
+    out = []
+    try:
+        nodes = sorted(root.iterdir())
+    except OSError:
+        return []
+    for node in nodes:
+        for line in _read(node / "properties").splitlines():
+            key, _, value = line.partition(" ")
+            if key == "gfx_target_version":
+                try:
+                    target = int(value.strip())
+                except ValueError:
+                    continue
+                if target > 0:
+                    out.append(target)
+    return out
+
+
+def rocm_env(
+    targets: list[int] | None = None, environ: dict[str, str] | None = None, platform_name: str = sys.platform
+) -> dict[str, str]:
+    """Environment ComfyUI needs on Linux for an AMD card that PyTorch's ROCm build has no
+    code for, as ComfyUI's README says: ``HSA_OVERRIDE_GFX_VERSION=10.3.0`` for the RDNA 2
+    cards other than the RX 6800 and 6900 (gfx1031 to gfx1036, such as the RX 6700 and 6600),
+    ``11.0.0`` for the Radeon 780M and 760M (gfx1103). Empty when it is not needed, when the
+    user set it already, or when the cards would need different values."""
+    if not platform_name.startswith("linux"):
+        return {}
+    environ = os.environ if environ is None else environ
+    if environ.get("HSA_OVERRIDE_GFX_VERSION"):
+        return {}
+    targets = amd_gfx_targets() if targets is None else targets
+    if not targets:
+        return {}
+    families = {t // 100 for t in targets}  # 1003 (gfx103x), 1100 (gfx110x)...
+    if len(families) != 1:
+        return {}
+    family = families.pop()
+    if family == 1003 and any(t != 100300 for t in targets):
+        return {"HSA_OVERRIDE_GFX_VERSION": "10.3.0"}
+    if family == 1100 and any(t == 110003 for t in targets):
+        return {"HSA_OVERRIDE_GFX_VERSION": "11.0.0"}
+    return {}
 
 
 def parse_compute_capability(text: str) -> float | None:
@@ -440,19 +864,21 @@ def detect(
     compute: Callable[[], float | None] = gpu_compute_capability,
     comfy: Callable[[str], Any] = gpu_from_comfyui,
     apple: Callable[[], tuple[str, int, int] | None] = gpu_from_apple_silicon,
+    adapters: Callable[[], list[Adapter] | None] | None = None,
 ) -> Hardware:
     """Detect the hardware (see the module docstring). Never raises."""
     ram = system_ram()
     name: str | None = None
     vram: int | None = None
     source = ""
+    vendor = ""
     try:
         found = nvidia()
     except Exception:  # noqa: BLE001
         found = None
     if found:
         name, vram = found
-        source = "nvidia-smi"
+        source, vendor = "nvidia-smi", "nvidia"
     else:
         try:
             found = nvml()
@@ -460,7 +886,17 @@ def detect(
             found = None
         if found:
             name, vram = found
-            source = "nvml"
+            source, vendor = "nvml", "nvidia"
+    listed: list[Adapter] | None = None  # None: not asked, or the system could not be asked
+    if not source:
+        try:
+            got = (adapters or os_adapters)()
+            listed = None if got is None else list(got)
+        except Exception:  # noqa: BLE001
+            listed = None
+        best = pick_adapter(listed)
+        if best is not None and best.vram_bytes:
+            name, vram, source, vendor = best.name, best.vram_bytes, best.source, best.vendor
     if not source and comfy_url:
         try:
             stats = comfy(comfy_url)
@@ -470,6 +906,7 @@ def detect(
             name, vram, comfy_ram = stats
             ram = ram or comfy_ram
             source = "comfyui"
+            vendor = vendor_from_name(name)
     if not source:
         try:
             chip = apple()
@@ -477,14 +914,20 @@ def detect(
             chip = None
         if chip:
             name, vram, ram = chip
-            source = "apple-silicon"
+            source, vendor = "apple-silicon", "apple"
+    if not source:
+        best = pick_adapter(listed)
+        if best is not None:  # a card whose memory could not be read: its name and maker still help
+            name, source, vendor = best.name, best.source, best.vendor
+        elif listed is not None:
+            vendor = "none"  # the system was asked and lists no graphics card
     cap = None
     if source in ("nvidia-smi", "nvml"):
         try:
             cap = compute()
         except Exception:  # noqa: BLE001
             cap = None
-    return Hardware(name, vram, ram, disk_free(models_root), os_name(), source, cap)
+    return Hardware(name, vram, ram, disk_free(models_root), os_name(), source, cap, vendor)
 
 
 # --------------------------------------------------------------------- fit ----

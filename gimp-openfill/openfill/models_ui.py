@@ -511,6 +511,7 @@ class ModelsPanel(Gtk.Box):
                     verdict,
                     cat.gated_files_missing(e, root),
                     cat.login_pages(e, root),
+                    bool(self._hw and self._hw.is_amd),
                 )
             )
         cat.apply_repo_stats(rows, self._repo_stats)

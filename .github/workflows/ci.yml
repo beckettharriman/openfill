@@ -43,6 +43,18 @@ jobs:
           python -m pip install --quiet pillow
           python -m unittest photocraft/tests/test_companion.py -v
 
+  comfy-archives:
+    # Every ComfyUI archive Download ComfyUI can fetch (NVIDIA, older NVIDIA cards, AMD)
+    # still answers at its pinned URL with its pinned size. HEAD requests only.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pinned ComfyUI archives resolve
+        run: python tests/check_comfy_archives.py
+
   test-macos:
     # macOS has no /proc and its own paths. Only in the public repository: private
     # repositories on this account get no macOS runners.

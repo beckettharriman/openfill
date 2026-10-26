@@ -305,6 +305,13 @@ def describe_error(error: BaseException) -> str:
             + (f" (ComfyUI said: {_first_line(text)})" if text else "")
         )
     if isinstance(error, UnsupportedGpu):
+        if "hip" in text.lower():  # ROCm: PyTorch has no code for this AMD card
+            return (
+                "ComfyUI cannot use this AMD graphics card: its PyTorch for ROCm has no code for it. ComfyUI's "
+                "version for AMD cards runs on Radeon RX 7000 and RX 9000 cards and Ryzen AI 300 and Max chips; "
+                "an older Radeon needs ComfyUI's own instructions for AMD cards. Then choose its folder in "
+                f"{SETTINGS_MENU}." + (f" (ComfyUI said: {_first_line(text)})" if text else "")
+            )
         return (
             "ComfyUI cannot use this graphics card: its PyTorch was made for newer cards. NVIDIA cards older "
             "than the RTX 20 series (GTX 10 and earlier) need ComfyUI's build for older cards, "

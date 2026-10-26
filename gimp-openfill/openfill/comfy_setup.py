@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
-from . import downloads
+from . import downloads, hardware
 from .catalog import NodeSpec, human_size
 from .config import comfy_layout
 
@@ -78,6 +78,9 @@ class SetupManifest:
     # (archive name, url, size, sha256), or None.
     older_asset: tuple[str, str, int, str] | None = None
     older_below_compute: float = 0.0
+    # The same release made for AMD cards (ROCm): (archive name, url, size, sha256), or None.
+    amd_asset: tuple[str, str, int, str] | None = None
+    amd_unpacked_bytes: int = 0
 
     def needs_older_build(self, compute_capability: float | None) -> bool:
         """True when the card's compute capability is below what the main build's PyTorch supports."""
@@ -89,6 +92,26 @@ class SetupManifest:
             return self
         name, url, size, sha = self.older_asset
         return replace(self, archive_name=name, archive_url=url, archive_size=size, archive_sha256=sha)
+
+    def for_amd(self) -> SetupManifest:
+        """This manifest with the archive for AMD cards (same folder, nodes and packages)."""
+        if not self.amd_asset:
+            return self
+        name, url, size, sha = self.amd_asset
+        return replace(
+            self,
+            archive_name=name,
+            archive_url=url,
+            archive_size=size,
+            archive_sha256=sha,
+            unpacked_bytes=self.amd_unpacked_bytes or self.unpacked_bytes,
+        )
+
+    def chosen(self, older_gpu: bool = False, amd: bool = False) -> SetupManifest:
+        """The manifest of the archive a :class:`Preflight` picked."""
+        if amd:
+            return self.for_amd()
+        return self.for_older_gpus() if older_gpu else self
 
     @property
     def download_bytes(self) -> int:
@@ -114,15 +137,23 @@ def parse_manifest(raw: Mapping[str, Any]) -> SetupManifest:
             oa = older["asset"]
             older_asset = (str(oa["name"]), str(oa["url"]), int(oa["size"]), str(oa["sha256"]).lower())
         older_below = float(older.get("below_compute") or 0.0)
+        amd = c.get("amd") or {}
+        amd_asset = None
+        if amd:
+            aa = amd["asset"]
+            amd_asset = (str(aa["name"]), str(aa["url"]), int(aa["size"]), str(aa["sha256"]).lower())
+        amd_unpacked = int(amd.get("unpacked_bytes") or 0)
     except (KeyError, TypeError, ValueError) as err:
         raise SetupError(f"comfy_setup.json is incomplete: {err!r}") from err
-    for u in (url, older_asset[1] if older_asset else url):
+    for u in (url, older_asset[1] if older_asset else url, amd_asset[1] if amd_asset else url):
         if not u.startswith("https://github.com/comfyanonymous/ComfyUI/releases/download/"):
             raise SetupError(f"the ComfyUI archive must come from the official GitHub releases: {u}")
     if older_asset and (
         not downloads.is_safe_name(older_asset[0]) or not _SHA_RE.match(older_asset[3]) or older_asset[2] <= 0
     ):
         raise SetupError("comfy_setup.json: the archive for older cards needs a safe name, its size and a SHA-256")
+    if amd_asset and (not downloads.is_safe_name(amd_asset[0]) or not _SHA_RE.match(amd_asset[3]) or amd_asset[2] <= 0):
+        raise SetupError("comfy_setup.json: the archive for AMD cards needs a safe name, its size and a SHA-256")
     if not downloads.is_safe_name(name) or not downloads.is_safe_name(folder):
         raise SetupError("comfy_setup.json holds an unsafe file or folder name")
     if not _SHA_RE.match(sha) or size <= 0:
@@ -149,6 +180,8 @@ def parse_manifest(raw: Mapping[str, Any]) -> SetupManifest:
         pip=pip,
         older_asset=older_asset,
         older_below_compute=older_below,
+        amd_asset=amd_asset,
+        amd_unpacked_bytes=amd_unpacked,
     )
 
 
@@ -300,6 +333,9 @@ def detect_comfy(
 # Where to read how to install ComfyUI by hand where Download ComfyUI cannot help.
 MANUAL_INSTALL_MAC = "https://github.com/comfyanonymous/ComfyUI#apple-mac-silicon"
 MANUAL_INSTALL_LINUX = "https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux"
+MANUAL_INSTALL_LINUX_AMD = "https://github.com/comfyanonymous/ComfyUI#amd-gpus-linux"
+# Which cards ComfyUI's build for AMD cards runs on, in plain words.
+AMD_BUILD_CARDS = "Radeon RX 7000 and RX 9000 cards and Ryzen AI 300 and Ryzen AI Max chips"
 
 
 @dataclass(frozen=True)
@@ -313,12 +349,13 @@ class Check:
 
 @dataclass(frozen=True)
 class Preflight:
-    """Result of :func:`preflight`; ``gpu`` is nvidia, other, none or unknown."""
+    """Result of :func:`preflight`; ``gpu`` is nvidia, amd, other (Intel), none or unknown."""
 
     checks: tuple[Check, ...]
     gpu: str
     gpu_name: str = ""
     older_gpu: bool = False  # an NVIDIA card the main build's PyTorch cannot run: use the build for older cards
+    amd_build: bool = False  # an AMD card: download ComfyUI's build for AMD cards (ROCm)
 
     @property
     def blocked(self) -> bool:
@@ -327,23 +364,34 @@ class Preflight:
 
     @property
     def needs_cpu_choice(self) -> bool:
-        """No NVIDIA card: the download only makes sense as the very slow CPU route."""
-        return self.gpu != "nvidia"
+        """No card the download can use: it only makes sense as the very slow CPU route."""
+        return self.gpu != "nvidia" and not self.amd_build
+
+    def manifest(self, manifest: SetupManifest) -> SetupManifest:
+        """The manifest of the archive these checks picked (AMD, older NVIDIA cards or the main one)."""
+        return manifest.chosen(self.older_gpu, self.amd_build)
 
     def text(self) -> str:
         """All messages, one per line."""
         return "\n".join(c.message for c in self.checks)
 
 
-def gpu_kind(names: list[str] | None, nvidia_found: bool) -> str:
-    """``nvidia`` / ``other`` (AMD, Intel) / ``none`` (no discrete card named) / ``unknown`` (could not ask)."""
-    if nvidia_found or any("nvidia" in n.lower() for n in names or []):
+def gpu_kind(names: list[str] | None, nvidia_found: bool, vendor: str = "") -> str:
+    """``nvidia`` / ``amd`` / ``other`` (Intel) / ``none`` (no card named) / ``unknown`` (could not ask).
+
+    ``vendor`` is what hardware detection found (``Hardware.gpu_vendor``); the adapter
+    ``names`` decide when it found nothing."""
+    if nvidia_found or vendor == "nvidia" or any("nvidia" in n.lower() for n in names or []):
         return "nvidia"
+    if vendor == "amd" or any(("amd" in n.lower() or "radeon" in n.lower()) for n in names or []):
+        return "amd"
+    if vendor == "intel":
+        return "other"
     if names is None:
-        return "unknown"
+        return "none" if vendor == "none" else "unknown"
     for n in names:
         low = n.lower()
-        if any(v in low for v in ("amd", "radeon", "intel", "arc")) and "microsoft basic" not in low:
+        if any(v in low for v in ("intel", "arc")) and "microsoft basic" not in low:
             return "other"
     return "none"
 
@@ -395,17 +443,28 @@ def preflight(
                     "platform",
                     "block",
                     f"Download ComfyUI only sets up the Windows build, which does not run on {system}. Install "
-                    f"ComfyUI yourself ({manual}) in a folder with a venv, then choose 'I already have ComfyUI'.",
+                    f"ComfyUI yourself ({manual}) in a folder with a venv, then choose 'I already have ComfyUI'."
+                    + (
+                        f" For an AMD card, install PyTorch for ROCm as ComfyUI's instructions say "
+                        f"({MANUAL_INSTALL_LINUX_AMD})."
+                        if system == "Linux" and getattr(hw, "gpu_vendor", "") == "amd"
+                        else ""
+                    ),
                 ),
             ),
-            "unknown",
+            "amd" if getattr(hw, "gpu_vendor", "") == "amd" else "unknown",
         )
     checks: list[Check] = []
     kind = gpu_kind(
-        adapters, bool(getattr(hw, "gpu_name", None) and getattr(hw, "gpu_source", "") in ("nvidia-smi", "nvml"))
+        adapters,
+        bool(getattr(hw, "gpu_name", None) and getattr(hw, "gpu_source", "") in ("nvidia-smi", "nvml")),
+        getattr(hw, "gpu_vendor", ""),
     )
     name = getattr(hw, "gpu_name", None) or ""
     vram = getattr(hw, "vram_gb", None)
+    if kind == "amd" and not name:
+        name = next((n for n in adapters or [] if "amd" in n.lower() or "radeon" in n.lower()), "")
+    amd_build = False
     if kind == "nvidia":
         if vram is not None and vram < MIN_VRAM_GB:
             checks.append(
@@ -428,14 +487,66 @@ def preflight(
                     "build for older NVIDIA cards (CUDA 12.6). The standard build would not run on it.",
                 )
             )
+    elif kind == "amd":
+        support = hardware.amd_build_support(name)
+        card = name or "This PC's AMD graphics card"
+        if support == "no" or not manifest.amd_asset:
+            checks.append(
+                Check(
+                    "gpu",
+                    "warn",
+                    f"{card} is older than the cards ComfyUI's build for AMD cards runs on ({AMD_BUILD_CARDS}). "
+                    "ComfyUI's own instructions for AMD cards on Windows cover more of them: follow them "
+                    f"({manifest.amd_instructions}), then choose 'I already have ComfyUI'. The download below "
+                    "would run on the processor only, which is very slow.",
+                )
+            )
+        else:
+            amd_build = True
+            mem = f" ({vram:.0f} GB graphics memory)" if vram else ""
+            if support == "unknown":
+                checks.append(
+                    Check(
+                        "gpu",
+                        "warn",
+                        f"Graphics card: {card}{mem}. OpenFill downloads ComfyUI's build for AMD cards, which runs "
+                        f"on {AMD_BUILD_CARDS}. OpenFill could not tell which Radeon this is; if it is older, "
+                        f"follow ComfyUI's instructions for AMD cards ({manifest.amd_instructions}) instead.",
+                    )
+                )
+            elif vram is not None and vram < MIN_VRAM_GB:
+                checks.append(
+                    Check(
+                        "gpu",
+                        "warn",
+                        f"{card} has {vram:.0f} GB of graphics memory. That is below the {MIN_VRAM_GB:.0f} GB the "
+                        "smallest model needs, so fills will be slow or fail. OpenFill downloads ComfyUI's build "
+                        "for AMD cards.",
+                    )
+                )
+            else:
+                checks.append(
+                    Check(
+                        "gpu",
+                        "ok",
+                        f"Graphics card: {card}{mem}. OpenFill downloads ComfyUI's build for AMD cards (ROCm).",
+                    )
+                )
+            checks.append(
+                Check(
+                    "gpu_build",
+                    "ok",
+                    "AMD support in OpenFill is new and has not been tested on an AMD card yet. If something "
+                    "does not work, please tell me on the Issues page.",
+                )
+            )
     elif kind == "other":
         checks.append(
             Check(
                 "gpu",
                 "warn",
-                "This PC has an AMD or Intel graphics card. The download below is the NVIDIA build and would "
-                "run on the processor only, which is very slow. For an AMD card follow the AMD instructions "
-                f"({manifest.amd_instructions}), then choose 'I already have ComfyUI'.",
+                "This PC has an Intel graphics card. The download below is the NVIDIA build and would run on the "
+                "processor only, which is very slow.",
             )
         )
     elif kind == "none":
@@ -484,7 +595,7 @@ def preflight(
     else:
         checks.append(Check("port", "ok", f"Port {port} is free."))
     older = kind == "nvidia" and manifest.needs_older_build(getattr(hw, "compute_capability", None))
-    return Preflight(tuple(checks), kind, name, older)
+    return Preflight(tuple(checks), kind, name, older, amd_build)
 
 
 # -------------------------------------------------------------------- setup ----

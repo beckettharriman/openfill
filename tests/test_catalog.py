@@ -520,6 +520,34 @@ class ViewModelTests(unittest.TestCase):
         self.assertEqual(set(rec), {"sdxl-a", "sd15-a", "lama", "sdxl-b"})  # qwen is opt-in
         self.assertEqual(len(cat.recommended(rows, 3, self.NOW)), 3)
 
+    def test_amd_notes_mark_gguf_and_keep_it_out_of_recommended(self):
+        entries = cat.load_catalog(CATALOG)
+        notes = {e.id: cat.amd_note(e) for e in entries}
+        for mid in ("flux1-fill-dev-gguf-q4", "flux1-fill-dev-gguf-q6", "qwen-image-edit-2511-gguf-q4"):
+            self.assertIn("GGUF", notes[mid], mid)
+        for mid in (
+            "lama-big",
+            "mat-places512",
+            "sd15-inpainting",
+            "sdxl-base",
+            "fooocus-inpaint-patch",
+            "dreamshaper-8-inpainting",
+            "realvisxl-v5",
+            "flux1-fill-dev",
+        ):
+            self.assertEqual(notes[mid], "", mid)  # LaMa, MAT, SD 1.5, SDXL and the Fooocus patch run on ROCm
+        flux = cat.by_id(entries, "flux1-fill-dev-gguf-q4")
+        st = cat.InstallStatus(False)
+        self.assertEqual(cat.model_row(flux, st)["amd_note"], "")  # not an AMD card
+        row = cat.model_row(flux, st, amd=True)
+        self.assertIn("GGUF", cat.row_details(row))
+        live_gguf = vm_row("gguf-sdxl", family="sdxl", amd_note=notes["flux1-fill-dev-gguf-q4"])
+        rec = [r["id"] for r in cat.recommended([live_gguf, vm_row("sdxl-a")], 5, self.NOW)]
+        self.assertEqual(rec, ["sdxl-a"])
+        rows = [{"id": "flux1-fill-dev-gguf-q4"}, {"id": "lama-big"}, {"id": "not-in-catalog"}]
+        cat.add_amd_notes(rows, entries)
+        self.assertEqual([bool(r["amd_note"]) for r in rows], [True, False, False])
+
     def test_rank_score(self):
         new_popular = vm_row("a", origin="huggingface", downloads=50000, updated="2026-09-01")
         old_quiet = vm_row("b", origin="huggingface", downloads=50, updated="2023-01-01")

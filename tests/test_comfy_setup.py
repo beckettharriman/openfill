@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from openfill import catalog, comfy_setup, downloads
 from openfill.comfy_setup import SetupError
@@ -247,12 +248,78 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(pf.checks[0].level, "warn")
         self.assertIn("2 GB", pf.checks[0].message)
 
-    def test_amd_points_at_instructions_and_is_cpu_route(self):
-        pf = self.run_pf(["AMD Radeon RX 7800 XT"])
-        self.assertEqual(pf.gpu, "other")
+    def amd(self, name="AMD Radeon RX 7900 XT", vram=20):
+        return Hardware(gpu_name=name, vram_bytes=vram * GB if vram else None, gpu_source="dxgi", gpu_vendor="amd")
+
+    def test_amd_rx_7000_gets_the_amd_build(self):
+        pf = self.run_pf(["AMD Radeon RX 7900 XT"], self.amd())
+        self.assertEqual(pf.gpu, "amd")
+        self.assertTrue(pf.amd_build)
+        self.assertFalse(pf.needs_cpu_choice)
+        self.assertFalse(pf.blocked)
+        self.assertIn("RX 7900 XT (20 GB graphics memory)", pf.text())
+        self.assertIn("build for AMD cards", pf.text())
+        self.assertIn("not been tested on an AMD card", pf.text())
+        self.assertNotIn("very slow", pf.text())
+        chosen = pf.manifest(self.m)
+        self.assertEqual(chosen.archive_name, "ComfyUI_windows_portable_amd.7z")
+
+    def test_amd_from_adapter_name_alone(self):
+        pf = self.run_pf(["AMD Radeon RX 9070 XT"])  # detection found nothing, the adapter list names it
+        self.assertEqual((pf.gpu, pf.gpu_name, pf.amd_build), ("amd", "AMD Radeon RX 9070 XT", True))
+
+    def test_older_radeon_points_at_instructions_and_is_cpu_route(self):
+        pf = self.run_pf(["AMD Radeon RX 6700 XT"], self.amd("AMD Radeon RX 6700 XT", 12))
+        self.assertEqual(pf.gpu, "amd")
+        self.assertFalse(pf.amd_build)
         self.assertTrue(pf.needs_cpu_choice)
         self.assertIn(self.m.amd_instructions, pf.text())
         self.assertIn("very slow", pf.text())
+        self.assertIn("I already have ComfyUI", pf.text())
+        self.assertEqual(pf.manifest(self.m).archive_name, self.m.archive_name)
+
+    def test_radeon_that_does_not_say_which_gets_the_amd_build_with_a_warning(self):
+        pf = self.run_pf(["AMD Radeon(TM) Graphics"], self.amd("AMD Radeon(TM) Graphics", 2))
+        self.assertTrue(pf.amd_build)
+        self.assertEqual(pf.checks[0].level, "warn")
+        self.assertIn("could not tell which Radeon", pf.text())
+        self.assertIn(self.m.amd_instructions, pf.text())
+
+    def test_amd_low_memory_warns(self):
+        pf = self.run_pf(["AMD Radeon RX 7600"], self.amd("AMD Radeon RX 7600", 2))
+        self.assertTrue(pf.amd_build)
+        self.assertEqual(pf.checks[0].level, "warn")
+        self.assertIn("2 GB", pf.checks[0].message)
+
+    def test_amd_without_a_pinned_build_is_the_cpu_route(self):
+        raw = json.loads(json.dumps(RAW))
+        del raw["comfyui"]["amd"]
+        m = comfy_setup.parse_manifest(raw)
+        pf = comfy_setup.preflight(m, self.amd(), None, 50 * GB, Path("C:/x"), 8188, False, platform="win32")
+        self.assertFalse(pf.amd_build)
+        self.assertTrue(pf.needs_cpu_choice)
+        self.assertEqual(m.for_amd(), m)
+
+    def test_intel_is_the_cpu_route(self):
+        pf = self.run_pf(["Intel(R) Arc(TM) A770 Graphics"])
+        self.assertEqual(pf.gpu, "other")
+        self.assertTrue(pf.needs_cpu_choice)
+        self.assertIn("Intel", pf.text())
+
+    def test_linux_amd_points_at_rocm(self):
+        pf = comfy_setup.preflight(self.m, self.amd(), None, 50 * GB, Path("/x"), 8188, False, platform="linux")
+        self.assertTrue(pf.blocked)
+        self.assertEqual(pf.gpu, "amd")
+        self.assertIn(comfy_setup.MANUAL_INSTALL_LINUX_AMD, pf.text())
+        self.assertIn("ROCm", pf.text())
+        plain = comfy_setup.preflight(self.m, Hardware(), None, 50 * GB, Path("/x"), 8188, False, platform="linux")
+        self.assertNotIn("ROCm", plain.text())
+
+    def test_gpu_kind_from_vendor(self):
+        self.assertEqual(comfy_setup.gpu_kind(None, False, "amd"), "amd")
+        self.assertEqual(comfy_setup.gpu_kind(None, False, "intel"), "other")
+        self.assertEqual(comfy_setup.gpu_kind(None, False, "none"), "none")
+        self.assertEqual(comfy_setup.gpu_kind(["AMD Radeon RX 7900 XT", "NVIDIA RTX 4090"], False), "nvidia")
 
     def test_no_gpu_says_very_slow(self):
         pf = self.run_pf(["Microsoft Basic Display Adapter"])
@@ -592,6 +659,63 @@ class UnpackProgressTests(unittest.TestCase):
                 lambda: ticks.append(1),
             )
         self.assertEqual(len(ticks), 3)
+
+
+class AmdBuildTests(unittest.TestCase):
+    """Reddit asks: ComfyUI's own build for AMD cards (ROCm), pinned like the NVIDIA one."""
+
+    m = comfy_setup.parse_manifest(RAW)
+
+    def test_manifest_has_the_pinned_amd_build(self):
+        amd = self.m.for_amd()
+        self.assertEqual(amd.archive_name, "ComfyUI_windows_portable_amd.7z")
+        self.assertEqual(amd.archive_size, 1621312076)
+        self.assertEqual(amd.archive_sha256, "19be1e3c8690c4f9eeefb0f2ee8f835a98e2fbf33cd9b80d0ca309f4c86d37c1")
+        self.assertTrue(amd.archive_url.endswith(f"/{self.m.version}/ComfyUI_windows_portable_amd.7z"))
+        self.assertEqual(amd.folder, self.m.folder)
+        self.assertEqual((amd.nodes, amd.pip), (self.m.nodes, self.m.pip))
+        self.assertEqual(amd.unpacked_bytes, 6153559583)
+        self.assertTrue(comfy_setup.download_notice(amd).startswith("about 1.5"))
+
+    def test_chosen(self):
+        self.assertEqual(self.m.chosen().archive_name, self.m.archive_name)
+        self.assertEqual(self.m.chosen(older_gpu=True).archive_name, "ComfyUI_windows_portable_nvidia_cu126.7z")
+        self.assertEqual(self.m.chosen(amd=True).archive_name, "ComfyUI_windows_portable_amd.7z")
+
+    def test_unofficial_or_unpinned_amd_build_is_refused(self):
+        for key, value in (
+            ("url", "https://example.com/ComfyUI_windows_portable_amd.7z"),
+            ("sha256", "abc"),
+            ("size", 0),
+        ):
+            with self.subTest(key=key):
+                bad = json.loads(json.dumps(RAW))
+                bad["comfyui"]["amd"]["asset"][key] = value
+                with self.assertRaises(comfy_setup.SetupError):
+                    comfy_setup.parse_manifest(bad)
+
+    def test_supervisor_task_downloads_the_amd_build_without_cpu(self):
+        from openfill import supervisor
+        from openfill.config import Settings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "openfill"
+            profile.mkdir()
+            cfg = profile / "config.json"
+            Settings(comfy_dir=r"C:\nowhere").save(cfg)
+            worker = supervisor.TaskWorker(profile, cfg, supervisor.Logger(profile / "t.log", "t"))
+            used = []
+
+            def fake(manifest, install_dir, progress, cancel, log, popen=None):
+                used.append(manifest.archive_name)
+                return Path(tmp) / "ComfyUI" / "ComfyUI_windows_portable"
+
+            with mock.patch.object(comfy_setup, "run_setup", fake):
+                worker._setup_comfy(
+                    {"id": "t1", "type": "setup_comfy", "install_dir": str(Path(tmp) / "ComfyUI"), "amd": True}
+                )
+            self.assertEqual(used, ["ComfyUI_windows_portable_amd.7z"])
+            self.assertNotIn("--cpu", Settings.load(cfg, backup=False).extra_server_args)
 
 
 class OlderGpuBuildTests(unittest.TestCase):

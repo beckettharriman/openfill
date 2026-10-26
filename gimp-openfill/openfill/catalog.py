@@ -914,6 +914,33 @@ SOURCE_LABELS = {
 }
 
 
+# What may not work on an AMD card (ROCm), by custom node pack; shown in the model's detail
+# line and kept out of Recommended for this PC there.
+AMD_NODE_NOTES = {
+    "ComfyUI-GGUF": "on AMD cards GGUF models have been reported to give only noise",
+}
+
+
+def amd_note(entry: ModelEntry) -> str:
+    """Why ``entry`` may not work on an AMD card, or ``""``. GGUF files go through ComfyUI-GGUF,
+    which has an open report of noise-only images on Radeon RX 7900 cards with ROCm
+    (city96/ComfyUI-GGUF issue 300)."""
+    for node in entry.requires_nodes:
+        if node.folder in AMD_NODE_NOTES:
+            return AMD_NODE_NOTES[node.folder]
+    if any(f.dest.lower().endswith(".gguf") for f in entry.files):
+        return AMD_NODE_NOTES["ComfyUI-GGUF"]
+    return ""
+
+
+def add_amd_notes(rows: list[dict[str, Any]], entries: Iterable[ModelEntry]) -> None:
+    """Put :func:`amd_note` into each row (``amd_note``), for a PC whose graphics card is AMD."""
+    by_id = {e.id: e for e in entries}
+    for row in rows:
+        entry = by_id.get(row.get("id", ""))
+        row["amd_note"] = amd_note(entry) if entry is not None else ""
+
+
 def model_row(
     entry: ModelEntry,
     status: InstallStatus,
@@ -922,8 +949,10 @@ def model_row(
     fit: Any = None,
     gated_files_missing: bool | None = None,
     login_pages: list[str] | None = None,
+    amd: bool = False,
 ) -> dict[str, Any]:
-    """One row of the Models tab: the keys of ``App.model_rows`` plus origin, family, fit and checksum."""
+    """One row of the Models tab: the keys of ``App.model_rows`` plus origin, family, fit and checksum.
+    ``amd``: this PC's graphics card is AMD (adds ``amd_note``)."""
     label = status.label
     needs_login = entry.gated if gated_files_missing is None else gated_files_missing
     if label == "Available" and needs_login and not has_token:
@@ -961,6 +990,7 @@ def model_row(
         "fit": getattr(fit, "level", "unknown") if fit is not None else "unknown",
         "fit_label": getattr(fit, "label", "") if fit is not None else "",
         "fit_reason": getattr(fit, "reason", "") if fit is not None else "",
+        "amd_note": amd_note(entry) if amd else "",
     }
 
 
@@ -1071,6 +1101,8 @@ def row_details(row: dict[str, Any]) -> str:
         parts.append(str(row["license"]))
     if not row.get("installed") and row.get("fit_label"):
         parts.append(str(row["fit_label"]))
+    if row.get("amd_note"):
+        parts.append(str(row["amd_note"]))
     origin = row.get("origin", "bundled")
     if origin == "local":
         parts.append("in " + SOURCE_LABELS["local"])
@@ -1114,7 +1146,8 @@ def recommended(rows: list[dict[str, Any]], limit: int = 5, now: float | None = 
     """Up to ``limit`` (3 to 5) not-installed models for this PC: the starting
     set (LaMa, DreamShaper 8) and the quality upgrade (RealVisXL V5) first, in
     that order, then the best fitting one per family, then the next best
-    overall. Too-big and opt-in (FLUX, Qwen) models never qualify."""
+    overall. Too-big and opt-in (FLUX, Qwen) models never qualify, nor, on an AMD
+    card, a model with an ``amd_note`` (GGUF)."""
     candidates = [
         r
         for r in rows
@@ -1123,6 +1156,7 @@ def recommended(rows: list[dict[str, Any]], limit: int = 5, now: float | None = 
         and not r.get("partial")
         and r.get("fit", "unknown") != "too_big"
         and r.get("family") not in OPT_IN_FAMILIES
+        and not r.get("amd_note")
     ]
     ranked = sorted(candidates, key=lambda r: -rank_score(r, now))
     first = (*STARTER_SET, QUALITY_UPGRADE)
