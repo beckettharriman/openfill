@@ -29,6 +29,7 @@ sys.path[:0] = [
 ]
 
 from openfill_patchy import bridge as bridge_module  # noqa: E402
+from openfill_patchy import client as client_module  # noqa: E402
 from openfill_patchy import install  # noqa: E402
 from openfill_patchy.bridge import PatchyBridge  # noqa: E402
 from openfill_patchy.client import COMPANION_ID, PatchyClient, PatchyError, WorkspaceLost, find_connector  # noqa: E402
@@ -467,7 +468,24 @@ class ClientTests(Fixture):
         state = self.client.get_state()
         self.assertEqual(state["activeDocumentId"], "7")
         self.assertEqual([n for n, _a in self.fake.calls].count("get_state"), 2 + 3)  # the fixture's, 3 busy, 1 answer
-        self.assertEqual(waits, [True, False])
+        self.assertEqual(waits, [])  # a moment's busy (a drag) never shows the warning
+
+    def test_waiting_is_reported_only_when_patchy_stays_busy(self):
+        watcher = Watcher(self.client, lambda action: None, fallback=60.0)
+        self.client.on_wait = watcher.set_waiting
+        seen = []
+        self.fake.on_call = lambda name, args: seen.append(watcher.info.waiting)
+        with mock.patch.object(client_module, "BUSY_NOTICE_S", 0.4):
+            self.fake.busy = 2  # about 0.2 s: a drag of the selection's handles
+            self.client.get_state()
+            self.assertNotIn(True, seen)
+            self.assertFalse(watcher.info.waiting)
+            seen.clear()
+            self.fake.busy = 12  # well past the notice time
+            self.client.get_state()
+        self.assertIn(True, seen)  # shown while Patchy stayed busy
+        self.assertFalse(seen[0])  # not at the first busy reply
+        self.assertFalse(watcher.info.waiting)  # and cleared once it answered
 
     def test_an_edit_lost_with_the_workspace_is_never_sent_again(self):
         self.client.get_state()

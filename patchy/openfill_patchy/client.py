@@ -30,6 +30,9 @@ PROTOCOL_VERSION = "2025-11-25"
 # Patchy answers "busy" while the artist is mid-gesture, in a modal dialog, or another
 # client's script runs. Nothing ran, so the request is sent again, for this long at most.
 BUSY_PATIENCE_S = 30 * 60.0
+# A drag of a selection's handles keeps Patchy busy for a moment; ``on_wait`` hears of it only
+# once Patchy has stayed busy this long in a row, so a gesture never flashes a warning.
+BUSY_NOTICE_S = 3.0
 STALE_ATTEMPTS = 4  # an edit refused as stale is sent again with the newer token this often
 
 
@@ -222,6 +225,7 @@ class PatchyClient:
         ``busy`` is sent again until ``patience`` runs out (nothing ran). A request Patchy
         lost (``workspace_disconnected``) is never sent again."""
         waited_since = None
+        told = False  # on_wait(True) was sent
         try:
             while True:
                 with self._lock:
@@ -239,13 +243,14 @@ class PatchyClient:
                 now = time.monotonic()
                 if waited_since is None:
                     waited_since = now
-                    if self.on_wait:
-                        self.on_wait(True)
+                if not told and self.on_wait and now - waited_since >= BUSY_NOTICE_S:
+                    self.on_wait(True)
+                    told = True
                 if now - waited_since > patience:
                     raise PatchyError(f"{tool}: Patchy stayed busy", code, data)
                 time.sleep(min(1.0, 0.1 + (now - waited_since) / 10))
         finally:
-            if waited_since is not None and self.on_wait:
+            if told and self.on_wait:
                 self.on_wait(False)
 
     def get_info(self, patience: float = BUSY_PATIENCE_S) -> dict[str, Any]:
