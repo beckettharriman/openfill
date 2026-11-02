@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -861,6 +862,22 @@ class WatcherTests(Fixture):
             watcher.stop()
 
 
+def launch_handler():
+    """A request handler that answers every GET with ``pong``."""
+    from http.server import BaseHTTPRequestHandler
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"pong")
+
+        def log_message(self, *args):
+            pass
+
+    return Handler
+
+
 class FakeWin32:
     """The user32 calls ``FocusReturn`` makes: windows by handle, owned by (pid, thread)."""
 
@@ -1018,6 +1035,43 @@ class InstallTests(unittest.TestCase):
         plain = subprocess.CompletedProcess([], 0, stdout="False\n", stderr="")
         with mock.patch.object(install.subprocess, "run", return_value=plain):
             self.assertIn("-m pip install Pillow", install.no_pillow_advice("/usr/local/bin/python3"))
+
+    def test_patchys_appimage_runs_its_connector_with_an_argument(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            appimage = Path(tmp) / "Patchy-x86_64.AppImage"
+            appimage.write_bytes(b"\x7fELF\x02\x01\x01\x00AI\x02" + bytes(64))
+            plain = Path(tmp) / "patchy-mcp"
+            plain.write_bytes(b"\x7fELF\x02\x01\x01\x00" + bytes(64))
+            self.assertEqual(find_connector(str(appimage)), [str(appimage), "patchy-mcp", "--attach"])
+            self.assertEqual(find_connector(str(plain)), [str(plain), "--attach"])
+            env = {"APPIMAGE": str(appimage), "PATCHY_COMPANION_ID": COMPANION_ID}
+            with mock.patch.dict(os.environ, env), mock.patch("openfill_patchy.client.shutil.which", return_value=None):
+                os.environ.pop("PATCHY_MCP", None)
+                # started from the AppImage's Companions menu: no PATCHY_MCP, but APPIMAGE
+                self.assertEqual(find_connector(), [str(appimage), "patchy-mcp", "--attach"])
+                del os.environ["PATCHY_COMPANION_ID"]  # another AppImage's environment: not Patchy's
+                with (
+                    mock.patch.object(sys, "platform", "linux"),
+                    mock.patch.object(Path, "home", return_value=Path(tmp)),
+                ):
+                    self.assertIsNone(find_connector())
+
+    def test_the_page_server_does_not_look_up_the_host_name(self):
+        from openfill_patchy.page import serve
+
+        api = SimpleNamespace(key="k")
+        with (
+            mock.patch("socket.getfqdn", side_effect=AssertionError("looked up")),
+            mock.patch("openfill_patchy.page.make_handler", return_value=launch_handler()),
+        ):
+            server, url = serve(api, 0)
+        try:
+            self.assertRegex(url, r"^http://127\.0\.0\.1:\d+/\?key=k$")
+            with urllib.request.urlopen(url.split("?")[0] + "ping", timeout=10) as reply:
+                self.assertEqual(reply.read(), b"pong")
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_the_flatpak_connector_when_nothing_else_is_found(self):
         with tempfile.TemporaryDirectory() as tmp:

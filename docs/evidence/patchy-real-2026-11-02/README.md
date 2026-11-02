@@ -6,7 +6,8 @@ and companion protocol 1 (it reports version 1.24, the last release). The script
 starts the companion as Patchy's menu would (`python -m openfill_patchy --no-bar`) and drives it through
 its page's API, the calls the panel makes. The companion's settings and the companions folder were kept
 in a scratch home on each machine (`--home-root`). Seeds were fixed, so the three runs drew nearly the
-same pictures. Every case passed on every machine.
+same pictures. Every case passed on every machine. On glados it also ran against an AppImage of the
+Patchy branch, with OpenFill started by hand as `--connector <the AppImage file>`.
 
 | | Windows 11 (this PC) | Ubuntu 24.04 (glados) | macOS 27.0.1 (studiomac) |
 |---|---|---|---|
@@ -30,10 +31,20 @@ Remove includes loading LaMa; on glados the models and nodes came from an earlie
 script that stopped at Remove (LaMa's nodes were not installed yet; the script now presses Install
 nodes, as the panel asks). The companion started in 0.5 to 1 s on Windows and Linux, and in 35.5 s on
 the Mac: Python's HTTP server looks up the host's name when it starts, and that lookup takes 35 s on
-studiomac (`socket.getfqdn`, in the shared page server).
+studiomac (`socket.getfqdn`, in the shared page server). OpenFill for Patchy now starts its page
+without that lookup (`patchy/openfill_patchy/page.py`); a second Mac run the same day started in 0.5 s
+and passed every case again.
 
-Files: `windows-report.json`, `linux-report.json`, `macos-report.json` (home folders replaced by `~`),
-and `windows.jpg`, `linux.jpg`, `macos.jpg`: the document before, after Remove, with the second fill
+The AppImage run (`linux-appimage-report.json`, `linux-appimage.jpg`) matched the native one: Remove
+2.0 s, Fill with Keep 4.0 s, Discard 3.1 s, Expand 3.1 s, Create 2.0 s, each one step (Discard none),
+OpenFill stopped 6.9 s and ComfyUI 8.9 s after Patchy closed. Started from an AppImage Patchy's
+Companions menu (emulated: OpenFill got that Patchy's own environment plus what Patchy adds for a
+companion), OpenFill finds no `PATCHY_MCP`, because the AppImage has no connector file beside
+`usr/bin/patchy`; it runs the connector as `<the file in APPIMAGE> patchy-mcp --attach`, attached in
+0.5 s and stopped when that Patchy closed.
+
+Files: `windows-report.json`, `linux-report.json`, `linux-appimage-report.json`, `macos-report.json`
+(home folders replaced by `~`), and `windows.jpg`, `linux.jpg`, `linux-appimage.jpg`, `macos.jpg`: the document before, after Remove, with the second fill
 variation shown, after Expand, and the Create image.
 
 Also on 2026-11-02, outside this script:

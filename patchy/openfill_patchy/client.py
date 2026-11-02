@@ -93,6 +93,24 @@ class WorkspaceLost(PatchyError):
     request may have run, so it is never sent again)."""
 
 
+def is_appimage(path: str | Path) -> bool:
+    """``path`` is an AppImage (an ELF file marked ``AI`` 2 at byte 8), whatever its name."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(11)
+    except OSError:
+        return False
+    return head[:4] == b"\x7fELF" and head[8:11] == b"AI\x02"
+
+
+def connector_command(path: str) -> list[str]:
+    """``path`` as the command that starts the connector attached. Patchy's AppImage has no
+    separate connector file: the AppImage itself runs it with the argument ``patchy-mcp``."""
+    if is_appimage(path):
+        return [path, "patchy-mcp", "--attach"]
+    return [path, "--attach"]
+
+
 def flatpak_patchy_installed() -> bool:
     """Patchy's Flatpak is installed for this user or for the whole system (Linux)."""
     if not sys.platform.startswith("linux"):
@@ -109,7 +127,13 @@ def find_connector(explicit: str | None = None) -> list[str] | None:
     and it runs the Flatpak's own connector, which reaches the Patchy inside the sandbox."""
     for candidate in (explicit, os.environ.get("PATCHY_MCP")):
         if candidate:
-            return [candidate, "--attach"]
+            return connector_command(candidate)
+    # Started from the Companions menu of Patchy's AppImage: Patchy hands over no PATCHY_MCP
+    # there (its connector is the AppImage file itself), but the AppImage runtime names that
+    # file in APPIMAGE, which a program Patchy starts inherits.
+    appimage = os.environ.get("APPIMAGE")
+    if appimage and os.environ.get("PATCHY_COMPANION_ID") and is_appimage(appimage):
+        return [appimage, "patchy-mcp", "--attach"]
     home = Path.home()
     paths: list[Path] = []
     if sys.platform == "win32":

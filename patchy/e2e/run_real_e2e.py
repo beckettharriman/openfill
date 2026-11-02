@@ -40,7 +40,13 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path[:0] = [str(ROOT / "patchy"), str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")]
 
-from openfill_patchy.client import PatchyClient, PatchyError, protocol_problem  # noqa: E402
+from openfill_patchy.client import (  # noqa: E402
+    PatchyClient,
+    PatchyError,
+    connector_command,
+    is_appimage,
+    protocol_problem,
+)
 
 report: list[dict] = []
 LAMA, DREAMSHAPER = "lama-big", "dreamshaper-8-inpainting"
@@ -156,7 +162,9 @@ def main() -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     patchy = Path(args.patchy).resolve()
-    connector = Path(args.connector) if args.connector else patchy.with_name("patchy-mcp" + patchy.suffix)
+    # Patchy's AppImage is its own connector (``<file> patchy-mcp``); elsewhere patchy-mcp is beside patchy.
+    default = patchy if is_appimage(patchy) else patchy.with_name("patchy-mcp" + patchy.suffix)
+    connector = Path(args.connector) if args.connector else default
     home_root = Path(args.home_root).resolve() if args.home_root else None
     python = args.python
 
@@ -200,7 +208,7 @@ def main() -> int:
     image.write_bytes((ROOT / "tests" / "data" / "test-scene.png").read_bytes())
     app_log = (out / "patchy-app.log").open("w", encoding="utf-8")
     app = subprocess.Popen([str(patchy), str(image)], cwd=scratch, env=patchy_env, stdout=app_log, stderr=app_log)
-    client = PatchyClient([str(connector), "--attach"], env=base_env, log=out / "connector.log")
+    client = PatchyClient(connector_command(str(connector)), env=base_env, log=out / "connector.log")
     companion = None
     companion_log = None
     comfy_pid = 0

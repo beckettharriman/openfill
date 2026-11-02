@@ -22,6 +22,8 @@ python -m openfill_patchy.install
 
 This adds **OpenFill** to Patchy's **Plugins > Companions** menu for your user account. It writes one file, `openfill.json`, into Patchy's companions folder (`%APPDATA%\RTsoft\Patchy\companions` on Windows, `~/Library/Application Support/RTsoft/Patchy/companions` on macOS, `~/.local/share/RTsoft/Patchy/companions` on Linux). The entry runs OpenFill with the Python you ran the installer with; pass `--python PATH` to choose another one, for example ComfyUI's: `python3 -m openfill_patchy.install --python ~/ComfyUI/venv/bin/python`. Patchy reads the folder each time the menu opens, so there is nothing to restart.
 
+**Patchy's AppImage (Linux)** has no separate connector file: the AppImage file runs it (`Patchy.AppImage patchy-mcp`). From its Plugins > Companions menu OpenFill finds it by itself. To start OpenFill by hand, name the AppImage: `python3 -m openfill_patchy --connector ~/Applications/Patchy-x86_64.AppImage`.
+
 **Patchy's Flatpak (Linux)** cannot start programs outside its sandbox, so it lists OpenFill greyed out as "(start it outside Patchy)". The installer also writes the entry into the Flatpak's folder (`~/.var/app/com.rtsoft.patchy/data/RTsoft/Patchy/companions`). Open Patchy, then start OpenFill yourself with `python3 -m openfill_patchy` in the `patchy` folder: it uses the Flatpak's own connector and attaches to the Patchy that is open.
 
 To remove it: `python -m openfill_patchy.install --uninstall`. Settings and models stay.

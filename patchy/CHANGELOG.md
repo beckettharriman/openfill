@@ -16,3 +16,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support Patchy's Flatpak: the installer also writes the menu entry into the Flatpak's companions folder, and OpenFill started by hand uses the Flatpak's own connector.
 - Check for Pillow in the Python the menu entry runs, not the installer's own, and suggest ComfyUI's Python where pip cannot add packages (Homebrew, Ubuntu's system Python).
 - Say how to start OpenFill when Patchy's connector cannot be found.
+- Support Patchy's AppImage: started from its Companions menu, OpenFill runs the AppImage's connector (`patchy-mcp` as the AppImage's argument), and `--connector` accepts the AppImage file.
+- Start the OpenFill page without looking up the computer's name, which took 35 s on a Mac with slow name lookups.

@@ -122,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         tell("OpenFill", "Open Patchy first, then pick OpenFill in Plugins > Companions.")
         client.close()
         return 2
-    print(f"Attached to Patchy {info.get('version')} (process {info.get('processId')}).")
+    print(f"Attached to Patchy {info.get('version')} (process {info.get('processId')}). Connector: {' '.join(command)}")
     print(
         f"OpenFill for Patchy {__version__}, companion protocol {COMPANION_PROTOCOL_MIN} to {COMPANION_PROTOCOL_MAX};"
         f" Patchy {info.get('version')}, companionProtocol {info.get('companionProtocol')}."
@@ -133,8 +133,9 @@ def main(argv: list[str] | None = None) -> int:
         client.close()
         return 2
 
-    from openfill_photocraft.web import Api, serve
+    from openfill_photocraft.web import Api
 
+    from openfill_patchy.page import serve  # web.serve without its host-name lookup (see page.py)
     from openfill_patchy.service import PatchyService, Watcher
 
     bridge = PatchyBridge(client, exchange, profile)
