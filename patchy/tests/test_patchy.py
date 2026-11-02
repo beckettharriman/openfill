@@ -10,6 +10,7 @@ import io
 import itertools
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -56,7 +57,9 @@ class Doc:
         self.composite = Image.new("RGBA", (width, height), (200, 100, 50, 255))
         self.selection: Image.Image | None = Image.new("L", (width, height), 0)
         self.selection.paste(255, (8, 6, 28, 16))
-        self.layers: list[dict] = [{"id": "1", "name": "Background", "x": 0, "y": 0, "visible": True}]
+        self.layers: list[dict] = [
+            {"id": "1", "name": "Background", "x": 0, "y": 0, "visible": True, "background": True, "fills": []}
+        ]
         self.undo: list[tuple[str, tuple]] = []  # (state id, saved document) per step
         self.redo: list[tuple[str, tuple]] = []
         self.state_id = "s0"
@@ -88,14 +91,31 @@ class Doc:
         return {"x": box[0], "y": box[1], "width": box[2] - box[0], "height": box[3] - box[1]}
 
 
-def public(rows: list[dict]) -> list[dict]:
-    """Layer rows as get_state reports them: no pixels."""
+def public(rows: list[dict], canvas: tuple[int, int]) -> list[dict]:
+    """Layer rows as get_state reports them: bounds and the raster mask's settings, no pixels.
+    The Background covers the canvas."""
     out = []
     for row in rows:
-        item = {k: v for k, v in row.items() if k not in ("pixels", "mask", "size", "children")}
-        item["hasMask"] = "mask" in row
+        item = {k: v for k, v in row.items() if k not in ("pixels", "mask", "size", "children", "background", "fills")}
+        if row.get("background"):
+            item["bounds"] = {"x": 0, "y": 0, "width": canvas[0], "height": canvas[1]}
+        elif "size" in row:
+            item["bounds"] = {"x": row["x"], "y": row["y"], "width": row["size"][0], "height": row["size"][1]}
+        mask = row.get("mask")
+        item["hasLayerMask"] = mask is not None
+        item["layerMask"] = (
+            {
+                "bounds": {"x": mask["x"], "y": mask["y"], "width": mask["size"][0], "height": mask["size"][1]},
+                "enabled": True,
+                "defaultColor": 0,
+                "density": 100.0,
+                "feather": mask["feather"],
+            }
+            if mask
+            else None
+        )
         if "children" in row:
-            item["isGroup"], item["children"] = True, public(row["children"])
+            item["isGroup"], item["children"] = True, public(row["children"], canvas)
         out.append(item)
     return out
 
@@ -190,7 +210,7 @@ class FakePatchy:
                     "canUndo": bool(d.undo),
                     "canRedo": bool(d.redo),
                     "selection": {"exists": bounds is not None, **({"bounds": bounds} if bounds else {})},
-                    "layers": public(d.layers),
+                    "layers": public(d.layers, (d.width, d.height)),
                 }
             )
         return {"activeDocumentId": self.active, "documents": documents, "stateToken": self.token}
@@ -273,11 +293,26 @@ class FakePatchy:
         made = []
         for op in a["ops"]:
             if op["kind"] == "canvas":
+                # resizeCanvas(w, h, {x, y, fill}), as Image > Canvas Size: the content and the
+                # selection move, the Background is filled out to the new canvas.
+                if not isinstance(op.get("x"), int) or not isinstance(op.get("y"), int):
+                    raise RuntimeError("resizeCanvas without an offset leaves the content where it was")
+                if not re.fullmatch(r"#[0-9a-f]{6}", str(op.get("fill"))):
+                    raise RuntimeError(f"resizeCanvas: bad fill {op.get('fill')!r}")
                 d.width, d.height = op["width"], op["height"]
                 for row in d.layers:
+                    if row.get("background"):
+                        row["fills"].append(op["fill"])
+                        continue
                     for moved in row.get("children", [row]):
-                        moved["x"] += op["dx"]
-                        moved["y"] += op["dy"]
+                        for part in (moved, moved.get("mask") or {}):
+                            if part:
+                                part["x"] += op["x"]
+                                part["y"] += op["y"]
+                if d.selection is not None:
+                    moved_selection = Image.new("L", (d.width, d.height), 0)
+                    moved_selection.paste(d.selection, (op["x"], op["y"]))
+                    d.selection = moved_selection
                 continue
             group = None
             if op["group"]:
@@ -539,7 +574,26 @@ class BridgeTests(Fixture):
         self.assertEqual(len(self.target.undo), 1)  # canvas and both rounds, one step
         self.assertEqual((self.target.width, self.target.height), (88, 48))
         by_name = [(r["name"], r["x"]) for r in self.target.layers]
-        self.assertEqual(by_name, [("Background", 8), ("Expand", 40), ("Expand", 0)])  # round one moved with the canvas
+        self.assertEqual(by_name, [("Background", 0), ("Expand", 40), ("Expand", 0)])  # round one moved with the canvas
+        rows = self.fake.state()["documents"][0]["layers"]
+        self.assertEqual(rows[0]["bounds"], {"x": 0, "y": 0, "width": 88, "height": 48})  # it covers the canvas
+        # filled with the photo's mean colour, both rounds (round one's blue is not mixed in)
+        self.assertEqual(self.target.layers[0]["fills"], ["#c86432", "#c86432"])
+        self.assertEqual([r["hasLayerMask"] for r in rows], [False, True, True])
+        self.assertEqual(rows[1]["layerMask"]["bounds"], {"x": 40, "y": 0, "width": 48, "height": 48})
+        self.client.get_state()
+        self.client.undo("7")
+        self.assertEqual((self.target.width, self.target.height, len(self.target.layers)), (64, 48, 1))
+
+    def test_an_expand_moves_the_selection_with_the_content(self):
+        self.bridge.export_region(self.image, Rect(0, 0, 80, 60), transparent_outside=True)
+        self.bridge.resize_canvas(self.image, 80, 60, 16, 12)
+        self.bridge.insert_results(
+            self.image, [png_bytes("blue", (80, 60))], Rect(0, 0, 80, 60), "Expand", 0.0, None, use_selection_mask=False
+        )
+        self.bridge.finish(self.image)
+        self.assertEqual(self.target.bounds(), {"x": 24, "y": 18, "width": 20, "height": 10})  # (8, 6) + (16, 12)
+        self.assertEqual(self.fake.state()["documents"][0]["layers"][0]["bounds"]["width"], 80)
 
     def test_a_failed_insert_leaves_the_document_as_it_was(self):
         self.fill(variations=2)

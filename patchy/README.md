@@ -2,7 +2,7 @@
 
 Generative Fill, Remove object, Generative Expand and Text to Image for [Patchy](https://github.com/SethRobinson/Patchy), with the same engine, models and panel as [OpenFill for PhotoCraft](../photocraft/README.md): a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI) on your own graphics card. Local generation stays on your computer.
 
-> **Prototype.** This needs a Patchy build with **Plugins > Companions**, which is not in a Patchy release yet. It has been checked end to end against such a build with a stand-in generator (no GPU); a run with a real ComfyUI and real models is still to do. See [What has been tested](#what-has-been-tested).
+> **Prototype.** This needs a Patchy build with **Plugins > Companions** and `resizeCanvas` options, which is not in a Patchy release yet. It has been checked end to end against such a build with a stand-in generator (no GPU); a run with a real ComfyUI and real models is still to do. See [What has been tested](#what-has-been-tested).
 
 ## What you need
 
@@ -37,7 +37,7 @@ Pick **Plugins > Companions > OpenFill** in Patchy. The first time, Patchy start
 Patchy has a companion-app interface instead of an in-process plug-in: OpenFill runs Patchy's connector, `patchy-mcp --attach`, as a child process and talks to the running Patchy over it (JSON-RPC on standard input and output, the same channel AI assistants use). Patchy sets `PATCHY_MCP` and `PATCHY_MCP_ENDPOINT` when it starts a companion, so OpenFill finds the right connector and the right Patchy window.
 
 - **Reading:** one script run writes the visible image (`doc.getCompositePixels`) and the selection with its soft edges (`doc.selection.getMask`) to PNG files in OpenFill's exchange folder. Reading is not a history step.
-- **Writing:** the result is kept in OpenFill while the seam correction, grain matching and ranking run, then one script run adds the layers (`addLayer`, `setPixels`), their masks (`setLayerMask`) and the variations' group. An expand's canvas change goes into that same run. Patchy makes every script run one undo step.
+- **Writing:** the result is kept in OpenFill while the seam correction, grain matching and ranking run, then one script run adds the layers (`addLayer`, `setPixels`), their masks (`setLayerMask`) and the variations' group. An expand's canvas change goes into that same run, made like Image > Canvas Size (`resizeCanvas` with an offset): the image and the selection move, and a Background layer grows to cover the new canvas, filled with the image's mean colour, so a gap the result leaves is close to its surroundings instead of white. Patchy makes every script run one undo step.
 - **Events:** OpenFill asks for Patchy's events when it connects. Patchy then tells it when the selection or the active document changes, and when you pick OpenFill in Plugins > Companions.
 - **Safety:** every edit carries Patchy's state token from just before it, so an edit never lands on a document that changed under it, and Keep or Discard never undo a step you made. A request Patchy reports as lost is never sent again.
 
@@ -48,6 +48,6 @@ Settings, logs and the exchange folder are in `%APPDATA%\OpenFill for Patchy` on
 ## What has been tested
 
 - `python -m unittest patchy/tests/test_patchy.py`: the connector client, the bridge, Keep and Discard, the event watcher and the installer, against a fake connector, plus OpenFill's own Generative Fill running through the bridge with a stand-in generator.
-- `python patchy/e2e/run_patchy_e2e.py --patchy PATH/patchy.exe`: a real Patchy (offscreen, with its own settings and connector endpoint) on Windows 11, with the stand-in generator from `patchy/tests/stub_backend.py` in place of ComfyUI. It checks that a fill adds one masked layer that one Undo removes, that three variations go into a group and Keep leaves one step, that Discard leaves none, that an expand (two rounds) and an expand to the left of a locked Background layer are one step each, that Text to Image opens a new document, and that the selection events arrive.
+- `python patchy/e2e/run_patchy_e2e.py --patchy PATH/patchy.exe`: a real Patchy (offscreen, with its own settings and connector endpoint) on Windows 11, with the stand-in generator from `patchy/tests/stub_backend.py` in place of ComfyUI. It checks that a fill adds one masked layer that one Undo removes, that three variations go into a group and Keep leaves one step, that Discard leaves none, that an expand (two rounds) is one step, that an expand to the left grows the Background layer over the whole new canvas in one step, that Text to Image opens a new document, and that the selection events arrive.
 
 Not tested yet: a real ComfyUI with real models, macOS and Linux, and the panel itself next to a visible Patchy window (picking the menu entry, the Windows tether).

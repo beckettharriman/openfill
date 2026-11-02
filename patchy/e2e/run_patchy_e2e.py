@@ -57,22 +57,34 @@ def js(client: PatchyClient, code: str, args: dict | None = None):
     return client.run_script("var A = " + json.dumps(args or {}) + ";\n" + code, name="e2e")
 
 
+# The visible pixel at (px, py) and the bottom layer's own pixel there; the layers come
+# from get_state, which reports each raster mask (hasLayerMask, layerMask).
 INSPECT = """
 var d = app.getDocument(A.doc);
-function rows(list) {
-  return list.map(function (l) {
-    var m = l.getLayerMask && !l.isGroup ? l.getLayerMask() : null;
-    var out = {id: l.id, name: l.name, visible: l.visible, isGroup: l.isGroup, x: l.x, y: l.y};
-    if (m) { out.mask = {x: m.x, y: m.y, width: m.width, height: m.height, feather: m.feather}; }
-    if (l.isGroup) out.children = rows(l.children);
-    return out;
-  });
-}
 var c = d.getCompositePixels({x: A.px, y: A.py, width: 1, height: 1});
 var bytes = new Uint8Array(c.data);
-patchy.setResult({width: d.width, height: d.height, layers: rows(d.layers),
-  pixel: [bytes[0], bytes[1], bytes[2], bytes[3]], canUndo: d.canUndo});
+var p = d.layers[0].getPixels(), own = null;
+if (A.px >= p.x && A.py >= p.y && A.px < p.x + p.width && A.py < p.y + p.height) {
+  var b = new Uint8Array(p.data), i = ((A.py - p.y) * p.width + (A.px - p.x)) * 4;
+  own = [b[i], b[i + 1], b[i + 2], b[i + 3]];
+}
+patchy.setResult({width: d.width, height: d.height, pixel: [bytes[0], bytes[1], bytes[2], bytes[3]],
+  bottomPixel: own, canUndo: d.canUndo});
 """
+
+
+def layer_rows(rows: list[dict]) -> list[dict]:
+    out = []
+    for r in rows:
+        row = {k: r.get(k) for k in ("id", "name", "visible", "isGroup", "bounds")}
+        row["x"], row["y"] = (r.get("bounds") or {}).get("x"), (r.get("bounds") or {}).get("y")
+        if r.get("hasLayerMask"):
+            row["mask"] = r.get("layerMask")
+        if r.get("isGroup"):
+            row["children"] = layer_rows(r.get("children") or [])
+        out.append(row)
+    return out
+
 
 SELECT = """
 var d = app.getDocument(A.doc);
@@ -87,7 +99,10 @@ patchy.setResult(d.selection.bounds);
 
 
 def inspect(client, doc, px=0, py=0) -> dict:
-    return js(client, INSPECT, {"doc": doc, "px": px, "py": py})
+    """The document's size, layers (bottom first, as get_state lists them) and pixels."""
+    facts = js(client, INSPECT, {"doc": doc, "px": px, "py": py})
+    d = next(d for d in client.get_state()["documents"] if d["id"] == doc)
+    return {**facts, "layers": layer_rows(d.get("layers") or [])}
 
 
 def history(client, doc) -> str:
@@ -284,7 +299,12 @@ def main() -> int:
         back = inspect(client, doc)
         record(
             "expand is one step",
-            st["state"] == "done" and grown["width"] == 384 and steps == 1 and back["width"] == 256,
+            st["state"] == "done"
+            and grown["width"] == 384
+            and (grown["layers"][0]["x"], grown["layers"][0]["y"]) == (0, 0)
+            and all(r.get("mask") for r in grown["layers"][1:])
+            and steps == 1
+            and back["width"] == 256,
             job=st["state"],
             message=st["message"],
             width=grown["width"],
@@ -293,7 +313,8 @@ def main() -> int:
             undos_to_remove=steps,
         )
 
-        # 5. an expand to the left on a new document, whose Background layer is locked in place
+        # 5. an expand to the left on a new document: its Background layer grows to cover the
+        # new canvas, filled with the image's mean colour where the result leaves gaps
         made = js(client, "var d = app.newDocument(200, 150, {name: 'Background test'}); patchy.setResult(d.id);")
         bg_doc = str(made)
         js(
@@ -303,16 +324,32 @@ def main() -> int:
         )
         base_state = history(client, bg_doc)
         st = run_job(service, "expand", {"left": 64, "variations": 1, "seed": 7})
-        grown = inspect(client, bg_doc, 100, 75) if st["state"] == "done" else {}
-        steps = undo_count_back(client, bg_doc, base_state) if st["state"] == "done" else -1
+        done = st["state"] == "done"
+        new_area = inspect(client, bg_doc, 10, 75) if done else {}
+        old_area = inspect(client, bg_doc, 164, 75) if done else {}
+        steps = undo_count_back(client, bg_doc, base_state) if done else -1
+        back = inspect(client, bg_doc) if done else {}
+        layers = new_area.get("layers") or [{}]
+        blue = [0x33, 0x66, 0xCC, 255]
         record(
-            "expand left moves a Background layer with the canvas",
-            st["state"] == "done" and grown.get("width") == 264 and grown["layers"][0]["x"] == 64 and steps == 1,
+            "expand left grows the Background over the whole canvas, one step",
+            done
+            and new_area.get("width") == 264
+            and layers[0].get("name") == "Background"
+            and layers[0].get("bounds") == {"x": 0, "y": 0, "width": 264, "height": 150}
+            and new_area.get("bottomPixel") == blue  # the fill: the image's mean colour
+            and old_area.get("bottomPixel") == blue  # the old content, moved 64 px right
+            and all(r.get("mask") for r in layers[1:])
+            and steps == 1
+            and back.get("width") == 200
+            and (back.get("layers") or [{}])[0].get("bounds") == {"x": 0, "y": 0, "width": 200, "height": 150},
             job=st["state"],
             message=st["message"],
-            width=grown.get("width"),
-            layers=[(r["name"], r["x"], r["y"]) for r in grown.get("layers") or []],
-            old_area_pixel=grown.get("pixel"),
+            width=new_area.get("width"),
+            layers=[(r.get("name"), r.get("bounds"), r.get("mask")) for r in layers],
+            background_new_area=new_area.get("bottomPixel"),
+            background_old_area=old_area.get("bottomPixel"),
+            visible_new_area=new_area.get("pixel"),
             undos_to_remove=steps,
         )
 

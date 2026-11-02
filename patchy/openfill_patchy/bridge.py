@@ -13,9 +13,10 @@ expand) back:
   selection's coverage (``doc.selection.getMask``) to files.
 - in: results are kept here (``PatchyImage.ops``) while OpenFill still works on them (seam
   correction, grain, ranking), together with an expand's canvas changes. At the end of the
-  job one run applies them all: the canvas, then each layer (``addLayer`` and
-  ``setPixels``), its mask made from the job's own saved selection or mask
-  (``setLayerMask``, never the live selection) and, for variations, their group. A fresh
+  job one run applies them all: the canvas (``resizeCanvas`` with an offset, as Image >
+  Canvas Size), then each layer (``addLayer`` and ``setPixels``), its mask made from the
+  job's own saved selection or mask (``setLayerMask``, never the live selection) and, for
+  variations, their group. A fresh
   ``get_state`` comes right before it, so the run never meets a token the artist's work
   made stale.
 """
@@ -33,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image, ImageChops, ImageFilter, ImageStat
 
 from openfill import png
 from openfill.geometry import Rect, flatten_over_mean
@@ -76,12 +77,14 @@ class PatchyLayer:
 
 @dataclass
 class CanvasOp:
-    """A canvas change still to be made: the new size, and where the old (0, 0) lands."""
+    """A canvas change still to be made: the new size, where the old (0, 0) lands, and the
+    colour a Background layer gets in the new area."""
 
     width: int
     height: int
     dx: int
     dy: int
+    fill: str = "#ffffff"
 
 
 @dataclass
@@ -162,8 +165,9 @@ if (s) patchy.io.writeImage(A.mask, s);
 patchy.setResult({width: d.width, height: d.height, selection: !!s});
 """
 
-# Canvas changes move the top-level layers (a group's moveTo offsets its contents), then
-# the layers go on top, bottom first, so the first of each op ends up the top one.
+# A canvas change is Image > Canvas Size: the content and the selection move, and a
+# Background layer is filled out to the new canvas. Then the layers go on top, bottom first,
+# so the first of each op ends up the top one.
 INSERT_JS = """
 var d = app.getDocument(A.doc);
 function block(path, x, y, gray) {
@@ -183,9 +187,7 @@ for (var u = 0; u < A.undo; u++) if (!d.undo()) throw new Error("OpenFill's resu
 var made = [];
 A.ops.forEach(function (op) {
   if (op.kind === "canvas") {
-    var top = d.layers.slice();
-    d.resizeCanvas(op.width, op.height);
-    if (op.dx || op.dy) top.forEach(function (l) { l.moveTo(l.x + op.dx, l.y + op.dy); });
+    d.resizeCanvas(op.width, op.height, {x: op.x, y: op.y, fill: op.fill});
     return;
   }
   var group = op.group ? d.addGroup(op.group) : null;
@@ -268,6 +270,17 @@ def grow_mask(mask: Image.Image, grow: int) -> Image.Image:
     if grow:
         mask = mask.filter(ImageFilter.MaxFilter(3))
     return mask
+
+
+def mean_colour(im: Image.Image) -> str:
+    """The alpha-weighted mean colour of ``im`` as ``#rrggbb`` (grey when nothing shows), the
+    colour ``flatten_over_mean`` puts behind transparent pixels."""
+    alpha = im.getchannel("A")
+    total = ImageStat.Stat(alpha).sum[0]
+    if total <= 0:
+        return "#808080"
+    rgb = [ImageStat.Stat(ImageChops.multiply(im.getchannel(c), alpha)).sum[0] for c in "RGB"]
+    return "#" + "".join(f"{min(255, round(v * 255 / total)):02x}" for v in rgb)
 
 
 class PatchyBridge:
@@ -546,7 +559,16 @@ class PatchyBridge:
             rows: list[dict[str, Any]] = []
             for op in ops:
                 if isinstance(op, CanvasOp):
-                    rows.append({"kind": "canvas", "width": op.width, "height": op.height, "dx": op.dx, "dy": op.dy})
+                    rows.append(
+                        {
+                            "kind": "canvas",
+                            "width": op.width,
+                            "height": op.height,
+                            "x": op.dx,
+                            "y": op.dy,
+                            "fill": op.fill,
+                        }
+                    )
                 else:
                     layers = [self._layer_args(layer, files) for layer in op.layers]
                     rows.append({"kind": "layers", "group": op.group, "layers": layers})
@@ -741,8 +763,14 @@ class PatchyBridge:
 
     def resize_canvas(self, image: PatchyImage, new_w: int, new_h: int, off_x: int, off_y: int) -> None:
         """Grow or crop the canvas; ``off_x``/``off_y`` is where the old (0, 0) lands. Made with
-        the results, in the same step."""
-        image.ops.append(CanvasOp(int(new_w), int(new_h), int(off_x), int(off_y)))
+        the results, in the same step. A Background layer is filled out to the new canvas
+        with the image's mean colour (the kind of colour ``export_region`` flattens the new
+        area over for the generator), so a gap the result leaves, such as its feathered edge,
+        is close to its surroundings instead of white. Every round of an expand uses the
+        first round's colour, from the image alone, so the new area is one colour."""
+        earlier = [op.fill for op in image.ops if isinstance(op, CanvasOp)]
+        fill = earlier[0] if earlier else mean_colour(self.visible(image))
+        image.ops.append(CanvasOp(int(new_w), int(new_h), int(off_x), int(off_y), fill))
         image.shift = (image.shift[0] + int(off_x), image.shift[1] + int(off_y))
         image.selection = None  # the job's selection was for the old canvas
 
