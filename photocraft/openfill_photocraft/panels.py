@@ -372,7 +372,7 @@ class EngineView(tk.Frame):
 
         box, _ = field(self, "ComfyUI folder", folder_row)
         box.pack(fill="x", pady=(12, 0))
-        self.autostart = ui.Checkbox(self, "Start the AI engine with PhotoCraft")
+        self.autostart = ui.Checkbox(self, f"Start the AI engine with {bar.host}")
         self.autostart.pack(anchor="w", pady=(12, 0))
 
         def idle_row(box):

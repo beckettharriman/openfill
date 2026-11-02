@@ -47,6 +47,10 @@ The model manager in the steps below is where you get models: in PhotoCraft it's
 
 More in [photocraft/README.md](photocraft/README.md).
 
+**Patchy (prototype)**
+
+OpenFill also runs as a companion app of [Patchy](https://github.com/SethRobinson/Patchy), from its Plugins > Companions menu, with the same panel. It needs a Patchy build with that menu, which is not in a release yet. See [patchy/README.md](patchy/README.md).
+
 **GIMP 3.2**
 
 1. Download `openfill-2.0.0-beta.6.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it, and run `Install OpenFill.cmd` (or drag the `gimp-openfill` folder into GIMP's plug-ins folder; macOS and Linux: `sh install.sh`).

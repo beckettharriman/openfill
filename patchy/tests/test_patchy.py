@@ -1,0 +1,733 @@
+# OpenFill for Patchy
+# SPDX-License-Identifier: Apache-2.0
+"""Unit tests for the Patchy companion: connector client, bridge, Keep and Discard, the
+event watcher and the Companions manifest, against a fake connector (no Patchy, no GPU)."""
+
+from __future__ import annotations
+
+import copy
+import io
+import itertools
+import json
+import os
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path[:0] = [
+    str(ROOT / "patchy"),
+    str(ROOT / "patchy" / "tests"),
+    str(ROOT / "photocraft"),
+    str(ROOT / "gimp-openfill"),
+]
+
+from openfill_patchy import bridge as bridge_module  # noqa: E402
+from openfill_patchy import install  # noqa: E402
+from openfill_patchy.bridge import PatchyBridge  # noqa: E402
+from openfill_patchy.client import COMPANION_ID, PatchyClient, PatchyError, WorkspaceLost, find_connector  # noqa: E402
+from openfill_patchy.service import PatchyService, Watcher  # noqa: E402
+from PIL import Image  # noqa: E402
+
+from openfill.geometry import Rect  # noqa: E402
+
+SCRIPTS = {
+    getattr(bridge_module, name): name
+    for name in ("SNAPSHOT_JS", "INSERT_JS", "SHOW_JS", "REORDER_JS", "REMOVE_JS", "SET_PIXELS_JS", "NEW_IMAGE_JS")
+}
+
+
+def png_bytes(color, size=(64, 48)) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGBA", size, color).save(out, "PNG")
+    return out.getvalue()
+
+
+class Doc:
+    """One document in the fake Patchy: layers (bottom to top), selection and history."""
+
+    def __init__(self, doc_id: str, name: str, width: int, height: int) -> None:
+        self.id, self.name, self.width, self.height = doc_id, name, width, height
+        self.composite = Image.new("RGBA", (width, height), (200, 100, 50, 255))
+        self.selection: Image.Image | None = Image.new("L", (width, height), 0)
+        self.selection.paste(255, (8, 6, 28, 16))
+        self.layers: list[dict] = [{"id": "1", "name": "Background", "x": 0, "y": 0, "visible": True}]
+        self.undo: list[tuple[str, tuple]] = []  # (state id, saved document) per step
+        self.redo: list[tuple[str, tuple]] = []
+        self.state_id = "s0"
+
+    def saved(self) -> tuple:
+        return copy.deepcopy((self.width, self.height, self.layers))
+
+    def restore(self, saved: tuple) -> None:
+        self.width, self.height, self.layers = copy.deepcopy(saved)
+
+    def top(self) -> dict:
+        return self.layers[-1]
+
+    def find(self, layer_id: str, rows: list[dict] | None = None) -> tuple[list[dict], dict]:
+        for row in self.layers if rows is None else rows:
+            if row["id"] == layer_id:
+                return (self.layers if rows is None else rows), row
+            if "children" in row:
+                try:
+                    return self.find(layer_id, row["children"])
+                except KeyError:
+                    pass
+        raise KeyError(layer_id)
+
+    def bounds(self) -> dict | None:
+        box = self.selection.getbbox() if self.selection is not None else None
+        if not box:
+            return None
+        return {"x": box[0], "y": box[1], "width": box[2] - box[0], "height": box[3] - box[1]}
+
+
+def public(rows: list[dict]) -> list[dict]:
+    """Layer rows as get_state reports them: no pixels."""
+    out = []
+    for row in rows:
+        item = {k: v for k, v in row.items() if k not in ("pixels", "mask", "size", "children")}
+        item["hasMask"] = "mask" in row
+        if "children" in row:
+            item["isGroup"], item["children"] = True, public(row["children"])
+        out.append(item)
+    return out
+
+
+class FakePatchy:
+    """``patchy-mcp --attach`` and the Patchy behind it, in this process: newline-delimited
+    JSON-RPC on two pipes, with the tools, state tokens and history steps Patchy has. Scripts
+    are recognised by their text (the bridge's constants) and acted out here."""
+
+    def __init__(self) -> None:
+        self.docs = [Doc("7", "photo.png", 64, 48)]
+        self.active = "7"
+        self.version = 0  # anything the state token covers
+        self.ids = itertools.count(100)
+        self.states = itertools.count(1)
+        self.calls: list[tuple[str, dict]] = []
+        self.initialize: dict = {}
+        self.busy = 0  # answer this many tool calls with "busy"
+        self.disconnect = False  # answer the next edit with "workspace_disconnected"
+        self.fail_insert = (
+            ""  # the next insert fails once: "partial" after its first layer, "after-undo" after its Undos
+        )
+        self.on_call = None  # called with (tool, arguments) before a tool runs (the artist's moves)
+        client_in, self._out = os.pipe()  # the fake writes, the client reads
+        self._in, client_out = os.pipe()
+        self.stdout = os.fdopen(client_in, "rb")
+        self.stdin = os.fdopen(client_out, "wb")
+        self._writer = os.fdopen(self._out, "wb")
+        self._lock = threading.Lock()
+        self.returncode = None
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    # the process face the client sees
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        self.returncode = 0
+        return 0
+
+    def kill(self):
+        self.returncode = -9
+
+    def doc(self, doc_id: str | None = None) -> Doc:
+        return next(d for d in self.docs if d.id == (doc_id or self.active))
+
+    @property
+    def token(self) -> str:
+        return f"nonce/{self.version}"
+
+    def send(self, message: dict) -> None:
+        with self._lock:
+            self._writer.write((json.dumps(message) + "\n").encode())
+            self._writer.flush()
+
+    def emit(self, event: dict) -> None:
+        self.send({"jsonrpc": "2.0", "method": "notifications/patchy/event", "params": event})
+
+    def _serve(self) -> None:
+        with os.fdopen(self._in, "rb") as reader:
+            for line in reader:
+                message = json.loads(line)
+                if "id" not in message:
+                    continue
+                if message["method"] == "initialize":
+                    self.initialize = message["params"]
+                    self.send({"jsonrpc": "2.0", "id": message["id"], "result": {"protocolVersion": "2025-11-25"}})
+                    continue
+                params = message["params"]
+                name, args = params["name"], params.get("arguments") or {}
+                self.calls.append((name, args))
+                try:
+                    data, error = self.tool(name, args)
+                except Exception as err:  # noqa: BLE001
+                    data, error = {"error": "operation_failed", "message": str(err)}, True
+                self.send(
+                    {"jsonrpc": "2.0", "id": message["id"], "result": {"isError": error, "structuredContent": data}}
+                )
+        self.returncode = 0
+
+    def state(self) -> dict:
+        documents = []
+        for d in self.docs:
+            bounds = d.bounds()
+            documents.append(
+                {
+                    "id": d.id,
+                    "name": d.name,
+                    "width": d.width,
+                    "height": d.height,
+                    "historyStateId": d.state_id,
+                    "canUndo": bool(d.undo),
+                    "canRedo": bool(d.redo),
+                    "selection": {"exists": bounds is not None, **({"bounds": bounds} if bounds else {})},
+                    "layers": public(d.layers),
+                }
+            )
+        return {"activeDocumentId": self.active, "documents": documents, "stateToken": self.token}
+
+    def step(self, d: Doc) -> None:
+        """A new history step (the run's one snapshot)."""
+        d.undo.append((d.state_id, d.saved()))
+        d.redo.clear()
+        d.state_id = f"s{next(self.states)}"
+        self.version += 1
+
+    def do_undo(self, d: Doc, redo: bool = False) -> bool:
+        source, target = (d.redo, d.undo) if redo else (d.undo, d.redo)
+        if not source:
+            return False
+        state_id, saved = source.pop()
+        target.append((d.state_id, d.saved()))
+        d.state_id = state_id
+        d.restore(saved)
+        self.version += 1
+        return True
+
+    def tool(self, name: str, args: dict) -> tuple[dict, bool]:
+        if self.on_call:
+            self.on_call(name, args)
+        if name == "get_info":
+            return {"workspace": "attached", "workspaceAvailable": True, "mainWindow": {"nativeId": "4242"}}, False
+        if self.busy:
+            self.busy -= 1
+            return {"error": "busy", "message": "Finish the current gesture"}, True
+        if name == "get_state":
+            return self.state(), False
+        if args.get("expectedState") != self.token:
+            return {"error": "stale_state", "message": "The workspace changed", "state": self.state()}, True
+        if self.disconnect:
+            self.disconnect = False
+            return {"error": "workspace_disconnected", "message": "gone", "retrySafe": False}, True
+        if name in ("undo", "redo"):
+            changed = self.do_undo(self.doc(args["documentId"]), redo=name == "redo")
+            return {"changed": changed, "state": self.state()}, False
+        first, body = args["code"].split("\n", 1)
+        a = json.loads(first[len("var A = ") : -1])
+        kind = SCRIPTS[body]
+        try:
+            result = getattr(self, "run_" + kind.lower())(a)
+        except Exception as err:  # noqa: BLE001 - a script error: Patchy reports "failed"
+            return {"status": "failed", "logs": [{"message": str(err)}], "state": self.state()}, True
+        return {"status": "done", "result": result, "state": self.state()}, False
+
+    # the scripts --------------------------------------------------------------------
+
+    def run_snapshot_js(self, a: dict) -> dict:
+        d = self.doc(a["doc"])
+        d.composite.save(a["visible"])
+        if d.selection is not None and d.selection.getbbox():
+            d.selection.save(a["mask"])
+        return {
+            "width": d.width,
+            "height": d.height,
+            "selection": d.selection is not None and bool(d.selection.getbbox()),
+        }
+
+    def run_insert_js(self, a: dict) -> dict:
+        d = self.doc(a["doc"])
+        blocks = {}
+        for op in a["ops"]:
+            for s in op.get("layers") or []:
+                with Image.open(s["pixels"]) as im:
+                    blocks[s["pixels"]] = im.convert("RGBA").copy()
+                if s.get("mask"):
+                    with Image.open(s["mask"]) as im:
+                        blocks[s["mask"]] = im.convert("L").copy()
+        for _ in range(a["undo"]):
+            if not self.do_undo(d):
+                raise RuntimeError("OpenFill's result is no longer the last step")
+        if self.fail_insert == "after-undo":
+            self.fail_insert = ""  # once
+            raise RuntimeError("addLayer: out of memory")
+        self.step(d)
+        made = []
+        for op in a["ops"]:
+            if op["kind"] == "canvas":
+                d.width, d.height = op["width"], op["height"]
+                for row in d.layers:
+                    for moved in row.get("children", [row]):
+                        moved["x"] += op["dx"]
+                        moved["y"] += op["dy"]
+                continue
+            group = None
+            if op["group"]:
+                group = {
+                    "id": str(next(self.ids)),
+                    "name": op["group"],
+                    "visible": True,
+                    "children": [],
+                    "x": 0,
+                    "y": 0,
+                }
+                d.layers.append(group)
+            ids = []
+            for s in reversed(op["layers"]):
+                row = {
+                    "id": str(next(self.ids)),
+                    "name": s["name"],
+                    "x": s["x"],
+                    "y": s["y"],
+                    "visible": s["visible"],
+                    "pixels": blocks[s["pixels"]].tobytes(),
+                    "size": blocks[s["pixels"]].size,
+                }
+                if s.get("mask"):
+                    m = blocks[s["mask"]]
+                    row["mask"] = {
+                        "x": s["x"],
+                        "y": s["y"],
+                        "size": m.size,
+                        "data": m.tobytes(),
+                        "feather": s["feather"],
+                    }
+                (group["children"] if group else d.layers).append(row)
+                if self.fail_insert == "partial":
+                    self.fail_insert = ""  # once
+                    raise RuntimeError("setLayerMask: the layer's pixels are locked")
+                ids.insert(0, row["id"])
+            made.append({"group": group["id"] if group else None, "layers": ids})
+        return {"ops": made}
+
+    def run_show_js(self, a: dict) -> bool:
+        d = self.doc(a["doc"])
+        self.step(d)
+        for row in a["layers"]:
+            d.find(row["id"])[1]["visible"] = row["visible"]
+        return True
+
+    def run_remove_js(self, a: dict) -> bool:
+        d = self.doc(a["doc"])
+        self.step(d)
+        for layer_id in a["ids"]:
+            rows, row = d.find(layer_id)
+            rows.remove(row)
+        return True
+
+    def run_reorder_js(self, a: dict) -> bool:
+        d = self.doc(a["doc"])
+        self.step(d)
+        for row in a["order"]:
+            rows, layer = d.find(row["id"])
+            rows.remove(layer)
+            rows.append(layer)
+            layer["name"], layer["visible"] = row["name"], row["visible"]
+        return True
+
+    def run_set_pixels_js(self, a: dict) -> bool:
+        d = self.doc(a["doc"])
+        self.step(d)
+        with Image.open(a["pixels"]) as im:
+            d.find(a["layer"])[1]["pixels"] = im.convert("RGBA").tobytes()
+        return True
+
+    def run_new_image_js(self, a: dict) -> dict:
+        with Image.open(a["images"][0]["pixels"]) as im:
+            size = im.size
+        d = Doc(str(next(self.ids)), a["name"], *size)
+        d.selection = None
+        d.layers[0]["name"] = a["images"][0]["name"]
+        for extra in a["images"][1:]:
+            d.layers.append({"id": str(next(self.ids)), "name": extra["name"], "x": 0, "y": 0, "visible": False})
+        self.docs.append(d)
+        self.active = d.id
+        self.version += 1
+        return {"doc": d.id}
+
+    # the artist's moves -------------------------------------------------------------------
+
+    def select(self, box: tuple[int, int, int, int] | None) -> None:
+        d = self.doc()
+        d.selection = Image.new("L", (d.width, d.height), 0)
+        if box:
+            d.selection.paste(255, box)
+        self.version += 1
+
+    def edit(self) -> None:
+        """An edit of the artist's own (a rename, say): a step OpenFill did not make."""
+        d = self.doc()
+        self.step(d)
+        d.layers[0]["name"] = "Renamed"
+
+
+class FakeClient(PatchyClient):
+    def __init__(self, fake: FakePatchy, **kwargs) -> None:
+        super().__init__(["patchy-mcp", "--attach"], **kwargs)
+        self.fake = fake
+
+    def _spawn(self, kwargs):
+        return self.fake
+
+
+class Fixture(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.exchange = Path(self.tmp.name) / "exchange"
+        self.fake = FakePatchy()
+        self.events: list[dict] = []
+        self.client = FakeClient(self.fake, on_event=self.events.append)
+        self.client.start()
+        self.bridge = PatchyBridge(self.client, self.exchange, Path(self.tmp.name))
+        self.image = self.bridge.track(self.bridge.active_image())
+        self.target = self.fake.doc()
+
+    def tearDown(self):
+        self.client.close()
+        self.tmp.cleanup()
+
+    def edits(self) -> list[str]:
+        return [name for name, _args in self.fake.calls if name != "get_state"]
+
+    def fill(self, variations=1, grow=4, feather=6.0, name="Generative Fill"):
+        """A fill as ``App.generative_fill`` makes it: read, wait for the generator, insert."""
+        self.bridge.selection_rect(self.image)
+        self.bridge.export_region(self.image, Rect(0, 0, 64, 48))
+        self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        colors = ["red", "blue", "green", "white", "black"][:variations]
+        layers = self.bridge.insert_results(
+            self.image, [png_bytes(c) for c in colors], Rect(0, 0, 64, 48), name, feather, None, grow=grow
+        )
+        return layers
+
+
+class ClientTests(Fixture):
+    def test_initialize_asks_for_events_and_names_the_companion(self):
+        experimental = self.fake.initialize["capabilities"]["experimental"]
+        self.assertEqual(experimental, {"patchy/events": True, "patchy/companion": COMPANION_ID})
+        self.assertEqual(self.fake.initialize["protocolVersion"], "2025-11-25")
+
+    def test_busy_is_sent_again_until_patchy_answers(self):
+        self.fake.busy = 3
+        waits = []
+        self.client.on_wait = waits.append
+        state = self.client.get_state()
+        self.assertEqual(state["activeDocumentId"], "7")
+        self.assertEqual([n for n, _a in self.fake.calls].count("get_state"), 2 + 3)  # the fixture's, 3 busy, 1 answer
+        self.assertEqual(waits, [True, False])
+
+    def test_an_edit_lost_with_the_workspace_is_never_sent_again(self):
+        self.client.get_state()
+        self.fake.disconnect = True
+        before = len(self.fake.calls)
+        with self.assertRaises(WorkspaceLost):
+            self.client.run_script("var A = {};\n" + bridge_module.REMOVE_JS)
+        self.assertEqual(len(self.fake.calls), before + 1)  # one try, no replay
+        self.assertTrue(self.client.lost)
+
+    def test_a_stale_edit_is_sent_again_with_the_newer_token(self):
+        self.client.get_state()
+        self.fake.version += 1  # the artist did something meanwhile
+        layers = self.fill()
+        self.fake.version += 1
+        self.bridge.finish(self.image)
+        self.assertEqual(len(self.target.undo), 1)
+        self.assertEqual(layers[0].id, self.target.top()["id"])
+
+    def test_events_arrive_in_order_on_their_own_thread(self):
+        self.fake.emit({"type": "selectionChanged", "documentId": "7", "bounds": None})
+        self.fake.emit({"type": "companionCommand", "companion": COMPANION_ID, "action": "show"})
+        for _ in range(100):
+            if len(self.events) == 2:
+                break
+            time.sleep(0.01)
+        self.assertEqual([e["type"] for e in self.events], ["selectionChanged", "companionCommand"])
+
+    def test_the_connector_is_found_from_patchys_variable_first(self):
+        with mock.patch.dict(os.environ, {"PATCHY_MCP": r"C:\Patchy\patchy-mcp.exe"}):
+            self.assertEqual(find_connector(), [r"C:\Patchy\patchy-mcp.exe", "--attach"])
+            self.assertEqual(find_connector("/opt/patchy-mcp"), ["/opt/patchy-mcp", "--attach"])
+
+
+class BridgeTests(Fixture):
+    def test_reading_leaves_the_document_unchanged(self):
+        self.assertEqual(self.bridge.selection_rect(self.image), Rect(8, 6, 20, 10))
+        _png, raw = self.bridge.export_selection_mask(self.image, Rect(0, 0, 32, 24))
+        self.assertEqual(len(raw), 32 * 24)
+        self.assertEqual(raw[6 * 32 + 8], 255)  # inside the selection
+        self.assertEqual(raw[0], 0)
+        _png, flat = self.bridge.export_region(self.image, Rect(48, 0, 32, 24), transparent_outside=True)
+        self.assertEqual(set(flat[3::4]), {255})  # past the canvas: flattened over the mean colour
+        self.assertEqual(self.target.undo, [])
+        self.assertEqual(self.edits().count("execute_script"), 1)  # one run serves both reads
+        self.assertEqual(list(self.exchange.iterdir()), [])
+
+    def test_a_fill_is_one_step_with_the_jobs_own_mask(self):
+        layers = self.fill(grow=2, feather=6.0)
+        self.assertIsNone(layers[0].id)  # nothing in Patchy yet
+        self.fake.select((40, 30, 50, 40))  # the artist selects something else while it works
+        self.bridge.finish(self.image)
+        self.assertEqual(len(self.target.undo), 1)  # one Undo takes it back
+        top = self.target.top()
+        self.assertEqual((top["name"], top["id"], top["visible"]), ("Generative Fill", layers[0].id, True))
+        mask = Image.frombytes("L", top["mask"]["size"], top["mask"]["data"])
+        self.assertEqual(mask.getbbox(), (6, 4, 30, 18))  # the job's selection (8, 6, 28, 16), grown by 2
+        self.assertEqual(top["mask"]["feather"], 3.0)  # Patchy's sigma: half GIMP's feather
+        self.assertEqual(self.target.bounds(), {"x": 40, "y": 30, "width": 10, "height": 10})  # untouched
+        self.assertEqual(list(self.exchange.iterdir()), [])
+        self.client.get_state()
+        self.client.undo("7")
+        self.assertEqual([r["name"] for r in self.target.layers], ["Background"])
+
+    def test_variations_reach_the_document_in_one_step_best_first(self):
+        layers = self.fill(variations=3, name="Fill")
+        ordered = self.bridge.reorder_variations(self.image, layers, [2, 0, 1], "Fill")
+        self.assertEqual([x.name for x in ordered], ["Fill (1)", "Fill (2)", "Fill (3)"])
+        self.bridge.finish(self.image)
+        self.assertEqual(len(self.target.undo), 1)
+        group = self.target.top()
+        self.assertEqual(group["name"], "Fill")
+        children = list(reversed(group["children"]))  # top first
+        self.assertEqual([c["name"] for c in children], ["Fill (1)", "Fill (2)", "Fill (3)"])
+        self.assertEqual([c["visible"] for c in children], [True, False, False])
+        self.assertEqual(children[0]["pixels"][:4], bytes([0, 128, 0, 255]))  # green, ranked best
+        self.assertEqual([x.id for x in ordered], [c["id"] for c in children])
+        self.assertTrue(all(x.group == group["id"] for x in ordered))
+
+    def test_an_expand_is_one_step_and_later_rounds_see_the_earlier(self):
+        # round one: 16 px more on the right
+        self.bridge.export_region(self.image, Rect(32, 0, 48, 48), transparent_outside=True)
+        self.bridge.resize_canvas(self.image, 80, 48, 0, 0)
+        mask = bytes([0] * 32 + [255] * 16) * 48
+        self.bridge.insert_results(
+            self.image, [png_bytes("blue", (48, 48))], Rect(32, 0, 48, 48), "Expand", 0.0, None, mask_pixels=mask
+        )
+        self.assertEqual((self.image.get_width(), self.image.get_height()), (80, 48))
+        # round two reads the canvas as round one left it, then 8 px more on the left
+        _png, flat = self.bridge.export_region(self.image, Rect(0, 0, 80, 48))
+        self.assertEqual(flat[(10 * 80 + 70) * 4 : (10 * 80 + 70) * 4 + 3], bytes([0, 0, 255]))
+        self.bridge.resize_canvas(self.image, 88, 48, 8, 0)
+        self.bridge.insert_results(
+            self.image,
+            [png_bytes("red", (24, 48))],
+            Rect(0, 0, 24, 48),
+            "Expand",
+            0.0,
+            None,
+            mask_pixels=bytes([255] * 24 * 48),
+        )
+        self.assertEqual(self.target.undo, [])
+        self.bridge.finish(self.image)
+        self.assertEqual(len(self.target.undo), 1)  # canvas and both rounds, one step
+        self.assertEqual((self.target.width, self.target.height), (88, 48))
+        by_name = [(r["name"], r["x"]) for r in self.target.layers]
+        self.assertEqual(by_name, [("Background", 8), ("Expand", 40), ("Expand", 0)])  # round one moved with the canvas
+
+    def test_a_failed_insert_leaves_the_document_as_it_was(self):
+        self.fill(variations=2)
+        self.fake.fail_insert = "partial"
+        with self.assertRaises(PatchyError):
+            self.bridge.finish(self.image)
+        self.assertEqual([r["name"] for r in self.target.layers], ["Background"])  # the half step was undone
+        self.assertEqual(self.target.undo, [])
+
+    def test_a_cancelled_job_leaves_nothing(self):
+        self.fill()
+        self.bridge.discard(self.image)
+        self.bridge.finish(self.image)
+        self.assertEqual(self.target.undo, [])
+        self.assertNotIn(
+            "INSERT",
+            " ".join(SCRIPTS[c["code"].split("\n", 1)[1]] for n, c in self.fake.calls if n == "execute_script"),
+        )
+
+    def test_text_to_image_opens_a_new_document(self):
+        image = self.bridge.new_image_from_pngs([png_bytes("red"), png_bytes("blue")], "Text to Image: a fox", None)
+        d = self.fake.doc(image.id)
+        self.assertEqual([r["name"] for r in d.layers], ["Text to Image: a fox (1)", "Text to Image: a fox (2)"])
+        self.assertEqual([r["visible"] for r in d.layers], [True, False])
+
+
+class KeepTests(Fixture):
+    def service(self, variations=3):
+        layers = self.fill(variations=variations, name="Fill")
+        self.bridge.finish(self.image)
+        from openfill_photocraft.service import JobState
+
+        service = PatchyService.__new__(PatchyService)
+        service.bridge, service.client, service.image, service.layers = self.bridge, self.client, self.image, layers
+        service.state = JobState()
+        service.app = SimpleNamespace(log=SimpleNamespace(warning=lambda *a: None))
+        return service, layers
+
+    def test_keep_after_picking_is_still_one_step(self):
+        service, _layers = self.service()
+        service.show_variation(2)
+        service.show_variation(1)
+        service.keep("selected")
+        self.assertEqual(len(self.target.undo), 1)  # one Undo takes it back
+        top = self.target.top()
+        self.assertEqual((top["name"], top["visible"], "children" in top), ("Fill", True, False))
+        self.assertEqual(top["pixels"][:4], bytes([0, 0, 255, 255]))  # the second variation, blue
+        self.assertEqual(service.layers[0].id, top["id"])
+        self.assertTrue(top.get("mask"))
+
+    def test_discard_leaves_no_step(self):
+        service, _layers = self.service()
+        service.show_variation(1)
+        service.keep("none")
+        self.assertEqual(self.target.undo, [])
+        self.assertEqual([r["name"] for r in self.target.layers], ["Background"])
+
+    def test_after_an_edit_of_the_artists_nothing_is_undone(self):
+        service, _layers = self.service()
+        self.fake.edit()
+        service.keep("selected")
+        self.assertEqual(len(self.target.undo), 3)  # the result, the artist's edit, the delete
+        self.assertEqual(self.target.layers[0]["name"], "Renamed")
+        self.assertEqual(len(self.target.top()["children"]), 1)
+
+        service, _layers = self.service()
+        self.fake.edit()
+        service.keep("none")  # the whole group goes, in one step
+        self.assertEqual(self.target.top()["name"], "Fill")  # only the first job's kept layer is left
+        self.assertNotIn("Fill (1)", [r["name"] for r in self.target.layers])
+
+    def test_a_keep_that_fails_never_loses_the_variations(self):
+        for failure in ("after-undo", "partial"):
+            with self.subTest(failure):
+                self.fake = FakePatchy()
+                self.client = FakeClient(self.fake)
+                self.client.start()
+                self.bridge = PatchyBridge(self.client, self.exchange, Path(self.tmp.name))
+                self.image = self.bridge.track(self.bridge.active_image())
+                self.target = self.fake.doc()
+                service, _layers = self.service()
+                service.show_variation(1)
+                self.fake.fail_insert = failure
+                with self.assertRaises(PatchyError):
+                    service.keep("selected")
+                self.fake.fail_insert = ""
+                group = self.target.top()
+                self.assertEqual([c["name"] for c in group["children"]], ["Fill (3)", "Fill (2)", "Fill (1)"])
+                self.assertEqual(len([r for r in self.target.layers if "children" in r]), 1)  # once, not twice
+                self.assertTrue(self.bridge.unchanged(self.image))  # Keep can be tried again
+                service.keep("selected")
+                self.assertEqual(self.target.top()["name"], "Fill")
+                self.assertEqual(len(self.target.undo), 1)
+                self.client.close()
+
+
+class WatcherTests(Fixture):
+    def test_events_keep_the_panel_current_without_polling(self):
+        picks = []
+        watcher = Watcher(self.client, picks.append, fallback=60.0)
+        self.client.on_event = watcher.on_event
+        watcher.poll()
+        self.assertEqual(watcher.snapshot()["selection"], [8, 6, 20, 10])
+        reads = len(self.fake.calls)
+        self.fake.emit(
+            {"type": "selectionChanged", "documentId": "7", "bounds": {"x": 1, "y": 2, "width": 3, "height": 4}}
+        )
+        self.fake.emit({"type": "companionCommand", "companion": COMPANION_ID, "action": "show"})
+        self.fake.emit({"type": "companionCommand", "companion": "io.example.other", "action": "show"})
+        for _ in range(100):
+            if picks and watcher.snapshot()["selection"] == [1, 2, 3, 4]:
+                break
+            time.sleep(0.01)
+        self.assertEqual(watcher.snapshot()["selection"], [1, 2, 3, 4])
+        self.assertEqual(picks, ["panel"])
+        self.assertEqual(len(self.fake.calls), reads)  # no get_state for either
+
+    def test_another_document_is_read_on_the_watchers_thread(self):
+        watcher = Watcher(self.client, lambda action: None, interval=0.01, fallback=60.0)
+        self.client.on_event = watcher.on_event
+        watcher.start()
+        try:
+            other = Doc("9", "other.png", 10, 20)
+            self.fake.docs.append(other)
+            self.fake.active = "9"
+            self.fake.emit({"type": "activeDocumentChanged", "documentId": "9"})
+            for _ in range(200):
+                if (watcher.snapshot().get("document") or {}).get("name") == "other.png":
+                    break
+                time.sleep(0.01)
+            self.assertEqual(
+                watcher.snapshot()["document"], {"name": "other.png", "width": 10, "height": 20, "mode": "RGB"}
+            )
+            self.assertEqual(watcher.native_id, 4242)  # read for the tether
+        finally:
+            watcher.stop()
+
+
+class InstallTests(unittest.TestCase):
+    def test_manifest_has_patchys_keys_and_uninstall_leaves_others(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "companions"
+            path = install.install(sys.executable, folder)
+            entry = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(set(entry), {"id", "name", "menuLabel", "command", "args", "workingDirectory"})
+            self.assertEqual(entry["id"], COMPANION_ID)
+            self.assertEqual(entry["args"], ["-m", "openfill_patchy"])
+            self.assertTrue((Path(entry["workingDirectory"]) / "openfill_patchy" / "__main__.py").is_file())
+            self.assertTrue(install.uninstall(folder))
+            self.assertFalse(path.exists())
+            path.write_text(json.dumps({"id": "io.example.other"}), encoding="utf-8")
+            self.assertFalse(install.uninstall(folder))  # not ours: left alone
+            self.assertTrue(path.exists())
+
+    def test_folder_is_patchys_app_data(self):
+        with (
+            mock.patch.object(sys, "platform", "win32"),
+            mock.patch.dict(os.environ, {"APPDATA": r"C:\Users\a\AppData\Roaming"}),
+        ):
+            self.assertEqual(
+                install.companions_dir(), Path(r"C:\Users\a\AppData\Roaming") / "RTsoft" / "Patchy" / "companions"
+            )
+
+
+class FullJobTests(Fixture):
+    """``openfill.app.App`` itself, with the stub generator in place of ComfyUI."""
+
+    def test_generative_fill_inserts_an_inverted_masked_layer_one_undo_removes(self):
+        import stub_backend
+
+        from openfill.app import App
+
+        app = App(interactive=False, io=self.bridge, runner_cls=stub_backend.QuietRunner)
+        stub_backend.install(app)
+        app.settings.seam_correction = app.settings.grain_match = False
+        layers = app.generative_fill(self.image, "a red door", "", 1, 1.0, 7, "active")
+        self.bridge.finish(self.image)
+        self.assertEqual(len(self.target.undo), 1)
+        top = self.target.top()
+        self.assertEqual(top["id"], layers[0].id)
+        pixels = Image.frombytes("RGBA", top["size"], top["pixels"])
+        r, g, b, _a = pixels.getpixel((top["size"][0] // 2, top["size"][1] // 2))
+        self.assertEqual((r, g, b), (55, 155, 205))  # (200, 100, 50) inverted
+        self.assertTrue(top.get("mask"))
+        self.client.get_state()
+        self.client.undo("7")
+        self.assertEqual([r["name"] for r in self.target.layers], ["Background"])
+
+
+if __name__ == "__main__":
+    unittest.main()
