@@ -128,9 +128,9 @@ def find_connector(explicit: str | None = None) -> list[str] | None:
     for candidate in (explicit, os.environ.get("PATCHY_MCP")):
         if candidate:
             return connector_command(candidate)
-    # Started from the Companions menu of Patchy's AppImage: Patchy hands over no PATCHY_MCP
-    # there (its connector is the AppImage file itself), but the AppImage runtime names that
-    # file in APPIMAGE, which a program Patchy starts inherits.
+    # Started from the Companions menu of an AppImage Patchy that predates PATCHY_MCP there:
+    # current ones set PATCHY_MCP to the .AppImage file (above), older builds left it unset,
+    # but the AppImage runtime names that file in APPIMAGE, which a program Patchy starts inherits.
     appimage = os.environ.get("APPIMAGE")
     if appimage and os.environ.get("PATCHY_COMPANION_ID") and is_appimage(appimage):
         return [appimage, "patchy-mcp", "--attach"]
