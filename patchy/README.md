@@ -30,7 +30,11 @@ Pick **Plugins > Companions > OpenFill** in Patchy. The first time, Patchy start
 
 Every result is a new layer with a layer mask (variations go into a group), and it is **one step** in Patchy's history: one Undo takes a fill or a whole expand back. **Keep** leaves it one step, and **Discard** takes it back completely, as long as you have not changed the document since. After an edit of your own, Keep and Discard delete layers instead, so your edit is never undone.
 
-The panel follows your selection as you change it. On Windows it stays with Patchy's window: above it, and hidden when Patchy is minimized. Elsewhere it floats. OpenFill stops when Patchy closes.
+The panel follows your selection as you change it. On Windows it stays with Patchy's window: above it, and hidden when Patchy is minimized. Elsewhere it floats.
+
+On Windows, Generate, Keep, Keep all and Discard give the keyboard back to Patchy, so its shortcuts work without a click on the canvas first. Opening the panel from the menu leaves the keyboard in the prompt, and a dialog of OpenFill's keeps it. On macOS and Linux the keyboard stays in the panel.
+
+OpenFill stops when Patchy closes, or when you pick **Plugins > Companions > Quit OpenFill**. A ComfyUI that OpenFill started stops with it, unless OpenFill for GIMP or PhotoCraft still uses it; one you started yourself keeps running.
 
 ## Models
 
@@ -60,7 +64,7 @@ Patchy has a companion-app interface instead of an in-process plug-in: OpenFill 
 | Put the result in the document | one script run: `addLayer`, `setPixels`, `setLayerMask`, `addGroup` and `moveLayers` for variations. One history step |
 | Expand | `resizeCanvas` with an offset and a fill, in that same run |
 | Keep and Discard | Keep: one run that undoes OpenFill's step (`doc.undo`) and adds only the chosen layer. Discard: the `undo` tool. Both only while the history is as OpenFill left it; after an edit of your own, a run that deletes layers |
-| Selection and menu | Patchy's events (`selectionChanged`, `companionCommand`), so nothing is polled |
+| Selection and menu | Patchy's events (`selectionChanged`, `companionCommand` with `show` or `quit`), so nothing is polled |
 
 The result is kept in OpenFill while the seam correction, grain matching and ranking run, and reaches Patchy only at the end. Every edit carries Patchy's state token from just before it, so an edit never lands on a document that changed under it, and Keep or Discard never undo a step you made. A request Patchy reports as lost is never sent again.
 

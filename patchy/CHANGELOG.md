@@ -10,3 +10,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add OpenFill for Patchy 0.1.0 (prototype): the OpenFill panel as a Patchy companion app, started from Plugins > Companions, with each result one step in Patchy's history.
 - Grow the canvas for Expand with Patchy's `resizeCanvas` offset, so the Background layer covers the new canvas, filled with the image's mean colour.
 - Say Patchy is not answering only after it has stayed busy for a few seconds, so dragging a selection's handles no longer flashes the warning.
+- Quit OpenFill from Patchy's Plugins > Companions menu; it stops the way it does when Patchy closes.
+- Give the keyboard back to Patchy after Generate, Keep, Keep all or Discard on Windows, so Patchy's shortcuts work without a click.

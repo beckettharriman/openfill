@@ -28,6 +28,11 @@ from openfill_photocraft.service import Service
 
 from .bridge import PatchyBridge, PatchyImage
 from .client import COMPANION_ID, PatchyClient, PatchyError, WorkspaceLost
+from .focus import FocusReturn
+
+# What Plugins > Companions may ask of a running OpenFill: "show" the panel (or a mode of it),
+# or "quit". Anything else is ignored.
+PANEL_ACTIONS = ("show", "panel", "fill", "remove", "expand", "txt2img")
 
 
 class PatchyService(Service):
@@ -38,6 +43,7 @@ class PatchyService(Service):
     def __init__(self, client: PatchyClient, bridge: PatchyBridge) -> None:
         super().__init__(client, bridge)  # type: ignore[arg-type] - the client is only kept
         self.image: PatchyImage | None = None  # type: ignore[assignment]
+        self.focus: FocusReturn | None = None  # set by the launcher when there is a panel
 
     def _find_comfy(self) -> None:
         """First start: the ComfyUI OpenFill for PhotoCraft or for GIMP uses, or one found here."""
@@ -64,6 +70,16 @@ class PatchyService(Service):
     def _unchanged_since_job(self) -> bool:
         return self.image is not None and self.bridge.unchanged(self.image)
 
+    def start(self, kind: str, params: dict[str, Any]) -> None:
+        """Generate (and Remove's immediate run from the menu): the job starts, and Patchy
+        gets the keyboard back."""
+        super().start(kind, params)
+        self._hand_back()
+
+    def _hand_back(self) -> None:
+        if self.focus is not None:
+            self.focus.request()
+
     def show_variation(self, index: int) -> None:
         if not self.image or not (0 <= index < len(self.layers)):
             raise RuntimeError("No variations to pick from.")
@@ -76,6 +92,7 @@ class PatchyService(Service):
         take the result back."""
         if not self.image or not self.layers:
             return
+        self._hand_back()  # the click was in the panel; Patchy gets the keyboard back
         image, shown = self.image, self.state.shown
         if which == "all":
             pass
@@ -114,6 +131,7 @@ class Watcher:
 
     client: PatchyClient
     on_pick: Callable[[str], None]
+    on_quit: Callable[[], None] | None = None  # Plugins > Companions > Quit OpenFill
     interval: float = 0.25
     fallback: float = 10.0
     info: DocInfo = field(default_factory=DocInfo)
@@ -141,8 +159,14 @@ class Watcher:
         """One ``notifications/patchy/event`` (called on the client's event thread)."""
         kind = event.get("type")
         if kind == "companionCommand":
-            if event.get("companion") in (None, COMPANION_ID):
-                self.on_pick(str(event.get("action") or "panel").replace("show", "panel"))
+            if event.get("companion") not in (None, COMPANION_ID):
+                return
+            action = str(event.get("action") or "show")
+            if action == "quit":
+                if self.on_quit is not None:
+                    self.on_quit()
+            elif action in PANEL_ACTIONS:
+                self.on_pick("panel" if action == "show" else action)
             return
         if kind == "selectionChanged":
             bounds = event.get("bounds")

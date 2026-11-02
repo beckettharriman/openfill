@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Start OpenFill next to a running Patchy: attach through Patchy's connector and show the
 OpenFill panel. Patchy starts it from Plugins > Companions > OpenFill (and sends a running
-one ``companionCommand`` instead); it can also be started by hand while Patchy is open.
+one ``companionCommand`` instead; "quit" from that menu ends it as Patchy closing does). It
+can also be started by hand while Patchy is open.
 
     python -m openfill_patchy [--connector PATH] [--page] [--no-bar]
 """
@@ -12,7 +13,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -49,6 +52,12 @@ def tell(title: str, text: str) -> None:
             import ctypes
 
             ctypes.windll.user32.MessageBoxW(None, text, title, 0x40 | 0x10000)
+
+
+def until_quit(alive: Callable[[], bool], quit_asked: threading.Event) -> Callable[[], bool]:
+    """``alive`` that also turns false when Patchy's menu asks OpenFill to quit, so a quit
+    ends OpenFill the same way as Patchy closing."""
+    return lambda: not quit_asked.is_set() and alive()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -109,7 +118,8 @@ def main(argv: list[str] | None = None) -> int:
 
     bridge = PatchyBridge(client, exchange, profile)
     service = PatchyService(client, bridge)
-    watcher = holder["watcher"] = Watcher(client, picked)
+    quit_asked = threading.Event()
+    watcher = holder["watcher"] = Watcher(client, picked, on_quit=quit_asked.set)
     watcher.native_id = int((info.get("mainWindow") or {}).get("nativeId") or 0)
     service.watcher = watcher
     client.on_wait = watcher.set_waiting
@@ -127,6 +137,16 @@ def main(argv: list[str] | None = None) -> int:
             tether = PatchyTether(lambda: watcher.native_id)
             bar = Bar(service, watcher, url, profile, host="Patchy", reopen=REOPEN, tether=tether)
             holder["bar"] = bar
+            if sys.platform == "win32":
+                from openfill_patchy.focus import FocusReturn
+
+                panel: dict[str, int] = {}
+
+                def read_panel() -> None:  # on the Tk thread; the panel's window lives as long as OpenFill
+                    panel["hwnd"] = int(bar.root.wm_frame(), 16)
+
+                bar.call_soon(read_panel)
+                service.focus = FocusReturn(lambda: watcher.native_id, lambda: panel.get("hwnd", 0), log=print)
         except Exception as err:  # noqa: BLE001 - no Tk or no display: use the page
             import traceback
 
@@ -149,13 +169,17 @@ def main(argv: list[str] | None = None) -> int:
 
         webbrowser.open(url + "#fill", new=2)
 
+    alive = until_quit(client.alive, quit_asked)
     try:
         if bar is not None:
-            bar.run(client.alive)
+            bar.run(alive)
         else:
-            while client.alive():
+            while alive():
                 time.sleep(1.0)
-        print("Patchy was closed; OpenFill stops too.")
+        if quit_asked.is_set():
+            print("Quit from Patchy's menu.")
+        else:
+            print("Patchy was closed; OpenFill stops too.")
     except KeyboardInterrupt:
         pass
     finally:

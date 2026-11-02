@@ -27,11 +27,13 @@ sys.path[:0] = [
     str(ROOT / "gimp-openfill"),
 ]
 
+from openfill_patchy import __main__ as launch  # noqa: E402
 from openfill_patchy import bridge as bridge_module  # noqa: E402
 from openfill_patchy import client as client_module  # noqa: E402
 from openfill_patchy import install  # noqa: E402
 from openfill_patchy.bridge import PatchyBridge  # noqa: E402
 from openfill_patchy.client import COMPANION_ID, PatchyClient, PatchyError, WorkspaceLost, find_connector  # noqa: E402
+from openfill_patchy.focus import FocusReturn  # noqa: E402
 from openfill_patchy.service import PatchyService, Watcher  # noqa: E402
 from PIL import Image  # noqa: E402
 
@@ -650,7 +652,27 @@ class KeepTests(Fixture):
         service.bridge, service.client, service.image, service.layers = self.bridge, self.client, self.image, layers
         service.state = JobState()
         service.app = SimpleNamespace(log=SimpleNamespace(warning=lambda *a: None))
+        service.focus = mock.Mock()
         return service, layers
+
+    def test_keep_and_discard_hand_the_keyboard_back_to_patchy(self):
+        service, _layers = self.service()
+        service.keep("all")
+        self.assertEqual(service.focus.request.call_count, 1)
+        service.keep("none")
+        self.assertEqual(service.focus.request.call_count, 2)
+
+    def test_generate_hands_the_keyboard_back_once_the_job_has_started(self):
+        service, _layers = self.service()
+        with mock.patch("openfill_photocraft.service.Service.start") as started:
+            service.start("fill", {"prompt": "a door"})
+        started.assert_called_once()
+        service.focus.request.assert_called_once()
+        service.focus.reset_mock()
+        busy = RuntimeError("A job is already running.")
+        with mock.patch("openfill_photocraft.service.Service.start", side_effect=busy), self.assertRaises(RuntimeError):
+            service.start("fill", {"prompt": "a door"})
+        service.focus.request.assert_not_called()  # no job, nothing to hand back for
 
     def test_keep_after_picking_is_still_one_step(self):
         service, _layers = self.service()
@@ -731,6 +753,26 @@ class WatcherTests(Fixture):
         self.assertEqual(picks, ["panel"])
         self.assertEqual(len(self.fake.calls), reads)  # no get_state for either
 
+    def test_quit_from_patchys_menu_ends_openfill_and_unknown_actions_are_ignored(self):
+        picks: list[str] = []
+        quit_asked = threading.Event()
+        watcher = Watcher(self.client, picks.append, on_quit=quit_asked.set, fallback=60.0)
+        alive = launch.until_quit(lambda: True, quit_asked)
+        self.client.on_event = watcher.on_event
+        self.fake.emit({"type": "companionCommand", "companion": "io.example.other", "action": "quit"})
+        self.fake.emit({"type": "companionCommand", "companion": COMPANION_ID, "action": "dance"})
+        self.fake.emit({"type": "companionCommand", "companion": COMPANION_ID, "action": "show"})
+        for _ in range(100):
+            if picks:
+                break
+            time.sleep(0.01)
+        self.assertEqual(picks, ["panel"])
+        self.assertTrue(alive())  # another companion's quit and an unknown action change nothing
+        self.fake.emit({"type": "companionCommand", "companion": COMPANION_ID, "action": "quit"})
+        quit_asked.wait(1.0)
+        self.assertFalse(alive())  # the launcher's loop ends, as when Patchy closes
+        self.assertEqual(picks, ["panel"])
+
     def test_another_document_is_read_on_the_watchers_thread(self):
         watcher = Watcher(self.client, lambda action: None, interval=0.01, fallback=60.0)
         self.client.on_event = watcher.on_event
@@ -750,6 +792,99 @@ class WatcherTests(Fixture):
             self.assertEqual(watcher.native_id, 4242)  # read for the tether
         finally:
             watcher.stop()
+
+
+class FakeWin32:
+    """The user32 calls ``FocusReturn`` makes: windows by handle, owned by (pid, thread)."""
+
+    PATCHY, PANEL, DIALOG, BROWSER = 100, 200, 201, 300
+
+    def __init__(self) -> None:
+        me = os.getpid()
+        self.owners = {self.PATCHY: (4242, 1), self.PANEL: (me, 2), self.DIALOG: (me, 2), self.BROWSER: (77, 3)}
+        self.fg = self.PANEL
+        self.minimized: set[int] = set()
+        self.refuse = False  # SetForegroundWindow says no (the attached fallback is tried)
+        self.calls: list[tuple[str, int]] = []
+
+    def foreground(self) -> int:
+        return self.fg
+
+    def owner(self, hwnd: int) -> tuple[int, int]:
+        return self.owners.get(hwnd, (0, 0))
+
+    def usable(self, hwnd: int) -> bool:
+        return hwnd in self.owners and hwnd not in self.minimized
+
+    def set_foreground(self, hwnd: int) -> bool:
+        self.calls.append(("set", hwnd))
+        if self.refuse:
+            return False
+        self.fg = hwnd
+        return True
+
+    def set_foreground_attached(self, hwnd: int) -> bool:
+        self.calls.append(("attached", hwnd))
+        self.fg = hwnd
+        return True
+
+
+class FocusTests(unittest.TestCase):
+    def setUp(self):
+        self.win = FakeWin32()
+        self.pending: list = []
+        self.focus = FocusReturn(
+            lambda: FakeWin32.PATCHY,
+            lambda: FakeWin32.PANEL,
+            win32=self.win,
+            later=lambda _delay, fn: self.pending.append(fn),
+        )
+
+    def fire(self) -> None:
+        for fn in self.pending:
+            fn()
+        self.pending.clear()
+
+    def test_a_click_in_the_panel_gives_patchy_the_keyboard(self):
+        self.assertTrue(self.focus.request())
+        self.assertEqual(self.win.calls, [])  # not at once: a moment after the click
+        self.fire()
+        self.assertEqual(self.win.calls, [("set", FakeWin32.PATCHY)])
+        self.assertEqual(self.win.fg, FakeWin32.PATCHY)
+
+    def test_nothing_moves_from_a_dialog_the_page_or_another_program(self):
+        for fg in (FakeWin32.DIALOG, FakeWin32.BROWSER, FakeWin32.PATCHY, 0):
+            self.win.fg = fg
+            self.assertFalse(self.focus.request(), fg)
+        self.fire()
+        self.assertEqual(self.win.calls, [])
+
+    def test_nothing_moves_when_the_keyboard_went_elsewhere_meanwhile(self):
+        self.assertTrue(self.focus.request())
+        self.win.fg = FakeWin32.DIALOG  # a dialog opened, or the artist switched programs
+        self.fire()
+        self.assertEqual(self.win.calls, [])
+
+    def test_nothing_moves_to_a_minimized_or_closed_patchy(self):
+        self.win.minimized.add(FakeWin32.PATCHY)
+        self.focus.request()
+        self.fire()
+        gone = FocusReturn(lambda: 0, lambda: FakeWin32.PANEL, win32=self.win, later=lambda _d, fn: fn())
+        gone.request()
+        self.assertEqual(self.win.calls, [])
+        self.assertEqual(self.win.fg, FakeWin32.PANEL)
+
+    def test_the_attached_input_fallback_when_windows_refuses(self):
+        self.win.refuse = True
+        self.focus.request()
+        self.fire()
+        self.assertEqual(self.win.calls, [("set", FakeWin32.PATCHY), ("attached", FakeWin32.PATCHY)])
+
+    def test_no_windows_api_no_change(self):
+        with mock.patch.object(sys, "platform", "darwin"):
+            focus = FocusReturn(lambda: FakeWin32.PATCHY, lambda: FakeWin32.PANEL)
+        self.assertIsNone(focus.win32)
+        self.assertFalse(focus.request())
 
 
 class InstallTests(unittest.TestCase):
