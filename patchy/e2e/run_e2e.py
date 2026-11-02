@@ -37,7 +37,7 @@ sys.path[:0] = [
 
 import stub_backend  # noqa: E402
 from openfill_patchy.bridge import PatchyBridge  # noqa: E402
-from openfill_patchy.client import PatchyClient, PatchyError  # noqa: E402
+from openfill_patchy.client import PatchyClient, PatchyError, protocol_problem  # noqa: E402
 from openfill_patchy.service import PatchyService, Watcher  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
@@ -198,8 +198,11 @@ def main() -> int:
             time.sleep(0.5)
         record(
             "attach",
-            info.get("workspace") == "attached" and int(info.get("processId") or 0) == app.pid,
+            info.get("workspace") == "attached"
+            and int(info.get("processId") or 0) == app.pid
+            and protocol_problem(info) is None,
             version=info.get("version"),
+            companionProtocol=info.get("companionProtocol"),
             mainWindow=info.get("mainWindow"),
             companionEvents="companionEvents" in (info.get("capabilities") or []),
         )

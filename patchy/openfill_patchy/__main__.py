@@ -25,8 +25,16 @@ for candidate in (HERE.parent, HERE.parent.parent / "gimp-openfill", HERE.parent
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
+from openfill_patchy import __version__  # noqa: E402
 from openfill_patchy.bridge import PatchyBridge, default_profile  # noqa: E402
-from openfill_patchy.client import PatchyClient, PatchyError, find_connector  # noqa: E402
+from openfill_patchy.client import (  # noqa: E402
+    COMPANION_PROTOCOL_MAX,
+    COMPANION_PROTOCOL_MIN,
+    PatchyClient,
+    PatchyError,
+    find_connector,
+    protocol_problem,
+)
 
 REOPEN = "Plugins > Companions > OpenFill in Patchy"
 
@@ -111,6 +119,15 @@ def main(argv: list[str] | None = None) -> int:
         client.close()
         return 2
     print(f"Attached to Patchy {info.get('version')} (process {info.get('processId')}).")
+    print(
+        f"OpenFill for Patchy {__version__}, companion protocol {COMPANION_PROTOCOL_MIN} to {COMPANION_PROTOCOL_MAX};"
+        f" Patchy {info.get('version')}, companionProtocol {info.get('companionProtocol')}."
+    )
+    problem = protocol_problem(info)
+    if problem:
+        tell("OpenFill", problem)
+        client.close()
+        return 2
 
     from openfill_photocraft.web import Api, serve
 

@@ -8,7 +8,7 @@ It uses the same engine and the same panel as [OpenFill for PhotoCraft](../photo
 
 ## What you need
 
-- **Patchy** with Plugins > Companions, on Windows, macOS or Linux.
+- **Patchy 1.25 or newer** (the first release with Plugins > Companions), on Windows, macOS or Linux.
 - **Python 3.10 or newer with Pillow.** Tk is optional: with it you get the OpenFill panel; without it, the same controls open in your default browser. ComfyUI's own Python works too.
 - **ComfyUI and models**, as for [OpenFill for PhotoCraft](../photocraft/README.md#what-you-need). If OpenFill for PhotoCraft or for GIMP already has a ComfyUI folder set, it is used.
 
@@ -44,6 +44,7 @@ The same as [OpenFill for PhotoCraft](../photocraft/README.md#models), from the 
 
 - **The mask comes from the selection you had when you pressed Generate**, so you can select something else while it works.
 - **Expand and the Background layer.** Expand grows the canvas like Image > Canvas Size: the image and the selection move, and a Background layer grows to cover the new canvas, filled with the image's mean colour. The result covers the new area; the fill shows only where the result leaves a gap.
+- **Versions.** OpenFill and Patchy agree on a companion protocol version, not on Patchy's version number. OpenFill 0.1.0 speaks version 1. When it starts, it asks Patchy which versions it serves; if Patchy is older than 1.25 or serves none that OpenFill speaks, OpenFill says which one to update and stops. Patchy greys out the menu entry the same way. The installer does not check the installed Patchy: the check happens when OpenFill starts.
 - **Patchy busy.** While you drag, or while a dialog is open, Patchy asks OpenFill to wait. OpenFill tries again on its own, and the panel says Patchy is not answering only when it has waited for more than a few seconds.
 - **8-bit round trip.** Pixels cross at 8 bits per channel; on a 16 or 32-bit document Patchy converts the result to the document's depth.
 - **Where things are kept:** `%APPDATA%\OpenFill for Patchy` on Windows, `~/Library/Application Support/OpenFill for Patchy` on macOS and `~/.config/openfill-patchy` on Linux (settings, logs, and the `exchange` folder for the PNG files OpenFill and Patchy pass to each other).

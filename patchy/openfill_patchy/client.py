@@ -27,6 +27,13 @@ from typing import Any
 
 COMPANION_ID = "io.github.beckettharriman.openfill"
 PROTOCOL_VERSION = "2025-11-25"
+# Patchy's companion protocol versions this OpenFill speaks (Patchy's docs/companions.md,
+# "Protocol"). Declared at initialize, written into the menu entry, and compared with
+# get_info's companionProtocol at start.
+COMPANION_PROTOCOL_MIN = 1
+COMPANION_PROTOCOL_MAX = 1
+# The first Patchy release with Plugins > Companions, named when a Patchy has none.
+FIRST_PATCHY_WITH_COMPANIONS = "1.25"
 # Patchy answers "busy" while the artist is mid-gesture, in a modal dialog, or another
 # client's script runs. Nothing ran, so the request is sent again, for this long at most.
 BUSY_PATIENCE_S = 30 * 60.0
@@ -34,6 +41,41 @@ BUSY_PATIENCE_S = 30 * 60.0
 # once Patchy has stayed busy this long in a row, so a gesture never flashes a warning.
 BUSY_NOTICE_S = 3.0
 STALE_ATTEMPTS = 4  # an edit refused as stale is sent again with the newer token this often
+
+
+def companion_info() -> dict[str, Any]:
+    """What OpenFill tells Patchy about itself at ``initialize``."""
+    from . import __version__
+
+    return {
+        "id": COMPANION_ID,
+        "name": "OpenFill",
+        "version": __version__,
+        "minProtocol": COMPANION_PROTOCOL_MIN,
+        "maxProtocol": COMPANION_PROTOCOL_MAX,
+    }
+
+
+def protocol_problem(info: dict[str, Any]) -> str | None:
+    """Why this OpenFill cannot work with the Patchy that answered ``get_info``, in words
+    for the artist, or None when they share a protocol version. Patchy's own version is
+    never compared: development builds report the last release's."""
+    version = str(info.get("version") or "").strip()
+    patchy = f"Patchy {version}" if version else "this Patchy"
+    served = info.get("companionProtocol")
+    if not isinstance(served, dict):
+        return (
+            f"OpenFill needs Patchy {FIRST_PATCHY_WITH_COMPANIONS} or newer, the first release with "
+            f"Plugins > Companions. Update Patchy: {patchy} has no companion apps."
+        )
+    low, high = served.get("min"), served.get("max")
+    if not all(isinstance(n, int) and not isinstance(n, bool) and n >= 1 for n in (low, high)) or low > high:
+        return f"OpenFill does not understand the companion protocol {patchy} reports ({served!r})."
+    if high < COMPANION_PROTOCOL_MIN:
+        return f"OpenFill needs a newer version of Patchy than {patchy}. Update Patchy."
+    if low > COMPANION_PROTOCOL_MAX:
+        return f"This OpenFill is too old for {patchy}. Update OpenFill."
+    return None
 
 
 class PatchyError(RuntimeError):
@@ -128,7 +170,7 @@ class PatchyClient:
             "initialize",
             {
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"experimental": {"patchy/events": True, "patchy/companion": COMPANION_ID}},
+                "capabilities": {"experimental": {"patchy/events": True, "patchy/companion": companion_info()}},
                 "clientInfo": {"name": "OpenFill", "version": __version__},
             },
             timeout=60.0,

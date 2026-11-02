@@ -32,7 +32,17 @@ from openfill_patchy import bridge as bridge_module  # noqa: E402
 from openfill_patchy import client as client_module  # noqa: E402
 from openfill_patchy import install  # noqa: E402
 from openfill_patchy.bridge import PatchyBridge  # noqa: E402
-from openfill_patchy.client import COMPANION_ID, PatchyClient, PatchyError, WorkspaceLost, find_connector  # noqa: E402
+from openfill_patchy.client import (  # noqa: E402
+    COMPANION_ID,
+    COMPANION_PROTOCOL_MAX,
+    COMPANION_PROTOCOL_MIN,
+    FIRST_PATCHY_WITH_COMPANIONS,
+    PatchyClient,
+    PatchyError,
+    WorkspaceLost,
+    find_connector,
+    protocol_problem,
+)
 from openfill_patchy.focus import FocusReturn  # noqa: E402
 from openfill_patchy.service import PatchyService, Watcher  # noqa: E402
 from PIL import Image  # noqa: E402
@@ -142,6 +152,13 @@ class FakePatchy:
             ""  # the next insert fails once: "partial" after its first layer, "after-undo" after its Undos
         )
         self.on_call = None  # called with (tool, arguments) before a tool runs (the artist's moves)
+        self.info = {  # get_info
+            "workspace": "attached",
+            "workspaceAvailable": True,
+            "version": "1.25",
+            "mainWindow": {"nativeId": "4242"},
+            "companionProtocol": {"min": 1, "max": 1},
+        }
         client_in, self._out = os.pipe()  # the fake writes, the client reads
         self._in, client_out = os.pipe()
         self.stdout = os.fdopen(client_in, "rb")
@@ -240,7 +257,7 @@ class FakePatchy:
         if self.on_call:
             self.on_call(name, args)
         if name == "get_info":
-            return {"workspace": "attached", "workspaceAvailable": True, "mainWindow": {"nativeId": "4242"}}, False
+            return copy.deepcopy(self.info), False
         if self.busy:
             self.busy -= 1
             return {"error": "busy", "message": "Finish the current gesture"}, True
@@ -462,7 +479,19 @@ class Fixture(unittest.TestCase):
 class ConnectorClientTests(Fixture):
     def test_initialize_asks_for_events_and_names_the_companion(self):
         experimental = self.fake.initialize["capabilities"]["experimental"]
-        self.assertEqual(experimental, {"patchy/events": True, "patchy/companion": COMPANION_ID})
+        self.assertEqual(
+            experimental,
+            {
+                "patchy/events": True,
+                "patchy/companion": {
+                    "id": COMPANION_ID,
+                    "name": "OpenFill",
+                    "version": launch.__version__,
+                    "minProtocol": COMPANION_PROTOCOL_MIN,
+                    "maxProtocol": COMPANION_PROTOCOL_MAX,
+                },
+            },
+        )
         self.assertEqual(self.fake.initialize["protocolVersion"], "2025-11-25")
 
     def test_busy_is_sent_again_until_patchy_answers(self):
@@ -732,6 +761,42 @@ class KeepTests(Fixture):
                 self.client.close()
 
 
+class ProtocolTests(Fixture):
+    """The companion protocol check the launcher makes after ``get_info``."""
+
+    def problem(self) -> str | None:
+        return protocol_problem(self.client.get_info())
+
+    def test_a_patchy_that_serves_this_protocol(self):
+        self.assertIsNone(self.problem())
+        self.fake.info["companionProtocol"] = {"min": 1, "max": 3}
+        self.assertIsNone(self.problem())
+
+    def test_a_patchy_from_before_companions_names_the_release_needed(self):
+        del self.fake.info["companionProtocol"]
+        self.fake.info["version"] = "1.24"
+        problem = self.problem()
+        self.assertIn(f"Patchy {FIRST_PATCHY_WITH_COMPANIONS} or newer", problem)
+        self.assertIn("Patchy 1.24", problem)
+        self.assertIn("Update Patchy", problem)
+
+    def test_ranges_that_do_not_overlap_say_which_side_to_update(self):
+        self.fake.info["companionProtocol"] = {"min": COMPANION_PROTOCOL_MAX + 1, "max": COMPANION_PROTOCOL_MAX + 2}
+        self.assertIn("Update OpenFill", self.problem())  # Patchy left this OpenFill's protocol behind
+        # A Patchy too old for this OpenFill: only possible once OpenFill needs protocol 2.
+        with (
+            mock.patch("openfill_patchy.client.COMPANION_PROTOCOL_MIN", 2),
+            mock.patch("openfill_patchy.client.COMPANION_PROTOCOL_MAX", 2),
+        ):
+            self.fake.info["companionProtocol"] = {"min": 1, "max": 1}
+            self.assertIn("needs a newer version of Patchy", self.problem())
+
+    def test_an_unreadable_range_is_a_problem_not_a_crash(self):
+        for served in ({"min": "1", "max": 1}, {"min": 2, "max": 1}, {"max": 1}, {"min": True, "max": True}):
+            self.fake.info["companionProtocol"] = served
+            self.assertIn("does not understand", self.problem(), served)
+
+
 class WatcherTests(Fixture):
     def test_events_keep_the_panel_current_without_polling(self):
         picks = []
@@ -893,8 +958,14 @@ class InstallTests(unittest.TestCase):
             folder = Path(tmp) / "companions"
             path = install.install(sys.executable, folder)
             entry = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(set(entry), {"id", "name", "menuLabel", "command", "args", "workingDirectory"})
+            self.assertEqual(
+                set(entry),
+                {"id", "name", "menuLabel", "command", "args", "workingDirectory", "minProtocol", "maxProtocol"},
+            )
             self.assertEqual(entry["id"], COMPANION_ID)
+            self.assertEqual(
+                (entry["minProtocol"], entry["maxProtocol"]), (COMPANION_PROTOCOL_MIN, COMPANION_PROTOCOL_MAX)
+            )
             self.assertEqual(entry["args"], ["-m", "openfill_patchy"])
             self.assertTrue((Path(entry["workingDirectory"]) / "openfill_patchy" / "__main__.py").is_file())
             self.assertTrue(install.uninstall(folder))

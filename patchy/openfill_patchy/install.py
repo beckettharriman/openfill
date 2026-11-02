@@ -22,7 +22,7 @@ import os
 import sys
 from pathlib import Path
 
-from .client import COMPANION_ID
+from .client import COMPANION_ID, COMPANION_PROTOCOL_MAX, COMPANION_PROTOCOL_MIN
 
 MANIFEST = "openfill.json"
 
@@ -63,6 +63,9 @@ def manifest(python: str) -> dict:
         "command": windowless(python),
         "args": ["-m", "openfill_patchy"],
         "workingDirectory": str(package_root()),
+        # Patchy greys the entry out when it serves none of these protocol versions.
+        "minProtocol": COMPANION_PROTOCOL_MIN,
+        "maxProtocol": COMPANION_PROTOCOL_MAX,
     }
 
 
