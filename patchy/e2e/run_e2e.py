@@ -1,16 +1,16 @@
 # OpenFill for Patchy
 # SPDX-License-Identifier: Apache-2.0
-"""End-to-end check against a real Patchy (not a unit test), with the stub generator from
+"""End-to-end check against a real Patchy (not a unit test), with the stand-in generator from
 patchy/tests/stub_backend.py in place of ComfyUI: no GPU or models needed.
 
-    python patchy/e2e/run_patchy_e2e.py --patchy PATH/patchy.exe [--out DIR]
+    python patchy/e2e/run_e2e.py --patchy PATH/patchy.exe [--connector PATH] [--out DIR]
 
 Starts its own Patchy (offscreen, its own settings folder and connector endpoint, so a
 Patchy you have open is never touched) on a test image, attaches the companion through
 ``patchy-mcp --attach`` and runs the companion's own jobs: a fill (one masked layer, one
 Undo removes it), three variations with the picker and Keep, Discard, an expand and text to
-image. Checks layers, masks, pixels and history through the connector and writes
-report.json to --out.
+image. Checks layers, masks, pixels and history through the connector and writes a report
+and the document's image after each job to --out.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 from pathlib import Path
 
@@ -41,15 +42,12 @@ from openfill_patchy.service import PatchyService, Watcher  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
 report: list[dict] = []
-failures: list[str] = []
 
 
 def record(case: str, ok: bool, **data) -> None:
     entry = {"case": case, "ok": bool(ok), **data}
     report.append(entry)
-    if not ok:
-        failures.append(case)
-    print(("PASS " if ok else "FAIL ") + json.dumps(entry)[:600], flush=True)
+    print(json.dumps(entry)[:500], flush=True)
 
 
 def js(client: PatchyClient, code: str, args: dict | None = None):
@@ -96,6 +94,21 @@ for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
 d.selection.setMask({x: A.x, y: A.y, width: w, height: h, data: data.buffer});
 patchy.setResult(d.selection.bounds);
 """
+
+
+SHOT = """
+var d = app.getDocument(A.doc);
+patchy.io.writeImage(A.path, d.getCompositePixels());
+patchy.setResult(true);
+"""
+
+
+def shot(client, doc, out: Path, name: str) -> None:
+    """The document's image as Patchy composites it (Patchy runs offscreen: no screenshots)."""
+    try:
+        js(client, SHOT, {"doc": doc, "path": str(out / f"{name}.png")})
+    except PatchyError as err:
+        print("image failed:", err)
 
 
 def inspect(client, doc, px=0, py=0) -> dict:
@@ -210,20 +223,20 @@ def main() -> int:
         time.sleep(0.6)
         changed = [e for e in events if e.get("type") == "selectionChanged"]
         record(
-            "selection event",
+            "selection_event",
             bool(changed) and changed[-1].get("bounds") == bounds,
             bounds=bounds,
             events=changed[-1:] or None,
         )
         want = [bounds[k] for k in ("x", "y", "width", "height")]
-        record("watcher follows the selection", watcher.snapshot().get("selection") == want, watcher=watcher.snapshot())
+        record("watcher_follows_selection", watcher.snapshot().get("selection") == want, watcher=watcher.snapshot())
 
         # reading changes nothing
         before = history(client, doc)
         image = bridge.track(bridge.active_image())
         visible, selection = bridge._snapshot(image)
         record(
-            "read is not a history step",
+            "read_adds_no_step",
             history(client, doc) == before and visible.size == (256, 192) and selection is not None,
             selection_bbox=selection.getbbox() if selection else None,
             soft_edge=[selection.getpixel((x, 80)) for x in (64, 65, 66, 67, 68)] if selection else None,
@@ -232,13 +245,15 @@ def main() -> int:
         # 1. a fill: one masked layer, the context inverted; one Undo takes it back
         base_state = history(client, doc)
         base = inspect(client, doc, 112, 80)
+        shot(client, doc, out, "0-before")
         st = run_job(service, "fill", {"prompt": "a red door", "variations": 1, "seed": 7})
         after = inspect(client, doc, 112, 80)
+        shot(client, doc, out, "1-fill")
         top = after["layers"][-1]
         steps = undo_count_back(client, doc, base_state) if st["state"] == "done" else -1
         undone = inspect(client, doc, 112, 80)
         record(
-            "fill inserts a masked layer that one Undo removes",
+            "fill_one_step",
             st["state"] == "done"
             and top["name"] == "Generative Fill: a red door"
             and bool(top.get("mask"))
@@ -260,11 +275,12 @@ def main() -> int:
         st = run_job(service, "fill", {"prompt": "a window", "variations": 3, "seed": 7})
         group = inspect(client, doc)["layers"][-1]
         service.show_variation(2)
+        shot(client, doc, out, "2-variation-3")
         service.keep("selected")
         kept = inspect(client, doc)
         steps = undo_count_back(client, doc, base_state)
         record(
-            "variations in a group, Keep leaves one step",
+            "variations_keep_one_step",
             st["state"] == "done"
             and group.get("isGroup")
             and [c["visible"] for c in reversed(group["children"])] == [True, False, False]
@@ -284,7 +300,7 @@ def main() -> int:
         service.show_variation(1)
         service.keep("none")
         record(
-            "Discard leaves no step",
+            "discard_no_step",
             st["state"] == "done"
             and history(client, doc) == base_state
             and len(inspect(client, doc)["layers"]) == layers_before,
@@ -295,10 +311,11 @@ def main() -> int:
         base_state = history(client, doc)
         st = run_job(service, "expand", {"right": 128, "variations": 1, "seed": 7})
         grown = inspect(client, doc, 300, 20)
+        shot(client, doc, out, "3-expand")
         steps = undo_count_back(client, doc, base_state) if st["state"] == "done" else -1
         back = inspect(client, doc)
         record(
-            "expand is one step",
+            "expand_one_step",
             st["state"] == "done"
             and grown["width"] == 384
             and (grown["layers"][0]["x"], grown["layers"][0]["y"]) == (0, 0)
@@ -327,12 +344,13 @@ def main() -> int:
         done = st["state"] == "done"
         new_area = inspect(client, bg_doc, 10, 75) if done else {}
         old_area = inspect(client, bg_doc, 164, 75) if done else {}
+        shot(client, bg_doc, out, "4-expand-left")
         steps = undo_count_back(client, bg_doc, base_state) if done else -1
         back = inspect(client, bg_doc) if done else {}
         layers = new_area.get("layers") or [{}]
         blue = [0x33, 0x66, 0xCC, 255]
         record(
-            "expand left grows the Background over the whole canvas, one step",
+            "expand_left_background",
             done
             and new_area.get("width") == 264
             and layers[0].get("name") == "Background"
@@ -358,8 +376,9 @@ def main() -> int:
         st = run_job(service, "txt2img", {"prompt": "a fox", "width": 128, "height": 96, "variations": 2, "seed": 7})
         state = client.get_state()
         new_doc = state["documents"][-1]
+        shot(client, str(new_doc["id"]), out, "5-txt2img")
         record(
-            "text to image opens a new document",
+            "txt2img_new_image",
             st["state"] == "done" and len(state["documents"]) == docs_before + 1,
             job=st["state"],
             message=st["message"],
@@ -367,12 +386,9 @@ def main() -> int:
             layers=[(r["name"], r["visible"]) for r in new_doc.get("layers") or []],
         )
 
-        record("no files left in the exchange folder", not list((profile / "exchange").iterdir()))
+        record("exchange_folder_empty", not list((profile / "exchange").iterdir()))
     except Exception as err:  # noqa: BLE001 - reported
-        import traceback
-
-        traceback.print_exc()
-        record("e2e run", False, error=str(err))
+        record("e2e_run", False, error=f"{err}", trace=traceback.format_exc()[-800:])
     finally:
         client.close()
         app.terminate()  # the Patchy this script started, by its own handle
@@ -382,8 +398,9 @@ def main() -> int:
             app.kill()
         app_log.close()
         (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print(f"{len(report) - len(failures)} of {len(report)} passed; report in {out / 'report.json'}")
-    return 1 if failures else 0
+    bad = [r["case"] for r in report if not r["ok"]]
+    print("FAILED:" if bad else "ALL DONE", bad, flush=True)
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

@@ -1,14 +1,16 @@
 # OpenFill for Patchy
 
-Generative Fill, Remove object, Generative Expand and Text to Image for [Patchy](https://github.com/SethRobinson/Patchy), with the same engine, models and panel as [OpenFill for PhotoCraft](../photocraft/README.md): a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI) on your own graphics card. Local generation stays on your computer.
+Generative Fill, Remove object, Generative Expand and Text to Image for [Patchy](https://github.com/SethRobinson/Patchy), running on your own graphics card through a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI). Local generation stays on your computer.
 
-> **Prototype.** This needs a Patchy build with **Plugins > Companions** and `resizeCanvas` options, which is not in a Patchy release yet. It has been checked end to end against such a build with a stand-in generator (no GPU); a run with a real ComfyUI and real models is still to do. See [What has been tested](#what-has-been-tested).
+It uses the same engine and the same panel as [OpenFill for PhotoCraft](../photocraft/README.md): the same models, model manager, mask handling, seam correction and variations. Only the connection to the editor is different.
+
+> **Version 0.1.0** is a prototype. It needs a Patchy build with **Plugins > Companions** and the `resizeCanvas` options, which is not in a Patchy release yet. It was tested end to end on Windows 11 against a Patchy 1.24 development build, with a stand-in generator in place of ComfyUI (no graphics card or models); a run with a real ComfyUI and real models is still to do. See [the test results](../docs/evidence/patchy-2026-11-02/).
 
 ## What you need
 
 - **Patchy** with Plugins > Companions, on Windows, macOS or Linux.
 - **Python 3.10 or newer with Pillow.** Tk is optional: with it you get the OpenFill panel; without it, the same controls open in your default browser. ComfyUI's own Python works too.
-- **ComfyUI and models**, as for OpenFill for PhotoCraft. If OpenFill for PhotoCraft or for GIMP already has a ComfyUI folder set, it is used.
+- **ComfyUI and models**, as for [OpenFill for PhotoCraft](../photocraft/README.md#what-you-need). If OpenFill for PhotoCraft or for GIMP already has a ComfyUI folder set, it is used.
 
 ## Install
 
@@ -24,30 +26,46 @@ To remove it: `python -m openfill_patchy.install --uninstall`. Settings and mode
 
 ## Using it
 
-Pick **Plugins > Companions > OpenFill** in Patchy. The first time, Patchy starts OpenFill; after that the same menu entry brings the panel back. Select an area with any of Patchy's selection tools, type what you want in the panel and press Enter. The modes are the ones described in [OpenFill for PhotoCraft](../photocraft/README.md#using-it).
+Pick **Plugins > Companions > OpenFill** in Patchy. The first time, Patchy starts OpenFill; after that the same menu entry brings the panel back. Select an area with any of Patchy's selection tools, type what you want in the panel and press Enter. The modes (Fill, Remove, Expand, Create) are the ones described in [OpenFill for PhotoCraft](../photocraft/README.md#using-it).
 
-- Every result is a new layer with a layer mask (variations go into a group), and it is **one step** in Patchy's history: one Undo takes a fill or a whole expand back. **Keep** leaves it one step, and **Discard** takes it back completely, as long as you have not changed the document since. After an edit of your own, Keep and Discard delete layers instead, so your edit is never undone.
-- The mask comes from the selection you had when you pressed Generate, so you can select something else while it works.
-- The panel follows your selection as you change it; Patchy tells OpenFill, so nothing is polled.
-- On Windows the panel stays with Patchy's window: above it, hidden when Patchy is minimized. Elsewhere it floats.
-- OpenFill stops when Patchy closes.
+Every result is a new layer with a layer mask (variations go into a group), and it is **one step** in Patchy's history: one Undo takes a fill or a whole expand back. **Keep** leaves it one step, and **Discard** takes it back completely, as long as you have not changed the document since. After an edit of your own, Keep and Discard delete layers instead, so your edit is never undone.
+
+The panel follows your selection as you change it. On Windows it stays with Patchy's window: above it, and hidden when Patchy is minimized. Elsewhere it floats. OpenFill stops when Patchy closes.
+
+## Models
+
+The same as [OpenFill for PhotoCraft](../photocraft/README.md#models), from the same model manager (the gear in the panel). Models stay in your ComfyUI folder, shared with OpenFill for PhotoCraft and for GIMP.
+
+## Good to know
+
+- **The mask comes from the selection you had when you pressed Generate**, so you can select something else while it works.
+- **Expand and the Background layer.** Expand grows the canvas like Image > Canvas Size: the image and the selection move, and a Background layer grows to cover the new canvas, filled with the image's mean colour. The result covers the new area; the fill shows only where the result leaves a gap.
+- **Patchy busy.** While you drag, or while a dialog is open, Patchy asks OpenFill to wait. OpenFill tries again on its own, and the panel says Patchy is not answering only when it has waited for more than a few seconds.
+- **8-bit round trip.** Pixels cross at 8 bits per channel; on a 16 or 32-bit document Patchy converts the result to the document's depth.
+- **Where things are kept:** `%APPDATA%\OpenFill for Patchy` on Windows, `~/Library/Application Support/OpenFill for Patchy` on macOS and `~/.config/openfill-patchy` on Linux (settings, logs, and the `exchange` folder for the PNG files OpenFill and Patchy pass to each other).
+
+## Known limits
+
+The resolution limits are those of [OpenFill for PhotoCraft](../photocraft/README.md#known-limits): the engine is the same.
+
+Not tested yet: a real ComfyUI with real models, macOS and Linux, and the panel next to a visible Patchy window (picking the menu entry, the Windows tether).
 
 ## How it works
 
 Patchy has a companion-app interface instead of an in-process plug-in: OpenFill runs Patchy's connector, `patchy-mcp --attach`, as a child process and talks to the running Patchy over it (JSON-RPC on standard input and output, the same channel AI assistants use). Patchy sets `PATCHY_MCP` and `PATCHY_MCP_ENDPOINT` when it starts a companion, so OpenFill finds the right connector and the right Patchy window.
 
-- **Reading:** one script run writes the visible image (`doc.getCompositePixels`) and the selection with its soft edges (`doc.selection.getMask`) to PNG files in OpenFill's exchange folder. Reading is not a history step.
-- **Writing:** the result is kept in OpenFill while the seam correction, grain matching and ranking run, then one script run adds the layers (`addLayer`, `setPixels`), their masks (`setLayerMask`) and the variations' group. An expand's canvas change goes into that same run, made like Image > Canvas Size (`resizeCanvas` with an offset): the image and the selection move, and a Background layer grows to cover the new canvas, filled with the image's mean colour, so a gap the result leaves is close to its surroundings instead of white. Patchy makes every script run one undo step.
-- **Events:** OpenFill asks for Patchy's events when it connects. Patchy then tells it when the selection or the active document changes, and when you pick OpenFill in Plugins > Companions.
-- **Safety:** every edit carries Patchy's state token from just before it, so an edit never lands on a document that changed under it, and Keep or Discard never undo a step you made. A request Patchy reports as lost is never sent again.
+| Step | Patchy calls |
+|---|---|
+| Read the image and selection | one script run: `doc.getCompositePixels`, `doc.selection.getMask`, `patchy.io.writeImage`. Not a history step |
+| Put the result in the document | one script run: `addLayer`, `setPixels`, `setLayerMask`, `addGroup` and `moveLayers` for variations. One history step |
+| Expand | `resizeCanvas` with an offset and a fill, in that same run |
+| Keep and Discard | Keep: one run that undoes OpenFill's step (`doc.undo`) and adds only the chosen layer. Discard: the `undo` tool. Both only while the history is as OpenFill left it; after an edit of your own, a run that deletes layers |
+| Selection and menu | Patchy's events (`selectionChanged`, `companionCommand`), so nothing is polled |
 
-Pixels cross at 8 bits per channel; on a 16 or 32-bit document Patchy converts the result to the document's depth.
+The result is kept in OpenFill while the seam correction, grain matching and ranking run, and reaches Patchy only at the end. Every edit carries Patchy's state token from just before it, so an edit never lands on a document that changed under it, and Keep or Discard never undo a step you made. A request Patchy reports as lost is never sent again.
 
-Settings, logs and the exchange folder are in `%APPDATA%\OpenFill for Patchy` on Windows, `~/Library/Application Support/OpenFill for Patchy` on macOS and `~/.config/openfill-patchy` on Linux.
+Tests: `python -m unittest patchy/tests/test_companion.py` (no Patchy needed; a fake connector, and a stand-in generator for a whole Generative Fill). With a Patchy build: `python patchy/e2e/run_e2e.py --patchy PATH/patchy.exe` starts its own Patchy offscreen (its own settings and connector endpoint, so a Patchy you have open is never touched), runs Fill, variations with Keep, Discard, Expand and Create with the stand-in generator from `patchy/tests/stub_backend.py`, and writes `report.json` and the document's image after each job.
 
-## What has been tested
+## Credits and license
 
-- `python -m unittest patchy/tests/test_patchy.py`: the connector client, the bridge, Keep and Discard, the event watcher and the installer, against a fake connector, plus OpenFill's own Generative Fill running through the bridge with a stand-in generator.
-- `python patchy/e2e/run_patchy_e2e.py --patchy PATH/patchy.exe`: a real Patchy (offscreen, with its own settings and connector endpoint) on Windows 11, with the stand-in generator from `patchy/tests/stub_backend.py` in place of ComfyUI. It checks that a fill adds one masked layer that one Undo removes, that three variations go into a group and Keep leaves one step, that Discard leaves none, that an expand (two rounds) is one step, that an expand to the left grows the Background layer over the whole new canvas in one step, that Text to Image opens a new document, and that the selection events arrive.
-
-Not tested yet: a real ComfyUI with real models, macOS and Linux, and the panel itself next to a visible Patchy window (picking the menu entry, the Windows tether).
+OpenFill for Patchy is Apache-2.0 (see `LICENSE`). It runs on the same ComfyUI, node packs and models as [OpenFill for PhotoCraft](../photocraft/README.md#credits-and-license), under their own licenses. Patchy is a separate project by Seth Robinson.

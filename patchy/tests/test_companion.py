@@ -1,7 +1,6 @@
 # OpenFill for Patchy
 # SPDX-License-Identifier: Apache-2.0
-"""Unit tests for the Patchy companion: connector client, bridge, Keep and Discard, the
-event watcher and the Companions manifest, against a fake connector (no Patchy, no GPU)."""
+"""Unit tests for the Patchy companion: connector client, bridge, watcher and installer, without Patchy."""
 
 from __future__ import annotations
 
@@ -122,9 +121,10 @@ def public(rows: list[dict], canvas: tuple[int, int]) -> list[dict]:
 
 
 class FakePatchy:
-    """``patchy-mcp --attach`` and the Patchy behind it, in this process: newline-delimited
-    JSON-RPC on two pipes, with the tools, state tokens and history steps Patchy has. Scripts
-    are recognised by their text (the bridge's constants) and acted out here."""
+    """Enough of Patchy for the bridge: ``patchy-mcp --attach`` and the Patchy behind it, in
+    this process. Newline-delimited JSON-RPC on two pipes, with the tools, state tokens and
+    history steps Patchy has; scripts are recognised by their text (the bridge's constants)
+    and acted out here."""
 
     def __init__(self) -> None:
         self.docs = [Doc("7", "photo.png", 64, 48)]
@@ -425,6 +425,8 @@ class FakeClient(PatchyClient):
 
 
 class Fixture(unittest.TestCase):
+    """A started client on a fresh fake Patchy, and the bridge over it."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.exchange = Path(self.tmp.name) / "exchange"
@@ -455,7 +457,7 @@ class Fixture(unittest.TestCase):
         return layers
 
 
-class ClientTests(Fixture):
+class ConnectorClientTests(Fixture):
     def test_initialize_asks_for_events_and_names_the_companion(self):
         experimental = self.fake.initialize["capabilities"]["experimental"]
         self.assertEqual(experimental, {"patchy/events": True, "patchy/companion": COMPANION_ID})

@@ -1,0 +1,309 @@
+[
+  {
+    "case": "attach",
+    "ok": true,
+    "version": "1.24",
+    "mainWindow": {
+      "geometry": {
+        "height": 800,
+        "width": 800,
+        "x": 0,
+        "y": 0
+      },
+      "minimized": false,
+      "nativeId": "1"
+    },
+    "companionEvents": true
+  },
+  {
+    "case": "selection_event",
+    "ok": true,
+    "bounds": {
+      "height": 62,
+      "width": 94,
+      "x": 65,
+      "y": 49
+    },
+    "events": [
+      {
+        "bounds": {
+          "height": 62,
+          "width": 94,
+          "x": 65,
+          "y": 49
+        },
+        "documentId": "1",
+        "type": "selectionChanged"
+      }
+    ]
+  },
+  {
+    "case": "watcher_follows_selection",
+    "ok": true,
+    "watcher": {
+      "connected": true,
+      "waiting": false,
+      "document": {
+        "name": "photo.png",
+        "width": 256,
+        "height": 192,
+        "mode": "RGB"
+      },
+      "selection": [
+        65,
+        49,
+        94,
+        62
+      ]
+    }
+  },
+  {
+    "case": "read_adds_no_step",
+    "ok": true,
+    "selection_bbox": [
+      65,
+      49,
+      159,
+      111
+    ],
+    "soft_edge": [
+      0,
+      64,
+      128,
+      192,
+      255
+    ]
+  },
+  {
+    "case": "fill_one_step",
+    "ok": true,
+    "job": "done",
+    "message": "Added layer: Generative Fill: a red door",
+    "layer": {
+      "id": "2",
+      "name": "Generative Fill: a red door",
+      "visible": true,
+      "isGroup": false,
+      "bounds": {
+        "height": 192,
+        "width": 192,
+        "x": 16,
+        "y": 0
+      },
+      "x": 16,
+      "y": 0,
+      "mask": {
+        "bounds": {
+          "height": 192,
+          "width": 192,
+          "x": 16,
+          "y": 0
+        },
+        "defaultColor": 0,
+        "density": 100,
+        "enabled": true,
+        "feather": 3
+      }
+    },
+    "pixel_before": [
+      200,
+      100,
+      50,
+      255
+    ],
+    "pixel_after": [
+      55,
+      155,
+      205,
+      255
+    ],
+    "undos_to_remove": 1,
+    "requests": 1
+  },
+  {
+    "case": "variations_keep_one_step",
+    "ok": true,
+    "group": [
+      [
+        "Generative Fill: a window (3)",
+        false
+      ],
+      [
+        "Generative Fill: a window (2)",
+        false
+      ],
+      [
+        "Generative Fill: a window (1)",
+        true
+      ]
+    ],
+    "kept": {
+      "id": "2",
+      "name": "Generative Fill: a window",
+      "visible": true,
+      "isGroup": false,
+      "bounds": {
+        "height": 192,
+        "width": 192,
+        "x": 16,
+        "y": 0
+      },
+      "x": 16,
+      "y": 0,
+      "mask": {
+        "bounds": {
+          "height": 192,
+          "width": 192,
+          "x": 16,
+          "y": 0
+        },
+        "defaultColor": 0,
+        "density": 100,
+        "enabled": true,
+        "feather": 3
+      }
+    },
+    "undos_to_remove": 1
+  },
+  {
+    "case": "discard_no_step",
+    "ok": true,
+    "history_back": true
+  },
+  {
+    "case": "expand_one_step",
+    "ok": true,
+    "job": "done",
+    "message": "Canvas is now 384 x 192",
+    "width": 384,
+    "new_area_pixel": [
+      136,
+      115,
+      56,
+      255
+    ],
+    "layers": [
+      [
+        "photo",
+        0,
+        0
+      ],
+      [
+        "Generative Expand",
+        32,
+        0
+      ],
+      [
+        "Generative Expand",
+        96,
+        0
+      ]
+    ],
+    "undos_to_remove": 1
+  },
+  {
+    "case": "expand_left_background",
+    "ok": true,
+    "job": "done",
+    "message": "Canvas is now 264 x 150",
+    "width": 264,
+    "layers": [
+      [
+        "Background",
+        {
+          "height": 150,
+          "width": 264,
+          "x": 0,
+          "y": 0
+        },
+        null
+      ],
+      [
+        "Generative Expand",
+        {
+          "height": 150,
+          "width": 232,
+          "x": 32,
+          "y": 0
+        },
+        {
+          "bounds": {
+            "height": 150,
+            "width": 232,
+            "x": 32,
+            "y": 0
+          },
+          "defaultColor": 0,
+          "density": 100,
+          "enabled": true,
+          "feather": 4.5
+        }
+      ],
+      [
+        "Generative Expand",
+        {
+          "height": 150,
+          "width": 256,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "bounds": {
+            "height": 150,
+            "width": 256,
+            "x": 0,
+            "y": 0
+          },
+          "defaultColor": 0,
+          "density": 100,
+          "enabled": true,
+          "feather": 4.5
+        }
+      ]
+    ],
+    "background_new_area": [
+      51,
+      102,
+      204,
+      255
+    ],
+    "background_old_area": [
+      51,
+      102,
+      204,
+      255
+    ],
+    "visible_new_area": [
+      160,
+      138,
+      95,
+      255
+    ],
+    "undos_to_remove": 1
+  },
+  {
+    "case": "txt2img_new_image",
+    "ok": true,
+    "job": "done",
+    "message": "Done",
+    "document": {
+      "name": "Text to Image a fox",
+      "width": 680,
+      "height": 512
+    },
+    "layers": [
+      [
+        "Text to Image: a fox (1)",
+        true
+      ],
+      [
+        "Text to Image: a fox (2)",
+        false
+      ]
+    ]
+  },
+  {
+    "case": "exchange_folder_empty",
+    "ok": true
+  }
+]

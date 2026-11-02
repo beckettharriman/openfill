@@ -84,7 +84,7 @@ Where it still falls short:
 - **SD 1.5 often ignores the prompt** on flat areas and small selections. Pick an SDXL model.
 - **FLUX on 8 GB is slow.**
 
-Changes are in [CHANGELOG.md](CHANGELOG.md) and [photocraft/CHANGELOG.md](photocraft/CHANGELOG.md). Bug reports are welcome on [Issues](https://github.com/beckettharriman/openfill/issues).
+Changes are in [CHANGELOG.md](CHANGELOG.md), [photocraft/CHANGELOG.md](photocraft/CHANGELOG.md) and [patchy/CHANGELOG.md](patchy/CHANGELOG.md). Bug reports are welcome on [Issues](https://github.com/beckettharriman/openfill/issues).
 
 ## Where it came from
 
