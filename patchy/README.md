@@ -4,7 +4,7 @@ Generative Fill, Remove object, Generative Expand and Text to Image for [Patchy]
 
 It uses the same engine and the same panel as [OpenFill for PhotoCraft](../photocraft/README.md): the same models, model manager, mask handling, seam correction and variations. Only the connection to the editor is different.
 
-> **Version 0.1.0** is a prototype. It needs a Patchy build with **Plugins > Companions** and the `resizeCanvas` options, which is not in a Patchy release yet. It was tested end to end on Windows 11 against a Patchy 1.24 development build, with a stand-in generator in place of ComfyUI (no graphics card or models); a run with a real ComfyUI and real models is still to do. See [the test results](../docs/evidence/patchy-2026-11-02/).
+> **Version 0.1.0** is a prototype. It needs a Patchy build with **Plugins > Companions** and the `resizeCanvas` options, which is not in a Patchy release yet. It was tested end to end with a real ComfyUI, LaMa and DreamShaper 8 Inpainting on Windows 11 (RTX 5090), Ubuntu 24.04 (RTX A6000) and macOS 27 (M2 Ultra) against Patchy development builds: install, models, Remove, Fill with Keep and Discard, Expand, Create, closing and uninstall. See [the test results](../docs/evidence/patchy-real-2026-11-02/). The panel itself next to a visible Patchy window still needs trying by hand.
 
 ## What you need
 
@@ -57,7 +57,7 @@ The same as [OpenFill for PhotoCraft](../photocraft/README.md#models), from the 
 
 The resolution limits are those of [OpenFill for PhotoCraft](../photocraft/README.md#known-limits): the engine is the same.
 
-Not tested yet: a real ComfyUI with real models, macOS and Linux, and the panel next to a visible Patchy window (picking the menu entry, the Windows tether).
+Not tested yet: the panel next to a visible Patchy window (picking OpenFill and Quit OpenFill in the menu, the Windows tether and the keyboard hand-back), a Patchy Flatpak with companions, and AMD cards.
 
 ## How it works
 
@@ -73,7 +73,7 @@ Patchy has a companion-app interface instead of an in-process plug-in: OpenFill 
 
 The result is kept in OpenFill while the seam correction, grain matching and ranking run, and reaches Patchy only at the end. Every edit carries Patchy's state token from just before it, so an edit never lands on a document that changed under it, and Keep or Discard never undo a step you made. A request Patchy reports as lost is never sent again.
 
-Tests: `python -m unittest patchy/tests/test_companion.py` (no Patchy needed; a fake connector, and a stand-in generator for a whole Generative Fill). With a Patchy build: `python patchy/e2e/run_e2e.py --patchy PATH/patchy.exe` starts its own Patchy offscreen (its own settings and connector endpoint, so a Patchy you have open is never touched), runs Fill, variations with Keep, Discard, Expand and Create with the stand-in generator from `patchy/tests/stub_backend.py`, and writes `report.json` and the document's image after each job. Last, it runs the real launcher (`python -m openfill_patchy --no-bar`, with its own settings) beside it and checks that it ends when that Patchy closes, the path Quit OpenFill takes too. The Quit entry itself can't be picked from outside an offscreen Patchy: try it in Plugins > Companions.
+Tests: `python -m unittest patchy/tests/test_companion.py` (no Patchy needed; a fake connector, and a stand-in generator for a whole Generative Fill). With a Patchy build: `python patchy/e2e/run_e2e.py --patchy PATH/patchy.exe` starts its own Patchy offscreen (its own settings and connector endpoint, so a Patchy you have open is never touched), runs Fill, variations with Keep, Discard, Expand and Create with the stand-in generator from `patchy/tests/stub_backend.py`, and writes `report.json` and the document's image after each job. With a real ComfyUI: `python patchy/e2e/run_real_e2e.py --patchy PATH/patchy [--comfy DIR] [--home-root DIR]` installs OpenFill, starts the companion as Patchy's menu would and drives it through its page's API (the panel's calls): the models through the model manager, Remove, Fill with Keep and Discard, Expand and Create, each checked as one undo step, then Patchy closing and the uninstall. Results on Windows, Linux and macOS: [docs/evidence/patchy-real-2026-11-02](../docs/evidence/patchy-real-2026-11-02/). Last, it runs the real launcher (`python -m openfill_patchy --no-bar`, with its own settings) beside it and checks that it ends when that Patchy closes, the path Quit OpenFill takes too. The Quit entry itself can't be picked from outside an offscreen Patchy: try it in Plugins > Companions.
 
 ## Credits and license
 

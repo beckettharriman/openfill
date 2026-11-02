@@ -161,7 +161,8 @@ def main() -> int:
     im = Image.new("RGB", (256, 192), (200, 100, 50))
     ImageDraw.Draw(im).rectangle((0, 120, 255, 191), fill=(30, 140, 60))
     im.save(photo)
-    endpoint = "OpenFillPatchyE2E-" + uuid.uuid4().hex
+    # Short: on macOS the socket is $TMPDIR/<name>, and a socket path has room for 104 bytes.
+    endpoint = "ofp-e2e-" + uuid.uuid4().hex[:8]
     env = {
         **os.environ,
         "QT_QPA_PLATFORM": "offscreen",
