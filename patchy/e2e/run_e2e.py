@@ -387,6 +387,55 @@ def main() -> int:
         )
 
         record("exchange_folder_empty", not list((profile / "exchange").iterdir()))
+
+        # 7. the real launcher (no panel) attached next to this script, and how it ends: a
+        # Quit from Plugins > Companions ends it through this same path (``until_quit``), but
+        # an offscreen Patchy offers no way to pick that menu entry from outside.
+        launcher_profile = scratch / "launcher-appdata"
+        settings_dir = launcher_profile / "OpenFill for Patchy" / "openfill"
+        settings_dir.mkdir(parents=True)
+        (settings_dir / "config.json").write_text('{"autostart": false}', encoding="utf-8")
+        launcher_env = {
+            **env,
+            "APPDATA": str(launcher_profile),  # its own settings and logs, never ComfyUI
+            "LOCALAPPDATA": str(scratch / "launcher-local"),
+            "OPENFILL_NO_BROWSER": "1",
+        }
+        # Its output to a file, not NUL (on Windows NUL reports itself as a terminal), so the
+        # launcher writes companion.log as it does when Patchy starts it.
+        log_path = launcher_profile / "OpenFill for Patchy" / "companion.log"
+        launcher_log = (out / "launcher-output.log").open("w", encoding="utf-8")
+        launcher = subprocess.Popen(
+            [sys.executable, "-m", "openfill_patchy", "--no-bar", "--connector", str(connector)],
+            cwd=ROOT / "patchy",
+            env=launcher_env,
+            stdin=subprocess.DEVNULL,
+            stdout=launcher_log,
+            stderr=launcher_log,
+        )
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and launcher.poll() is None:
+            if log_path.exists() and "OpenFill for Patchy is running" in log_path.read_text(encoding="utf-8"):
+                break
+            time.sleep(0.5)
+        running = launcher.poll() is None
+        app.terminate()  # Patchy closes
+        app.wait(timeout=30)
+        try:
+            code = launcher.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            launcher.kill()
+            code = None
+        launcher_log.close()
+        text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        record(
+            "launcher_exits_when_patchy_closes",
+            running and code == 0 and "Patchy was closed; OpenFill stops too." in text,
+            attached="Attached to Patchy" in text,
+            was_running=running,
+            exit_code=code,
+            said_patchy_closed="Patchy was closed; OpenFill stops too." in text,
+        )
     except Exception as err:  # noqa: BLE001 - reported
         record("e2e_run", False, error=f"{err}", trace=traceback.format_exc()[-800:])
     finally:
