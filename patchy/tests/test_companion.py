@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import io
 import itertools
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import threading
@@ -973,6 +975,70 @@ class InstallTests(unittest.TestCase):
             path.write_text(json.dumps({"id": "io.example.other"}), encoding="utf-8")
             self.assertFalse(install.uninstall(folder))  # not ours: left alone
             self.assertTrue(path.exists())
+
+    def test_a_flatpak_patchy_gets_the_entry_in_its_sandbox_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            env = {"XDG_DATA_HOME": str(home / "share")}
+            with (
+                mock.patch.object(sys, "platform", "linux"),
+                mock.patch.dict(os.environ, env),
+                mock.patch.object(Path, "home", return_value=home),
+            ):
+                self.assertEqual(install.target_dirs(), [home / "share" / "RTsoft" / "Patchy" / "companions"])
+                (home / "share" / "flatpak" / "app" / "com.rtsoft.patchy").mkdir(parents=True)
+                flatpak = home / ".var" / "app" / "com.rtsoft.patchy" / "data" / "RTsoft" / "Patchy" / "companions"
+                self.assertEqual(install.target_dirs()[1], flatpak)
+                with (
+                    mock.patch.object(install, "has_pillow", return_value=True),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(install.main(["--python", sys.executable]), 0)
+                    self.assertTrue((flatpak / "openfill.json").is_file())
+                    self.assertEqual(install.main(["--uninstall"]), 0)
+                self.assertFalse((flatpak / "openfill.json").exists())
+                self.assertFalse((home / "share" / "RTsoft" / "Patchy" / "companions" / "openfill.json").exists())
+
+    def test_pillow_is_checked_in_the_python_the_entry_runs(self):
+        self.assertTrue(install.has_pillow(sys.executable))
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(install.has_pillow(str(Path(tmp) / "no-python-here")))
+            with (
+                mock.patch.object(install, "has_pillow", return_value=False),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(install.main(["--python", "/elsewhere/python3"]), 2)
+
+    def test_a_system_managed_python_is_not_told_to_pip_install(self):
+        managed = subprocess.CompletedProcess([], 0, stdout="True\n", stderr="")
+        with mock.patch.object(install.subprocess, "run", return_value=managed):
+            advice = install.no_pillow_advice("/opt/homebrew/bin/python3")
+        self.assertNotIn("pip install", advice)
+        self.assertIn("--python", advice)  # ComfyUI's Python instead
+        plain = subprocess.CompletedProcess([], 0, stdout="False\n", stderr="")
+        with mock.patch.object(install.subprocess, "run", return_value=plain):
+            self.assertIn("-m pip install Pillow", install.no_pillow_advice("/usr/local/bin/python3"))
+
+    def test_the_flatpak_connector_when_nothing_else_is_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            with (
+                mock.patch.object(sys, "platform", "linux"),
+                mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(home / "share")}),
+                mock.patch.object(Path, "home", return_value=home),
+                mock.patch(
+                    "openfill_patchy.client.shutil.which",
+                    lambda name: f"/usr/bin/{name}" if name == "flatpak" else None,
+                ),
+            ):
+                os.environ.pop("PATCHY_MCP", None)
+                self.assertIsNone(find_connector())
+                (home / "share" / "flatpak" / "app" / "com.rtsoft.patchy").mkdir(parents=True)
+                self.assertEqual(
+                    find_connector(),
+                    ["/usr/bin/flatpak", "run", "--command=patchy-mcp", "com.rtsoft.patchy", "--attach"],
+                )
+                self.assertEqual(find_connector("/opt/patchy/patchy-mcp"), ["/opt/patchy/patchy-mcp", "--attach"])
 
     def test_folder_is_patchys_app_data(self):
         with (

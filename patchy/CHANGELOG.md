@@ -13,3 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Quit OpenFill from Patchy's Plugins > Companions menu; it stops the way it does when Patchy closes.
 - Give the keyboard back to Patchy after Generate, Keep, Keep all or Discard on Windows, so Patchy's shortcuts work without a click.
 - Check Patchy's companion protocol version at start (OpenFill 0.1.0 speaks version 1) and say whether Patchy or OpenFill needs updating; the menu entry records the same range.
+- Support Patchy's Flatpak: the installer also writes the menu entry into the Flatpak's companions folder, and OpenFill started by hand uses the Flatpak's own connector.
+- Check for Pillow in the Python the menu entry runs, not the installer's own, and suggest ComfyUI's Python where pip cannot add packages (Homebrew, Ubuntu's system Python).
+- Say how to start OpenFill when Patchy's connector cannot be found.

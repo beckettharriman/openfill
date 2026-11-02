@@ -30,6 +30,7 @@ from openfill_patchy.bridge import PatchyBridge, default_profile  # noqa: E402
 from openfill_patchy.client import (  # noqa: E402
     COMPANION_PROTOCOL_MAX,
     COMPANION_PROTOCOL_MIN,
+    FIRST_PATCHY_WITH_COMPANIONS,
     PatchyClient,
     PatchyError,
     find_connector,
@@ -87,9 +88,12 @@ def main(argv: list[str] | None = None) -> int:
 
     command = find_connector(args.connector)
     if command is None:
+        # Only possible when started by hand: Patchy's menu says where its connector is.
         tell(
             "OpenFill",
-            "Patchy's connector (patchy-mcp) was not found. Open OpenFill from Plugins > Companions in Patchy.",
+            f"Patchy's connector (patchy-mcp) was not found. Install Patchy {FIRST_PATCHY_WITH_COMPANIONS} or newer"
+            " and open OpenFill from its Plugins > Companions menu, or start OpenFill with --connector and the"
+            " path of patchy-mcp.",
         )
         return 2
     holder: dict = {}

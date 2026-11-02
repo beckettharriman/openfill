@@ -9,8 +9,8 @@ It uses the same engine and the same panel as [OpenFill for PhotoCraft](../photo
 ## What you need
 
 - **Patchy 1.25 or newer** (the first release with Plugins > Companions), on Windows, macOS or Linux.
-- **Python 3.10 or newer with Pillow.** Tk is optional: with it you get the OpenFill panel; without it, the same controls open in your default browser. ComfyUI's own Python works too.
-- **ComfyUI and models**, as for [OpenFill for PhotoCraft](../photocraft/README.md#what-you-need). If OpenFill for PhotoCraft or for GIMP already has a ComfyUI folder set, it is used.
+- **Python 3.10 or newer with Pillow.** Tk is optional: with it you get the OpenFill panel; without it, the same controls open in your default browser. ComfyUI's own Python works too, and on macOS it is the easy choice: the `python3` that comes with macOS is too old, and Homebrew's will not let pip add Pillow. On Ubuntu the system Python works with `sudo apt install python3-pil python3-tk`.
+- **ComfyUI and models**, as for [OpenFill for PhotoCraft](../photocraft/README.md#what-you-need). If OpenFill for PhotoCraft or for GIMP already has a ComfyUI folder set, it is used. On Windows the panel can download ComfyUI for you; on macOS and Linux set it up once as in [the install guide](../docs/install.md#macos), then choose its folder in the panel.
 
 ## Install
 
@@ -20,9 +20,13 @@ From the repository (or an unzipped copy of it), in the `patchy` folder:
 python -m openfill_patchy.install
 ```
 
-This adds **OpenFill** to Patchy's **Plugins > Companions** menu for your user account. It writes one file, `openfill.json`, into Patchy's companions folder (`%APPDATA%\RTsoft\Patchy\companions` on Windows, `~/Library/Application Support/RTsoft/Patchy/companions` on macOS, `~/.local/share/RTsoft/Patchy/companions` on Linux). The entry runs OpenFill with the Python you ran the installer with; pass `--python PATH` to choose another one. Patchy reads the folder each time the menu opens, so there is nothing to restart.
+This adds **OpenFill** to Patchy's **Plugins > Companions** menu for your user account. It writes one file, `openfill.json`, into Patchy's companions folder (`%APPDATA%\RTsoft\Patchy\companions` on Windows, `~/Library/Application Support/RTsoft/Patchy/companions` on macOS, `~/.local/share/RTsoft/Patchy/companions` on Linux). The entry runs OpenFill with the Python you ran the installer with; pass `--python PATH` to choose another one, for example ComfyUI's: `python3 -m openfill_patchy.install --python ~/ComfyUI/venv/bin/python`. Patchy reads the folder each time the menu opens, so there is nothing to restart.
+
+**Patchy's Flatpak (Linux)** cannot start programs outside its sandbox, so it lists OpenFill greyed out as "(start it outside Patchy)". The installer also writes the entry into the Flatpak's folder (`~/.var/app/com.rtsoft.patchy/data/RTsoft/Patchy/companions`). Open Patchy, then start OpenFill yourself with `python3 -m openfill_patchy` in the `patchy` folder: it uses the Flatpak's own connector and attaches to the Patchy that is open.
 
 To remove it: `python -m openfill_patchy.install --uninstall`. Settings and models stay.
+
+The first time, get LaMa and DreamShaper 8 Inpainting in the model manager (the gear in the panel). With a ComfyUI you set up yourself, LaMa then shows **Needs extra parts**: press **Install nodes** once (the inpaint nodes it uses; the ComfyUI that Download ComfyUI sets up already has them).
 
 ## Using it
 

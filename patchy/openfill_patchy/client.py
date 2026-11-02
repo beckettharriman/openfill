@@ -34,6 +34,7 @@ COMPANION_PROTOCOL_MIN = 1
 COMPANION_PROTOCOL_MAX = 1
 # The first Patchy release with Plugins > Companions, named when a Patchy has none.
 FIRST_PATCHY_WITH_COMPANIONS = "1.25"
+FLATPAK_ID = "com.rtsoft.patchy"  # Patchy's Flatpak (Linux)
 # Patchy answers "busy" while the artist is mid-gesture, in a modal dialog, or another
 # client's script runs. Nothing ran, so the request is sent again, for this long at most.
 BUSY_PATIENCE_S = 30 * 60.0
@@ -92,10 +93,20 @@ class WorkspaceLost(PatchyError):
     request may have run, so it is never sent again)."""
 
 
+def flatpak_patchy_installed() -> bool:
+    """Patchy's Flatpak is installed for this user or for the whole system (Linux)."""
+    if not sys.platform.startswith("linux"):
+        return False
+    data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return any((root / "app" / FLATPAK_ID).is_dir() for root in (data / "flatpak", Path("/var/lib/flatpak")))
+
+
 def find_connector(explicit: str | None = None) -> list[str] | None:
     """The command that starts Patchy's connector in attached mode, or None.
 
-    ``PATCHY_MCP`` is set when Patchy starts a companion from Plugins > Companions."""
+    ``PATCHY_MCP`` is set when Patchy starts a companion from Plugins > Companions. A Patchy
+    Flatpak cannot start one (the sandbox runs no host programs): the artist starts OpenFill,
+    and it runs the Flatpak's own connector, which reaches the Patchy inside the sandbox."""
     for candidate in (explicit, os.environ.get("PATCHY_MCP")):
         if candidate:
             return [candidate, "--attach"]
@@ -110,8 +121,13 @@ def find_connector(explicit: str | None = None) -> list[str] | None:
     for path in paths:
         if path.is_file() and os.access(path, os.X_OK):
             return [str(path), "--attach"]
-    found = shutil.which("patchy-mcp")  # Linux: the script beside patchy, or the Flatpak's
-    return [found, "--attach"] if found else None
+    found = shutil.which("patchy-mcp")  # Linux: the script beside patchy
+    if found:
+        return [found, "--attach"]
+    flatpak = shutil.which("flatpak")
+    if flatpak and flatpak_patchy_installed():
+        return [flatpak, "run", "--command=patchy-mcp", FLATPAK_ID, "--attach"]
+    return None
 
 
 class PatchyClient:

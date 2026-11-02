@@ -7,7 +7,10 @@
 Writes ``openfill.json`` into Patchy's companions folder (see Patchy's docs/companions.md):
 ``<per-user app data>/companions``, which is ``%APPDATA%\\RTsoft\\Patchy\\companions`` on
 Windows, ``~/Library/Application Support/RTsoft/Patchy/companions`` on macOS and
-``~/.local/share/RTsoft/Patchy/companions`` on Linux. The entry runs this copy of OpenFill
+``~/.local/share/RTsoft/Patchy/companions`` on Linux, plus
+``~/.var/app/com.rtsoft.patchy/data/RTsoft/Patchy/companions`` when Patchy's Flatpak is
+installed (a Flatpak Patchy lists the entry but cannot start it: start OpenFill yourself and
+it attaches). The entry runs this copy of OpenFill
 with the given Python (by default the one running the installer; ``pythonw.exe`` on Windows
 when it is there, so no console window opens). Patchy reads the folder each time the menu
 opens, so no restart is needed. Settings, models and ComfyUI stay where they are on
@@ -19,10 +22,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-from .client import COMPANION_ID, COMPANION_PROTOCOL_MAX, COMPANION_PROTOCOL_MIN
+from .client import COMPANION_ID, COMPANION_PROTOCOL_MAX, COMPANION_PROTOCOL_MIN, FLATPAK_ID, flatpak_patchy_installed
 
 MANIFEST = "openfill.json"
 
@@ -37,6 +41,53 @@ def companions_dir() -> Path:
     else:
         base = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
     return base / "RTsoft" / "Patchy" / "companions"
+
+
+def flatpak_companions_dir() -> Path:
+    """The companions folder of Patchy's Flatpak (its sandbox's own app data)."""
+    return Path.home() / ".var" / "app" / FLATPAK_ID / "data" / "RTsoft" / "Patchy" / "companions"
+
+
+def target_dirs() -> list[Path]:
+    """Every companions folder a Patchy on this computer reads."""
+    folders = [companions_dir()]
+    if flatpak_patchy_installed():
+        folders.append(flatpak_companions_dir())
+    return folders
+
+
+def has_pillow(python: str) -> bool:
+    """``python`` can import Pillow (the Python OpenFill runs with, not necessarily this one)."""
+    if Path(python).resolve() == Path(sys.executable).resolve():
+        try:
+            import PIL  # noqa: F401
+        except ImportError:
+            return False
+        return True
+    try:
+        return subprocess.run([python, "-c", "import PIL"], capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def no_pillow_advice(python: str) -> str:
+    """What to do when ``python`` has no Pillow. Homebrew's Python and the system Python of
+    recent Linux releases refuse ``pip install`` (PEP 668), so those get another way."""
+    probe = (
+        "import os, sysconfig; print(os.path.exists(os.path.join(sysconfig.get_path('stdlib'), 'EXTERNALLY-MANAGED')))"
+    )
+    try:
+        managed = subprocess.run([python, "-c", probe], capture_output=True, text=True, timeout=60).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        managed = ""
+    if managed != "True":
+        return f"{python} has no Pillow; install it first: {python} -m pip install Pillow"
+    comfy_python = r"ComfyUI\venv\Scripts\python.exe" if sys.platform == "win32" else "~/ComfyUI/venv/bin/python"
+    return (
+        f"{python} has no Pillow, and its packages are managed by the system, so pip cannot add it. "
+        f"Use ComfyUI's Python, which has Pillow: python3 -m openfill_patchy.install --python {comfy_python} "
+        "(the venv in your ComfyUI folder), or a venv of your own with Pillow."
+    )
 
 
 def package_root() -> Path:
@@ -98,15 +149,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--uninstall", action="store_true", help="take OpenFill out of Plugins > Companions")
     args = parser.parse_args(argv)
     if args.uninstall:
-        print("Removed." if uninstall() else "OpenFill was not in Patchy's Companions menu.")
+        removed = [folder for folder in target_dirs() if uninstall(folder)]
+        print("Removed." if removed else "OpenFill was not in Patchy's Companions menu.")
         return 0
-    try:
-        import PIL  # noqa: F401
-    except ImportError:
-        print(f"{args.python} has no Pillow; install it first: {args.python} -m pip install Pillow")
+    if not has_pillow(args.python):
+        print(no_pillow_advice(args.python))
         return 2
-    path = install(args.python)
-    print(f"Added OpenFill to Plugins > Companions in Patchy ({path}).")
+    for folder in target_dirs():
+        path = install(args.python, folder)
+        print(f"Added OpenFill to Plugins > Companions in Patchy ({path}).")
+        if folder != companions_dir():
+            print("Patchy's Flatpak cannot start it: start OpenFill yourself (python -m openfill_patchy).")
     return 0
 
 
