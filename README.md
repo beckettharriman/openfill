@@ -49,7 +49,7 @@ More in [photocraft/README.md](photocraft/README.md).
 
 **Patchy (prototype)**
 
-OpenFill also runs as a companion app of [Patchy](https://github.com/SethRobinson/Patchy), from its Plugins > Companions menu, with the same panel. It needs a Patchy build with that menu, which is not in a release yet. See [patchy/README.md](patchy/README.md).
+OpenFill also runs as a companion app of [Patchy](https://github.com/SethRobinson/Patchy), from its Plugins > Companions menu, with the same panel. It needs Patchy 1.25 or newer. See [patchy/README.md](patchy/README.md).
 
 **GIMP 3.2**
 

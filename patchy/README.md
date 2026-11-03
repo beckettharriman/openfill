@@ -4,7 +4,7 @@ Generative Fill, Remove object, Generative Expand and Text to Image for [Patchy]
 
 It uses the same engine and the same panel as [OpenFill for PhotoCraft](../photocraft/README.md): the same models, model manager, mask handling, seam correction and variations. Only the connection to the editor is different.
 
-> **Version 0.1.0** is a prototype. It needs a Patchy build with **Plugins > Companions** and the `resizeCanvas` options, which is not in a Patchy release yet. It was tested end to end with a real ComfyUI, LaMa and DreamShaper 8 Inpainting on Windows 11 (RTX 5090), Ubuntu 24.04 (RTX A6000) and macOS 27 (M2 Ultra) against Patchy development builds: install, models, Remove, Fill with Keep and Discard, Expand, Create, closing and uninstall. See [the test results](../docs/evidence/patchy-real-2026-11-02/). The panel itself next to a visible Patchy window still needs trying by hand.
+> **Version 0.1.0** is a prototype. It needs Patchy 1.25 or newer (Plugins > Companions). It was tested end to end with a real ComfyUI, LaMa and DreamShaper 8 Inpainting on Windows 11 (RTX 5090), Ubuntu 24.04 (RTX A6000) and macOS 27 (M2 Ultra): install, models, Remove, Fill with Keep and Discard, Expand, Create, closing and uninstall, and again against the released Patchy 1.25. See [the test results](../docs/evidence/patchy-real-2026-11-02/).
 
 ## What you need
 

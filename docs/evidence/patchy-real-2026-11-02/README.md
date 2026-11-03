@@ -60,7 +60,16 @@ Also on 2026-11-02, outside this script:
 - On the Mac, the installer run with Homebrew's `python3` (3.15, no Pillow, pip refuses to add packages)
   now suggests ComfyUI's Python instead of `pip install Pillow`.
 
+On 2026-11-03, against the released Patchy 1.25:
+
+- `run_real_e2e.py` with Patchy from the 1.25 Windows zip passed every case: attach reported 1.25, Remove
+  17.1 s, Fill with 3 variations and Keep 10.2 s (one step), Discard 5.0 s (no step), Expand left 5.1 s
+  (one step), Create 3.0 s; closing Patchy stopped OpenFill and ComfyUI, and uninstall kept settings and
+  models.
+- The 1.25 Flatpak on glados: OpenFill started by hand found the Flatpak's connector by itself, attached
+  to Patchy 1.25 with companion protocol 1, and stopped with "Patchy was closed; OpenFill stops too." when
+  that Patchy closed.
+
 Not checked here: picking OpenFill and Quit OpenFill in Plugins > Companions, the panel itself (Tk) next
 to a visible Patchy window, the Windows tether and the keyboard hand-back, Download ComfyUI from the panel
-(the Windows ComfyUI already existed), a Patchy Flatpak with companions (none is built yet), and an AMD
-card.
+(the Windows ComfyUI already existed), and an AMD card.
