@@ -179,6 +179,23 @@ class TemplateSelectionTests(unittest.TestCase):
         self.assertEqual(fx["unet"]["inputs"]["weight_dtype"], "fp8_e4m3fn")
         self.assertEqual(fx["clip"]["class_type"], "DualCLIPLoader")
 
+    def test_flux_loaders_follow_each_file_type(self):
+        """Each loader is picked from the file it loads (issue #8: a GGUF UNet with the
+        safetensors text encoders already in ComfyUI, or the other way round)."""
+        cases = (
+            ("fill-Q4_K_S.gguf", "t5xxl_fp8_e4m3fn.safetensors", "UnetLoaderGGUF", "DualCLIPLoader"),
+            ("fill-Q4_K_S.gguf", "t5-v1_1-xxl-encoder-Q5_K_M.gguf", "UnetLoaderGGUF", "DualCLIPLoaderGGUF"),
+            ("fill.safetensors", "t5-v1_1-xxl-encoder-Q5_K_M.gguf", "UNETLoader", "DualCLIPLoaderGGUF"),
+            ("fill.safetensors", "sub/T5XXL_FP16.SAFETENSORS", "UNETLoader", "DualCLIPLoader"),
+        )
+        for unet, t5, unet_loader, clip_loader in cases:
+            flux = ModelSpec(arch="flux", unet=unet, clip1=t5, clip2="flux/clip_l.safetensors", vae="ae.safetensors")
+            fx = w.build_fill(_req(model=flux), "i", "m", 1, w.Capabilities(False))
+            self.assertEqual(fx["unet"]["class_type"], unet_loader, (unet, t5))
+            self.assertEqual(fx["clip"]["class_type"], clip_loader, (unet, t5))
+            self.assertEqual(fx["clip"]["inputs"]["clip_name1"], t5)
+            self.assertEqual(fx["clip"]["inputs"]["clip_name2"], "flux/clip_l.safetensors")
+
     def test_qwen_edit_graph(self):
         qwen = ModelSpec(
             arch="qwen_image",
