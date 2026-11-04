@@ -746,6 +746,7 @@ class TaskWorker:
     def _remove(self, task: dict[str, Any]) -> None:
         root = self._checked_models_root(task)
         known = self._catalog_files(task)
+        main = catalog.live_main_file(catalog.by_id(self._catalog(), str(task.get("model_id") or "")))
         removed = []
         for rel in task["files"]:
             try:
@@ -755,6 +756,9 @@ class TaskWorker:
                 continue
             if rel not in known:
                 continue  # only files the catalog put there are ever deleted
+            spec = known[rel]
+            if not spec.url and spec != main:
+                continue  # a companion found in place (your own text encoder or VAE) is never deleted
             for p in (path, downloads.part_path(path)):
                 if p.is_file():
                     p.unlink()
