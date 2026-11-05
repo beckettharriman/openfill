@@ -11,6 +11,7 @@ Fill are non-commercial.**
 |---|---|---|---|---|
 | LaMa | 0.2 GB | 2 GB | Remove (default) | Apache-2.0 |
 | MAT Places512 | 0.1 GB | 2 GB | Remove | **CC BY-NC 4.0, non-commercial** |
+| BiRefNet | 0.4 GB | 2 GB | Remove Background (PhotoCraft panel, Cutout) | MIT |
 | RORem (SDXL eraser) | 6.5 GB | 8 GB | Remove | Apache-2.0 |
 | FLUX.1 Fill object removal LoRA | 0.3 GB, runs on FLUX.1 Fill | 8 GB | Remove | MIT for the LoRA, but FLUX.1 Fill is **non-commercial** |
 | DreamShaper 8 Inpainting | 2.0 GB | 4 GB | Fill, Expand, Create | CreativeML OpenRAIL-M |
@@ -266,6 +267,7 @@ of the companion files that live candidates reuse.
 | `qwen-image-edit-2511-gguf-q4` | Qwen-Image-Edit | 21.3 GB | 12 GB | Apache-2.0 | no | https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF |
 | `lama-big` | Object removal | 196 MB | 2 GB | Apache-2.0 | no | https://github.com/advimman/lama |
 | `mat-places512` | Object removal | 120 MB | 2 GB | CC BY-NC 4.0 | no | https://huggingface.co/Acly/MAT |
+| `birefnet` | Background removal | 424 MB | 2 GB | MIT | no | https://huggingface.co/ZhengPeng7/BiRefNet |
 | `rorem-sdxl` | Object removal (SDXL eraser) | 6.5 GB | 8 GB | Apache-2.0 | no | https://huggingface.co/LetsThink/RORem |
 | `flux1-fill-object-removal-lora` | Object removal (LoRA on FLUX.1 Fill) | 0.3 GB | 8 GB | MIT for the LoRA; FLUX.1 [dev] Non-Commercial for FLUX.1 Fill | no | https://huggingface.co/lrzjason/ObjectRemovalFluxFill |
 

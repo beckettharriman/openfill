@@ -115,7 +115,7 @@ class Api:
 
     def post(self, path: str, body: dict[str, Any]) -> Any:
         svc, app = self.service, self.service.app
-        if path in ("/api/fill", "/api/expand", "/api/txt2img"):
+        if path in ("/api/fill", "/api/expand", "/api/txt2img", "/api/bgremove"):
             svc.start(path.rsplit("/", 1)[1], body)
             return {"started": True}
         if path == "/api/show":

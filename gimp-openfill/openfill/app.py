@@ -21,7 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from . import caption, comfy_setup, geometry, hardware, local_models, quality, ui_text, workflow
+from . import caption, comfy_setup, geometry, hardware, local_models, png, quality, ui_text, workflow
 from . import catalog as cat
 from .backend import (
     SETTINGS_MENU,
@@ -1269,6 +1269,63 @@ class App:
             raise
         runner.done("Done")
         self.log.info("txt2img: done, seed=%s", result.seed)
+
+    def background_removal_model_available(self) -> cat.ModelEntry | None:
+        """The first installed Remove Background model (BiRefNet), or None."""
+        found = cat.runnable_installed(self.catalog, self.models_root, self.custom_nodes_dir, "bgremove")
+        return found[0] if found else None
+
+    def remove_background(self, image) -> list:
+        """Cut the subject out of the whole image with BiRefNet: one new layer on top, the
+        original untouched below it. No selection and no prompt are used."""
+        self._check_image(image)
+        entry = self.background_removal_model_available()
+        if entry is None:
+            raise ModelMissing(
+                "Remove Background needs the BiRefNet model. Download it in the Models tab (Background removal)."
+            )
+        entry, model = self.resolve_model(entry.id)
+        full = self.io.image_rect(image)
+        image_png, _ = self.io.export_region(image, full)
+        mask_png = png.encode(full.width, full.height, b"\xff" * (full.width * full.height), 1)
+        request = InpaintRequest(
+            image_png=image_png,
+            mask_png=mask_png,
+            width=full.width,
+            height=full.height,
+            work_width=full.width,
+            work_height=full.height,
+            prompt="",
+            negative="",
+            model=model,
+            sampling=Sampling(steps=1, batch=1),
+            mode="bgremove",
+        )
+        self.log.info("bgremove: %dx%d model=%s", full.width, full.height, entry.id)
+        title = "Remove Background"
+        runner = self.runner_cls(self, title, model_display_name(entry.name), interactive=self.interactive)
+        try:
+            result = runner.run(
+                lambda progress, preview, cancel: self.backend(progress, cancel).inpaint(
+                    request, progress, preview, cancel
+                )
+            )
+            self.server.touch()
+            layers = self.io.insert_results(
+                image,
+                result.images,
+                full,
+                "Background Removed",
+                0.0,
+                self.paths.temp,
+                use_selection_mask=False,
+            )
+        except BaseException as err:
+            runner.fail(err)
+            raise
+        runner.done("Added layer: Background Removed")
+        self.log.info("bgremove: done, %d layer(s)", len(layers))
+        return layers
 
     def _check_image(self, image) -> None:
         if self.io.is_indexed(image):

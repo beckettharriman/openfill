@@ -191,6 +191,36 @@
       ]
     },
     {
+      "id": "birefnet",
+      "name": "BiRefNet - background removal (cuts the subject out of the whole image)",
+      "tier": "removal",
+      "capabilities": [
+        "bgremove"
+      ],
+      "arch": "bg_removal",
+      "template": "bgremove",
+      "page": "https://huggingface.co/ZhengPeng7/BiRefNet",
+      "license": {
+        "name": "MIT",
+        "url": "https://github.com/ZhengPeng7/BiRefNet/blob/main/LICENSE"
+      },
+      "gated": false,
+      "source_type": "first-party",
+      "uploader": "Comfy-Org conversion of ZhengPeng7/BiRefNet to the format of ComfyUI's own background removal nodes (ComfyUI 0.39 and newer)",
+      "min_vram_gb": 2,
+      "requires_nodes": [],
+      "requires_models": [],
+      "files": [
+        {
+          "role": "bg_removal_model",
+          "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+          "dest": "background_removal/birefnet.safetensors",
+          "size": 444473596,
+          "sha256": "9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154"
+        }
+      ]
+    },
+    {
       "id": "lama-big",
       "name": "LaMa (big-lama) - prompt-free object removal at full resolution",
       "tier": "removal",
