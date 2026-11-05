@@ -1002,6 +1002,11 @@ class Bar:
     def _layout_main(self) -> None:
         """Pack the tool view's parts for the current mode (12 px apart)."""
         key = self.tab.get()
+        var_row, model_row = self.var_seg.master.master, self.model_box.master.master
+        if key == "bgremove":
+            var_row.pack_forget()  # one cutout per run: nothing to choose
+        elif not var_row.winfo_manager():
+            var_row.pack(fill="x", before=model_row)
         parts: list[tk.Misc] = [self.modes, self.context_row]
         if key == "remove":
             parts.append(self.remove_line)
