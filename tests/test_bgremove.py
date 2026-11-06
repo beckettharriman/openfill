@@ -141,5 +141,27 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(model_files(BIREFNET), {"birefnet.safetensors"})
 
 
+class OnlyComfyTests(unittest.TestCase):
+    """Remove Background is a ComfyUI graph: another backend would fill the whole image instead."""
+
+    def app(self, backend):
+        from openfill.app import App
+
+        app = App.__new__(App)
+        app.backend = lambda progress=None, cancel=None: backend
+        return app
+
+    def test_another_backend_is_refused(self):
+        from openfill.backend import BackendUnavailable
+        from openfill.backends.a1111 import A1111Backend
+
+        with self.assertRaisesRegex(BackendUnavailable, "ComfyUI only"):
+            self.app(A1111Backend("http://127.0.0.1:9", 0, None))._background_removal_backend()
+
+    def test_comfyui_is_used(self):
+        comfy = ComfyBackend(client=BackendTests.Client({"RemoveBackground"}))
+        self.assertIs(self.app(comfy)._background_removal_backend(), comfy)
+
+
 if __name__ == "__main__":
     unittest.main()

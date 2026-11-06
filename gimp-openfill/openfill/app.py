@@ -1306,7 +1306,7 @@ class App:
         runner = self.runner_cls(self, title, model_display_name(entry.name), interactive=self.interactive)
         try:
             result = runner.run(
-                lambda progress, preview, cancel: self.backend(progress, cancel).inpaint(
+                lambda progress, preview, cancel: self._background_removal_backend(progress, cancel).inpaint(
                     request, progress, preview, cancel
                 )
             )
@@ -1326,6 +1326,14 @@ class App:
         runner.done("Added layer: Background Removed")
         self.log.info("bgremove: done, %d layer(s)", len(layers))
         return layers
+
+    def _background_removal_backend(self, progress=None, cancel=None) -> ComfyBackend:
+        """The backend for Remove Background: ComfyUI only. Any other backend would run the
+        request as an ordinary fill of the whole image (a full mask and no prompt)."""
+        backend = self.backend(progress, cancel)
+        if not isinstance(backend, ComfyBackend):
+            raise BackendUnavailable("Remove Background runs on ComfyUI only. Switch the backend to ComfyUI to use it.")
+        return backend
 
     def _check_image(self, image) -> None:
         if self.io.is_indexed(image):
