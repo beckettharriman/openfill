@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 import uuid
 from pathlib import Path
@@ -45,6 +46,47 @@ SLOW_MODEL_FLOOR = 240.0
 # Model folders searched for the size of a request's model files.
 MODEL_FOLDERS = ("checkpoints", "diffusion_models", "unet", "clip", "text_encoders", "vae", "inpaint")
 
+# Inputs that name a model file. ComfyUI lists a file in a sub folder with the separator of the
+# computer it runs on (os.path.relpath: "sub\\file" on Windows) and only accepts that exact name.
+MODEL_INPUTS = (
+    "ckpt_name",
+    "unet_name",
+    "clip_name",
+    "clip_name1",
+    "clip_name2",
+    "vae_name",
+    "lora_name",
+    "model_name",
+    "head",
+    "patch",
+)
+
+
+def has_sub_folder_names(graph: dict) -> bool:
+    """True when a model input of ``graph`` names a file in a sub folder (``sub/file``)."""
+    return any(
+        isinstance(v, str) and "/" in v
+        for node in graph.values()
+        for k, v in (node.get("inputs") or {}).items()
+        if k in MODEL_INPUTS
+    )
+
+
+def with_server_separator(graph: dict, windows: bool) -> dict:
+    """``graph`` with the model names of sub folder files (``sub/file``, as OpenFill keeps them)
+    written as the server lists them: with ``\\`` when ComfyUI runs on Windows."""
+    if not windows:
+        return graph
+    out = {}
+    for node_id, node in graph.items():
+        inputs = dict(node.get("inputs") or {})
+        for key in MODEL_INPUTS:
+            if isinstance(inputs.get(key), str) and "/" in inputs[key]:
+                inputs[key] = inputs[key].replace("/", "\\")
+        out[node_id] = {**node, "inputs": inputs}
+    return out
+
+
 CONNECTION_LOST = (
     "ComfyUI stopped while it was generating (it crashed or was closed), so the image was not changed. "
     "Run the command again to restart it; if this keeps happening, read comfyui.log in the openfill "
@@ -71,6 +113,7 @@ class ComfyBackend(Backend):
         self._caps: workflow.Capabilities | None = None
         self._progress = Progress()
         self._first_step = 0.0  # monotonic time of the first sampling step of the current job
+        self._windows: bool | None = None  # ComfyUI runs on Windows (from /system_stats)
 
     # ------------------------------------------------------------------
 
@@ -112,6 +155,17 @@ class ComfyBackend(Backend):
 
     def progress(self) -> Progress:
         return self._progress
+
+    def server_on_windows(self) -> bool:
+        """True when ComfyUI runs on Windows (``system.os`` of /system_stats is ``sys.platform``
+        there); asked once. When it cannot be asked, this computer's own system is assumed."""
+        if self._windows is None:
+            try:
+                platform = str(self.client.system_stats().get("system", {}).get("os", ""))
+            except Exception:  # noqa: BLE001 - a server that cannot say: assume this computer's system
+                platform = ""
+            self._windows = platform.startswith("win") or platform == "nt" if platform else os.name == "nt"
+        return self._windows
 
     def cancel(self) -> None:
         for action in (self.client.interrupt, self.client.clear_queue):
@@ -225,6 +279,8 @@ class ComfyBackend(Backend):
         deadline = started + timeout
         self._first_step = 0.0
         self._report(progress, 0.02, "Submitting workflow...")
+        if has_sub_folder_names(graph):
+            graph = with_server_separator(graph, self.server_on_windows())
         try:
             prompt_id = self.client.queue_prompt(graph)
         except ComfyApiError as err:

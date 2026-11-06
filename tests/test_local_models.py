@@ -290,16 +290,18 @@ class CompanionTests(unittest.TestCase):
         fp8 = self.sized(write_safetensors(self.root / "text_encoders" / "t5xxl_fp8.safetensors", T5_ST), 4_893_934_904)
         # closest in size to the catalog's Q5_K_M: the fp8 beats fp16, whatever the folder
         self.assertEqual(lm.resolve_companion(self.root, q5, "t5xxl").dest, "text_encoders/t5xxl_fp8.safetensors")
-        # same size: the catalog's folder (clip/) first, then alphabetical
+        # same size: ComfyUI's folder order (text_encoders/ before clip/), then alphabetical
         self.sized(write_safetensors(self.root / "clip" / "t5xxl_fp8_b.safetensors", T5_ST), 4_893_934_904)
         self.sized(write_safetensors(self.root / "clip" / "t5xxl_fp8_a.safetensors", T5_ST), 4_893_934_904)
+        for _ in range(3):
+            self.assertEqual(lm.resolve_companion(self.root, q5, "t5xxl").dest, "text_encoders/t5xxl_fp8.safetensors")
+        fp8.unlink()
         for _ in range(3):
             self.assertEqual(lm.resolve_companion(self.root, q5, "t5xxl").dest, "clip/t5xxl_fp8_a.safetensors")
         # the catalog's file name wins over a closer size, wherever it is
         named = write_gguf(self.root / "text_encoders" / q5.filename, T5_GGUF)
         self.assertEqual(lm.resolve_companion(self.root, q5, "t5xxl").dest, "text_encoders/" + q5.filename)
         named.unlink()
-        fp8.unlink()
         fp16.unlink()
         self.assertEqual(lm.resolve_companion(self.root, q5, "t5xxl").dest, "clip/t5xxl_fp8_a.safetensors")
 
@@ -324,6 +326,46 @@ class CompanionTests(unittest.TestCase):
         lora = cat.by_id(entries, "flux1-fill-object-removal-lora")
         spec = cat.model_spec_for(lora, entries, self.root)
         self.assertEqual((spec.unet, spec.clip1), ("flux1-fill-dev-Q4_K_S.gguf", "t5xxl_fp8_e4m3fn.safetensors"))
+
+    def test_only_t5s_vocabulary_is_a_flux_t5(self):
+        """mT5-XXL and UMT5-XXL are 4096 wide too, but have 250k+ tokens: ComfyUI's FLUX T5
+        (32128 tokens) cannot load them, whatever the file is called."""
+        for rel, shapes in (
+            ("mt5_xxl_encoder.safetensors", {**T5_ST, "shared.weight": [250112, 4096]}),
+            ("t5xxl_from_wan.safetensors", {**T5_ST, "shared.weight": [256384, 4096]}),  # umt5, neutral name
+            ("t5xxl_no_embedding.safetensors", {"encoder.block.0.layer.0.SelfAttention.q.weight": [4096, 4096]}),
+            ("t5-xxl-mt5-Q8_0.gguf", {**T5_GGUF, "token_embd.weight": [250112, 4096]}),
+        ):
+            path = self.root / "text_encoders" / rel
+            (write_gguf if rel.endswith(".gguf") else write_safetensors)(path, shapes)
+            self.assertFalse(lm.compatible("t5xxl", path), rel)
+        alt = write_safetensors(
+            self.root / "text_encoders" / "t5xxl_alt.safetensors",
+            {"encoder.embed_tokens.weight": [32128, 4096], "x": [4096, 4096]},
+        )
+        self.assertTrue(lm.compatible("t5xxl", alt))
+
+    def test_pick_is_the_file_comfyui_loads_for_that_name(self):
+        """ComfyUI reads text_encoders/ before clip/ (folder_paths.py): with one name in both, it
+        loads the text_encoders/ file, so that is the one that must be compatible and picked."""
+        write_safetensors(self.root / "clip" / "t5xxl_fp8_e4m3fn.safetensors", T5_ST)  # good
+        bad = self.root / "text_encoders" / "t5xxl_fp8_e4m3fn.safetensors"
+        bad.parent.mkdir(parents=True)
+        bad.write_bytes(b"\0" * 64)  # a broken copy under the same name
+        write_safetensors(self.root / "clip" / "clip_l.safetensors", CLIP_L)
+        write_safetensors(self.root / "vae" / "ae.safetensors", FLUX_VAE)
+        entry = self.flux_entry()
+        t5 = entry.file_by_role("clip1")
+        self.assertEqual(t5.url, catalog_t5 := cat.by_id(ENTRIES, "flux1-fill-dev-gguf-q4").file_by_role("clip1").url)
+        self.assertTrue(catalog_t5)  # nothing usable: download, rather than a file ComfyUI would not load
+        # the catalog's own file in clip/ does not count either when text_encoders/ has its name
+        q5 = cat.by_id(ENTRIES, "flux1-fill-dev-gguf-q4").file_by_role("clip1")
+        self.sized(write_gguf(self.root / q5.dest, T5_GGUF), q5.size)
+        (self.root / "text_encoders" / q5.filename).write_bytes(b"\0" * 64)
+        self.assertIs(lm.resolve_companion(self.root, q5, "t5xxl"), q5)  # the catalog spec, not "found"
+        self.assertFalse(lm._loaded_first(self.root, q5.dest))
+        # and the same file in unet/ hides diffusion_models/ (ComfyUI: unet first)
+        self.assertEqual(lm.FOLDER_ALIASES["diffusion_models"], ("unet", "diffusion_models"))
 
     def test_compatible_by_name_and_header(self):
         ok = {
