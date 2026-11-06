@@ -46,6 +46,8 @@ class BackendChoice:
 BACKENDS = (
     BackendChoice("comfyui", "This computer (ComfyUI)", False, "This computer"),
     BackendChoice("a1111", "AUTOMATIC1111 WebUI (started by you with --api)", False, "AUTOMATIC1111", photocraft=False),
+    # online=False: pictures go to another computer of the user's own, never to a service
+    BackendChoice("remote", "Remote GPU (ComfyUI on another computer of yours)", False, "Remote GPU"),
     BackendChoice("cloud", "Cloud service (paid, sends your image online)", True, "Cloud service"),
 )
 
@@ -66,15 +68,21 @@ def default_comfy_dir() -> str:
 class Settings:
     """User settings stored in ``config.json``.
 
-    ``hf_token`` and ``cloud_api_key`` are secrets: they are left out of ``repr()``
-    so they cannot end up in a log line or a traceback, and :meth:`save` makes the
+    ``hf_token``, ``cloud_api_key`` and ``remote_token`` are secrets: they are left out of
+    ``repr()`` so they cannot end up in a log line or a traceback, and :meth:`save` makes the
     file readable by its owner only on POSIX systems.
     """
 
-    backend: str = "comfyui"  # one of BACKENDS: "comfyui", "a1111" or "cloud"
+    backend: str = "comfyui"  # one of BACKENDS: "comfyui", "a1111", "remote" or "cloud"
     comfy_dir: str = field(default_factory=default_comfy_dir)
     url: str = "http://127.0.0.1:8188"  # ComfyUI (or A1111) base URL
     a1111_url: str = "http://127.0.0.1:7860"
+    # Remote GPU (backend "remote"): the GPU server's address (http://HOST:PORT; with SSH, the
+    # address as seen from the GPU computer), its pairing code, and "user@host" to go through ssh.
+    remote_url: str = ""
+    remote_token: str = field(default="", repr=False)  # secret: the pairing code
+    remote_paired: str = ""  # the address remote_token belongs to; it is sent nowhere else
+    remote_ssh: str = ""
     autostart: bool = True  # start ComfyUI when needed
     idle_timeout_minutes: int = 20  # 0 = keep running until GIMP exits
     startup_timeout: int = 240  # seconds to wait for the server
@@ -248,6 +256,23 @@ class Settings:
         os.replace(tmp, path)
 
     # derived -----------------------------------------------------------
+
+    @property
+    def uses_remote(self) -> bool:
+        """Remote GPU: ComfyUI runs on another computer; nothing is started or installed here."""
+        return self.backend == "remote"
+
+    def take_pairing_code(self) -> None:
+        """Move a pasted pairing code (``ofgpu://CODE@HOST:PORT``) out of ``remote_url`` into
+        ``remote_token``, so the code is not shown in the settings. Leaves anything else as typed."""
+        from .remote import RemoteSetupError, parse_address
+
+        try:
+            url, token = parse_address(self.remote_url)
+        except RemoteSetupError:
+            return
+        if token:
+            self.remote_url, self.remote_token, self.remote_paired = url, token, url
 
     @property
     def active_url(self) -> str:

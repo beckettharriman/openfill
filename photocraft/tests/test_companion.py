@@ -1400,6 +1400,93 @@ class ServiceSetupTests(unittest.TestCase):
             self.assertTrue(info["url"].startswith("https://github.com/comfyanonymous/ComfyUI/releases/download/"))
 
 
+class RemoteGpuTests(unittest.TestCase):
+    """The Remote GPU choice in the page's settings, the gear and the warm-up."""
+
+    def _api(self, settings):
+        from types import SimpleNamespace
+
+        from openfill_photocraft import web
+
+        saved = []
+        app = SimpleNamespace(
+            settings=settings,
+            paths=SimpleNamespace(config="cfg"),
+            reload_settings=lambda: None,
+            uses_cloud=False,
+        )
+        settings.save = lambda path: saved.append(path)
+        api = web.Api.__new__(web.Api)
+        api.service = SimpleNamespace(app=app, warm_up=lambda: None)
+        return api, saved
+
+    def test_the_page_picks_the_remote_gpu_and_keeps_the_code_out_of_sight(self):
+        from openfill.config import Settings
+
+        code = "A" * 32
+        api, saved = self._api(Settings())
+        out = api.post(
+            "/api/settings",
+            {"backend": "remote", "remote_url": f"ofgpu://{code}@100.101.102.103:8390", "remote_ssh": ""},
+        )
+        settings = api.service.app.settings
+        self.assertEqual(settings.backend, "remote")
+        self.assertEqual((settings.remote_token, settings.remote_paired), (code, "http://100.101.102.103:8390"))
+        self.assertEqual(out["remote_url"], "http://100.101.102.103:8390")
+        self.assertEqual(out["backend"], "remote")
+        self.assertNotIn(code, json.dumps(out))
+        self.assertEqual(saved, ["cfg"])
+        out = api.post("/api/settings", {"backend": "comfyui"})
+        self.assertEqual(settings.backend, "comfyui")
+        self.assertEqual(settings.remote_token, code)  # kept for switching back
+
+    def test_the_gear_switch_moves_a_pasted_code_out_of_the_field(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.panels import GearView
+
+        from openfill.config import Settings
+
+        class Var:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        code = "B" * 32
+        gear = GearView.__new__(GearView)
+        gear.engine = SimpleNamespace(remote_url=Var(f" ofgpu://{code}@gpu-pc:8390 "), remote_ssh=Var(" becke@gpu-pc "))
+        settings = Settings()
+        gear._apply_remote(settings)
+        self.assertEqual(settings.remote_token, code)
+        self.assertEqual(gear.engine.remote_url.get(), "http://gpu-pc:8390")
+        self.assertEqual(settings.remote_ssh, "becke@gpu-pc")
+
+    def test_warm_up_connects_to_the_remote_gpu_without_a_local_comfyui(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.service import Service
+
+        checked = []
+        service = Service.__new__(Service)
+        service.app = SimpleNamespace(
+            uses_cloud=False,
+            settings=SimpleNamespace(uses_remote=True, comfy_dir="", autostart=False),
+            check_backend=lambda: checked.append(1) or SimpleNamespace(ok=True, detail="ComfyUI 0.39.0"),
+            has_model_for=lambda _op: False,
+            log=SimpleNamespace(info=lambda *a: None),
+        )
+        service.engine = ""
+        service.warm_up()
+        service._warm.join(5)
+        self.assertEqual(checked, [1])
+        self.assertEqual(service.engine, "ready")
+
+
 class PageTests(unittest.TestCase):
     def test_key_is_required(self):
         from openfill_photocraft import web

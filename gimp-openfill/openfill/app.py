@@ -60,6 +60,7 @@ NO_OPENCV_MANUAL = (
 
 # Model ids the old "fast"/"quality" choices meant without a catalog; with
 # one they resolve to the tier's installed default (catalog.TIER_PREFERENCE).
+REMOTE_DIRNAME = "remote-gpu"  # folder names for the Remote GPU's model list (never created on disk)
 LEGACY_CHOICES = {"fast": "sd15-inpainting", "quality": "sdxl-base"}
 MODEL_LIST_NODES = (
     ("CheckpointLoaderSimple", "ckpt_name"),
@@ -125,7 +126,9 @@ class App:
         except cat.CatalogError as err:
             self.log.warning("catalog unavailable: %s", err)
             self.catalog = []
-        if self.catalog and self.settings.comfy_dir:
+        self._remote_checked = 0.0  # Remote GPU: when the remote model and node list was last read
+        self._remote_failed = 0.0
+        if self.catalog and self.settings.comfy_dir and not self.settings.uses_remote:
             # The user's own SD 1.5 inpainting, SDXL and FLUX.1 Fill files in ComfyUI's folders.
             try:
                 found, skipped = local_models.scan(self.models_root, self.catalog, self.paths.base)
@@ -142,11 +145,54 @@ class App:
 
     @property
     def models_root(self) -> Path:
+        if self.settings.uses_remote:
+            self.refresh_remote_tree()
+            return self.paths.base / REMOTE_DIRNAME / "models"
         return cat.default_models_root(self.settings.comfy_dir)
 
     @property
     def custom_nodes_dir(self) -> Path:
+        if self.settings.uses_remote:
+            self.refresh_remote_tree()
+            return self.paths.base / REMOTE_DIRNAME / "custom_nodes"
         return cat.default_custom_nodes_dir(self.settings.comfy_dir)
+
+    def refresh_remote_tree(self, force: bool = False) -> bool:
+        """Remote GPU: read which models and node packs the GPU computer's ComfyUI has (at most
+        every 15 s, or now with ``force``) and let the catalog's status checks use that list for
+        :attr:`models_root` and :attr:`custom_nodes_dir`. False when it could not be read; the
+        last list read stays in use then (none at all: nothing counts as installed)."""
+        from . import remote
+
+        now = time.monotonic()
+        if not force and (
+            now - self._remote_checked < remote.TREE_TTL or now - self._remote_failed < remote.RETRY_AFTER_FAILURE
+        ):
+            return True
+        self._remote_checked = now
+        base = self.paths.base / REMOTE_DIRNAME
+        if cat.remote_tree(base / "models") is None:
+            cat.register_remote_tree(cat.RemoteTree(base / "models", base / "custom_nodes"))
+        try:
+            url = self.server.url()
+            tree = remote.fetch_tree(
+                ComfyClient(url, timeout=4),
+                remote.catalog_folders(self.catalog),
+                base / "models",
+                base / "custom_nodes",
+            )
+        except (ComfyApiError, OSError, ValueError) as err:
+            self._remote_failed = now
+            self.log.info("remote GPU: model list not read: %s", err)
+            return False
+        cat.register_remote_tree(tree)
+        self._remote_failed = 0.0
+        self.log.debug(
+            "remote GPU: %d model files, node packs %s",
+            sum(len(v) for v in tree.files.values()),
+            ", ".join(sorted(tree.nodes)) or "none",
+        )
+        return True
 
     # backend -------------------------------------------------------------
 
@@ -179,7 +225,17 @@ class App:
         if self.settings.backend == "a1111":
             return A1111Backend(url, timeout, self.log)
         self._check_device(url)
-        return ComfyBackend(url, request_timeout=timeout, logger=self.log, models_root=self.models_root)
+        # Remote GPU: no local model folder (the timeout estimate then allows for a model load).
+        if not self.settings.uses_remote:
+            return ComfyBackend(url, request_timeout=timeout, logger=self.log, models_root=self.models_root)
+        return ComfyBackend(
+            url,
+            request_timeout=timeout,
+            logger=self.log,
+            connection_lost=ui_text.remote_connection_lost(self.server.remote.host),
+            # checked every few seconds while a job runs: a drop shows within about 15 s
+            link_path="/openfill/ping" if self.server.remote.kind == "gpu-server" else "/system_stats",
+        )
 
     def _check_device(self, url: str) -> None:
         """Log the device ComfyUI computes on; when it is the processor, say so loudly
@@ -193,7 +249,7 @@ class App:
             self.log.info("backend device: unknown (%s)", err)
             return
         self.log.info("backend device: %s", desc or "none listed")
-        if kind == "gpu":
+        if kind == "gpu" and not self.settings.uses_remote:  # ComfyUI's log is on the GPU computer
             # PyTorch warns at start-up when it has no code for the card ("... with CUDA capability
             # sm_61 is not compatible with the current PyTorch installation"); every job would then
             # fail with a CUDA error. Say so before the first one.
@@ -203,6 +259,10 @@ class App:
                 self._warn_once("gpu-warned", warning, ui_text.unsupported_gpu_message(warning))
             return
         if kind != "cpu":
+            return
+        if self.settings.uses_remote:
+            self.log.warning("the GPU computer's ComfyUI runs on its processor, not a graphics card")
+            self._warn_once("cpu-warned", desc, ui_text.remote_message("cpu"))
             return
         flags = " ".join(a for a in self.settings.extra_server_args.split() if a in ui_text.CPU_FLAGS)
         self.log.warning("ComfyUI runs on the processor, not a graphics card (%s)", flags or "its PyTorch has no GPU")
@@ -238,7 +298,7 @@ class App:
 
     def server_model_files(self) -> list[str] | None:
         """Model files the running server lists (None when it is not up)."""
-        if self.settings.backend != "comfyui":
+        if self.settings.backend not in ("comfyui", "remote"):
             return None
         client = ComfyClient(self.server.url(), timeout=5)
         if not client.is_alive(timeout=2.0):
@@ -407,7 +467,12 @@ class App:
     def require_backend_install(self) -> None:
         """With the managed ComfyUI backend, a missing ComfyUI folder is the real
         problem; report it before any model check (which would otherwise say a
-        model is missing). A server that answers anyway (started by hand) is fine."""
+        model is missing). A server that answers anyway (started by hand) is fine.
+        Remote GPU: the GPU computer must answer (else its own message), and its model list is read."""
+        if self.settings.uses_remote:
+            self.server.ensure_running()
+            self.refresh_remote_tree(force=True)
+            return
         if self.settings.backend != "comfyui" or comfy_layout(self.settings.comfy_dir) is not None:
             return
         if ComfyClient(self.server.url(), timeout=3).is_alive(timeout=2.0):
@@ -418,7 +483,8 @@ class App:
         )
 
     def model_rows(self, server_files: list[str] | None = None) -> list[dict]:
-        self.require_backend_install()
+        if not self.settings.uses_remote:  # remote: the rows show what the last list read says
+            self.require_backend_install()
         active = self.active_model_id()
         rows = []
         for e in self.catalog:
@@ -508,6 +574,8 @@ class App:
 
     def queue_download(self, model_id: str, include_dependencies: bool = True) -> list[str]:
         entry = cat.by_id(self.catalog, model_id)
+        if self.settings.uses_remote:
+            raise ModelMissing(ui_text.remote_download_message(model_display_name(entry.name), entry.id))
         if cat.gated_files_missing(entry, self.models_root) and not self.settings.hf_token:
             pages = ", ".join(cat.login_pages(entry, self.models_root)) or entry.page
             raise ModelMissing(
@@ -549,6 +617,17 @@ class App:
 
     def queue_node_install(self, model_id: str) -> str | None:
         entry = cat.by_id(self.catalog, model_id)
+        if self.settings.uses_remote:
+            # The GPU server installs the packs its own catalog names for this model, on its computer.
+            from . import remote
+
+            if not [n for n in entry.requires_nodes if cat.node_missing(self.custom_nodes_dir, n)]:
+                return None
+            answer = remote.install_nodes(ComfyClient(self.server.ensure_running(), timeout=30), entry.id)
+            self._remote_checked = 0.0  # read the list again once the GPU server is done
+            self.server._remote_status = (0.0, {})
+            self.log.info("remote GPU: node install for %s: %s", entry.id, answer.get("message", ""))
+            return str(answer.get("task_id") or "remote")
         layout = comfy_layout(self.settings.comfy_dir)
         if layout is None:
             raise ModelMissing(f"ComfyUI was not found at '{self.settings.comfy_dir}'")
@@ -567,6 +646,8 @@ class App:
 
     def queue_opencv_install(self) -> str | None:
         """Queue the pinned OpenCV for ComfyUI's interpreter, unless it is already queued or running."""
+        if self.settings.uses_remote:
+            return None  # ComfyUI's Python is on the GPU computer
         layout = comfy_layout(self.settings.comfy_dir) if self.settings.comfy_dir else None
         packages = list(comfy_setup.load_manifest().pip)
         if layout is None or not packages:
@@ -596,6 +677,8 @@ class App:
 
     def remove_model(self, model_id: str) -> str:
         entry = cat.by_id(self.catalog, model_id)
+        if self.settings.uses_remote:
+            raise BackendError(ui_text.remote_message("remove"))
         shared = {
             f.dest
             for e in self.catalog
@@ -608,6 +691,8 @@ class App:
         return self.server.queue_task(task)
 
     def open_models_folder(self) -> None:
+        if self.settings.uses_remote:
+            raise BackendError(ui_text.remote_message("folder"))
         _open_folder(self.models_root)
 
     def open_log_folder(self) -> None:
@@ -1373,7 +1458,16 @@ class App:
         self.refresh_models_cache(health)
         return health
 
+    def hardware(self) -> hardware.Hardware:
+        """The graphics card the models run on: this computer's, or the Remote GPU's (as its
+        ComfyUI reports it)."""
+        if self.settings.uses_remote:
+            return hardware.detect_remote(self.server.url())
+        return hardware.detect(self.models_root, self.server.url())
+
     def stop_backend(self) -> str:
+        if self.settings.uses_remote:
+            return ui_text.remote_message("stop")
         state = self.server.read_state()
         if not state:
             return "No managed backend is running."

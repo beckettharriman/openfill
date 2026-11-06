@@ -444,13 +444,12 @@ class ModelsPanel(Gtk.Box):
         if search:
             self._hub_note = "Looking for current models on Hugging Face and Civitai..."
             self._say(self._hub_note)
-        models_root = self.app.models_root
-        comfy_url = self.app.server.url()
+        app = self.app
         base = self.app.paths.base
         bundled = list(self._bundled)
 
         def work() -> None:
-            hw = hardware.detect(models_root, comfy_url)
+            hw = app.hardware()  # this computer's card, or the Remote GPU's
             GLib.idle_add(self._hw_done, hw)  # the fit labels do not wait for the search
             result = None
             if search:

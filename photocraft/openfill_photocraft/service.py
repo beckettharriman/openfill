@@ -152,7 +152,7 @@ class Service:
         from openfill.comfy_setup import detect_comfy
         from openfill.config import comfy_layout
 
-        if comfy_layout(self.app.settings.comfy_dir) is not None:
+        if self.app.settings.uses_remote or comfy_layout(self.app.settings.comfy_dir) is not None:
             return
         for folder in gimp_comfy_dirs():
             if comfy_layout(folder) is not None:
@@ -174,6 +174,9 @@ class Service:
         app = self.app
         try:
             entries = cat.load_merged(plugin_dir=app.plugin_dir, base=app.paths.base)
+            if app.settings.uses_remote:  # the model files are on the GPU computer
+                app.catalog = entries
+                return
             found, _skipped = local_models.scan(app.models_root, entries, app.paths.base)
             app.catalog = cat.merge_entries(entries, found)
         except Exception as err:  # noqa: BLE001 - the catalog stays as it was
@@ -197,9 +200,11 @@ class Service:
         app = self.app
         if app.uses_cloud:  # nothing to start, and no request to the service until the user generates
             return
-        if comfy_layout(app.settings.comfy_dir) is None or not app.settings.autostart:
+        # A Remote GPU is only connected to (and its SSH tunnel opened), so the bar says if it answers.
+        local = not app.settings.uses_remote
+        if local and (comfy_layout(app.settings.comfy_dir) is None or not app.settings.autostart):
             return
-        if not (app.has_model_for("fill") or app.has_model_for("remove")):
+        if local and not (app.has_model_for("fill") or app.has_model_for("remove")):
             return
 
         def run() -> None:

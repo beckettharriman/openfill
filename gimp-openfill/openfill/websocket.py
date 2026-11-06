@@ -39,9 +39,10 @@ class WebSocketError(ConnectionError):
 class WebSocket:
     """Blocking client connection; call :meth:`connect` first."""
 
-    def __init__(self, url: str, timeout: float = 30.0) -> None:
+    def __init__(self, url: str, timeout: float = 30.0, headers: dict[str, str] | None = None) -> None:
         self.url = url
         self.timeout = timeout
+        self.headers = dict(headers or {})  # extra handshake headers (the Remote GPU pairing code)
         self._sock: socket.socket | None = None
 
     def connect(self) -> None:
@@ -64,7 +65,7 @@ class WebSocket:
             "Upgrade: websocket\r\n"
             "Connection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\n"
-            "Sec-WebSocket-Version: 13\r\n\r\n"
+            "Sec-WebSocket-Version: 13\r\n" + "".join(f"{k}: {v}\r\n" for k, v in self.headers.items()) + "\r\n"
         ).encode("ascii")
         sock.sendall(request)
         response = self._read_headers(sock)

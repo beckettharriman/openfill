@@ -31,6 +31,8 @@ EDITABLE = {
     "autostart": bool,
     "idle_timeout_minutes": int,
     "extra_server_args": str,
+    "remote_url": str,  # Remote GPU address (a pasted pairing code is moved into remote_token)
+    "remote_ssh": str,
     "steps": int,
     "cfg": float,
     "grow_percent": float,
@@ -92,9 +94,7 @@ class Api:
                 row["neededBy"] = needed_by(list(app.catalog), row["id"])
         hw = None
         try:
-            from openfill import hardware
-
-            detected = hardware.detect(app.models_root, app.server.url())
+            detected = app.hardware()  # this computer's card, or the Remote GPU's
             hw = hardware_line(detected)
             if detected.is_amd:
                 cat.add_amd_notes(rows, app.catalog)  # what may not work on an AMD card
@@ -181,6 +181,7 @@ class Api:
             )
             if trial.uses_cloud and not trial.cloud_key_usable:
                 raise ValueError(trial.cloud_key_problem() or "Paste your API key for the cloud service first.")
+            trial.take_pairing_code()  # a pasted Remote GPU pairing line: the code goes into remote_token
             app.settings.__dict__.update(trial.__dict__)
             app.settings.save(app.paths.config)
             app.reload_settings()

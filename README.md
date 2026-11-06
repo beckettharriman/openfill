@@ -35,6 +35,8 @@ Generation runs in ComfyUI on your machine, listening on `127.0.0.1` only. The n
 
 If you'd rather not run it locally (no suitable graphics card, say), there's an optional cloud setting: OpenRouter or any OpenAI-compatible image service, with your own API key. It's off unless you pick it, and while it's on, every screen says your image is sent to that service. See [docs/cloud.md](docs/cloud.md).
 
+Got a gaming PC and edit on a laptop? **Remote GPU** runs ComfyUI on the PC and OpenFill on the laptop, over Tailscale or SSH, with a pairing code. Your picture goes only to that PC. See [docs/remote-gpu.md](docs/remote-gpu.md).
+
 ## Install
 
 You need an NVIDIA graphics card or an AMD Radeon RX 7000 or newer (8 GB for the best models; Remove and SD 1.5 run on less) and Windows 10/11 or Linux. Apple Silicon Macs are also supported; see [Mac setup](docs/install.md#photocraft-on-macos). On Windows, OpenFill can download ComfyUI for you, including ComfyUI's version for AMD cards. AMD support is new, with one RX 7800 XT user report; see [AMD graphics cards](docs/install.md#amd-graphics-cards).

@@ -175,7 +175,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div style="height:4px"></div>
     </div>
     <div class="stack" id="sec-engine" style="gap:12px" hidden>
-      <div class="field"><span class="label">Where images are made</span><select id="s-backend" aria-label="Where images are made"><option value="comfyui">This computer</option><option value="cloud">Cloud service (paid, sends your image online)</option></select></div>
+      <div class="field"><span class="label">Where images are made</span><select id="s-backend" aria-label="Where images are made"><option value="comfyui">This computer</option><option value="remote">Remote GPU</option><option value="cloud">Cloud service (paid, sends your image online)</option></select></div>
       <div class="stack" id="cloud-fields" style="gap:12px" hidden>
         <div class="small">Optional. Runs Fill, Remove, Expand and Create on a paid online service instead of this computer. Nothing is sent until you press Generate, and nothing is ever sent while This computer is picked.</div>
         <div class="field"><span class="label">Service</span><select id="s-cloud_provider" aria-label="Cloud service"><option value="openrouter">OpenRouter</option><option value="openai">OpenAI-compatible (OpenAI, LiteLLM, ...)</option></select></div>
@@ -184,6 +184,11 @@ input[type=range]{width:100%;accent-color:var(--accent)}
         <div class="field"><span class="label">Address</span><input id="s-cloud_url" type="text" aria-label="Cloud address"><span class="small">Empty model or address: the service's own. For LiteLLM, its /v1 address.</span></div>
         <div class="note" id="cloud-note" style="color:#e8a33c"></div>
         <div class="small">Each picture is billed to your account with the service.</div>
+      </div>
+      <div class="stack" id="remote-fields" style="gap:12px" hidden>
+        <div class="field"><span class="label">Remote GPU pairing code</span><input id="s-remote_url" type="text" placeholder="ofgpu://... from the OpenFill GPU server" aria-label="Remote GPU pairing code"></div>
+        <div class="field"><span class="label">Over SSH (optional)</span><input id="s-remote_ssh" type="text" placeholder="user@computer, empty = connect directly" aria-label="Remote GPU over SSH"></div>
+        <div class="small">ComfyUI runs on another computer of yours. See docs/remote-gpu.md.</div>
       </div>
       <div class="field"><span class="label">ComfyUI folder</span><input id="s-comfy_dir" type="text" aria-label="ComfyUI folder"></div>
       <label class="check"><input type="checkbox" id="s-autostart"><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span>Start the AI engine with PhotoCraft</span></label>
@@ -378,7 +383,7 @@ async function loadSettings(){const s=await get("/api/settings");for(const[k,v]o
   $("cloud-key").value="";$("cloud-key").placeholder=s.cloud_key_saved?"Saved. Paste a new key to replace it.":(s.cloud_key_elsewhere?"Paste the key for this service. The saved key is for another one.":"Paste your API key");
   loaded={backend:s.backend,cloud_provider:s.cloud_provider,cloud_url:s.cloud_url,cloud_model:s.cloud_model};cloudFields()}
 // The cloud fields show only while the cloud is picked; the note says where pictures go.
-function cloudFields(){const on=$("s-backend").value==="cloud";$("cloud-fields").hidden=!on;
+function cloudFields(){const on=$("s-backend").value==="cloud";$("cloud-fields").hidden=!on;const rf=$("remote-fields");if(rf)rf.hidden=$("s-backend").value!=="remote";
   const p=$("s-cloud_provider").value,u=$("s-cloud_url").value.trim();
   $("s-cloud_model").placeholder=p==="openrouter"?"google/gemini-2.5-flash-image":"the model name your service uses";
   $("s-cloud_url").placeholder=p==="openrouter"?"https://openrouter.ai/api/v1":"https://api.openai.com/v1";

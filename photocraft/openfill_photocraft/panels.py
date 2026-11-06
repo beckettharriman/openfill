@@ -5,8 +5,8 @@
 - Models: this computer in one line, the installed models (each with a trash button that
   uninstalls it), the ones to download (Download, Resume, or the progress and a button that
   stops it), and the Hugging Face key FLUX needs.
-- Engine: ComfyUI's folder, when it starts and stops, extra options, and Check, Stop engine
-  and Logs.
+- Engine: ComfyUI's folder, when it starts and stops, extra options, the Remote GPU (ComfyUI
+  on another computer), and Check, Stop engine and Logs.
 - Generation: steps, prompt strictness, repaint margin and edge softness.
 
 The views only read the refresher's facts and the settings on the UI thread; downloads,
@@ -97,6 +97,8 @@ class GearView(tk.Frame):
         self.engine.autostart.set(bool(settings.autostart))
         self.engine.idle.set(str(settings.idle_timeout_minutes))
         self.engine.extra.set(str(settings.extra_server_args or ""))
+        self.engine.remote_url.set(settings.remote_url or "")
+        self.engine.remote_ssh.set(settings.remote_ssh or "")
         for key, entry in self.generation.fields.items():
             entry.set(str(getattr(settings, key)))
 
@@ -149,6 +151,7 @@ class GearView(tk.Frame):
                 cloud["cloud_provider"], cloud["cloud_url"], cloud["cloud_model"], cloud["cloud_api_key"]
             )
             was_cloud, app.settings.backend = app.settings.uses_cloud, backend
+            self._apply_remote(app.settings)
             app.settings.save(app.paths.config)
             app.reload_settings()
             app.log.info("settings saved; images are made by: %s", app.settings.backend)
@@ -157,10 +160,17 @@ class GearView(tk.Frame):
             return
         self.engine.load_backend(app.settings)  # clears the key field: the key is saved, never shown
         self.bar.service.engine = ""
-        if was_cloud and not app.settings.uses_cloud:
-            self.bar.service.warm_up()
+        if (was_cloud and not app.settings.uses_cloud) or app.settings.uses_remote:
+            self.bar.service.warm_up()  # a Remote GPU: connects, so the bar says at once if it answers
         self.bar.refresher.wake.set()
         self.say("Settings saved.", OK)
+
+    def _apply_remote(self, settings: Any) -> None:
+        """The Remote GPU fields; a pasted pairing code is moved out of the address into the settings."""
+        settings.remote_url = self.engine.remote_url.get().strip()
+        settings.remote_ssh = self.engine.remote_ssh.get().strip()
+        settings.take_pairing_code()
+        self.engine.remote_url.set(settings.remote_url)
 
 
 class ModelsView(tk.Frame):
@@ -398,6 +408,8 @@ class EngineView(tk.Frame):
         box.pack(fill="x", pady=(12, 0))
         self.local = ui.frame(self)
         self.cloud = ui.frame(self)
+        self.remote = ui.frame(self)
+        self._build_remote(self.remote)
         self._build_cloud(self.cloud)
         self._build_local(self.local)
         self.local.pack(fill="x")
@@ -466,12 +478,28 @@ class EngineView(tk.Frame):
 
     def _show_backend(self, key: str) -> None:
         self.backend.set(key)
-        shown, hidden = (self.cloud, self.local) if key == "cloud" else (self.local, self.cloud)
-        hidden.pack_forget()
+        shown = {"cloud": self.cloud, "remote": self.remote}.get(key, self.local)
+        for frame in (self.local, self.remote, self.cloud):
+            if frame is not shown:
+                frame.pack_forget()
         shown.pack(fill="x", after=self.backend.master)  # under the switch, above the tools
 
+    def _build_remote(self, parent: tk.Misc) -> None:
+        """Remote GPU: ComfyUI on another computer of yours (docs/remote-gpu.md)."""
+        ui.small(parent, "ComfyUI runs on another computer of yours, with the OpenFill GPU server.").pack(
+            fill="x", pady=(12, 0)
+        )
+        box, self.remote_url = field(
+            parent, "Remote GPU pairing code", lambda b: ui.Field(b, CW, "ofgpu://... from the OpenFill GPU server")
+        )
+        box.pack(fill="x", pady=(12, 0))
+        box, self.remote_ssh = field(
+            parent, "Over SSH (optional)", lambda b: ui.Field(b, CW, "user@computer, empty = connect directly")
+        )
+        box.pack(fill="x", pady=(12, 0))
+
     def load_backend(self, settings) -> None:
-        backend = settings.backend if settings.backend in ("comfyui", "cloud") else "comfyui"
+        backend = settings.backend if settings.backend in ("comfyui", "remote", "cloud") else "comfyui"
         self.provider.set(
             settings.cloud_provider if settings.cloud_provider in ("openrouter", "openai") else "openrouter"
         )

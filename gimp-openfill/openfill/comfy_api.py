@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -23,6 +24,28 @@ ProgressCallback = Callable[[float, str], None]
 # about 2 s of SYN retries, so the health check first probes the port with this short timeout.
 LOOPBACK_PROBE_TIMEOUT = 0.5
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+DEADLINE_MESSAGE = "timed out waiting for the backend"  # wait_for past its deadline
+
+# Pairing codes of OpenFill GPU servers (Remote GPU), by base URL. Every ComfyClient for that URL
+# sends it, so callers that build their own client (health checks, the hardware probe) need not
+# know about it. Set by remote.RemoteLink; never logged.
+_TOKENS: dict[str, str] = {}
+
+
+def set_token(base_url: str, token: str) -> None:
+    """Send ``token`` (a Remote GPU pairing code) with every request to ``base_url``; "" forgets it."""
+    key = base_url.rstrip("/")
+    if token:
+        _TOKENS[key] = token
+    else:
+        _TOKENS.pop(key, None)
+
+
+def auth_headers(base_url: str) -> dict[str, str]:
+    """The Authorization header for ``base_url`` ({} when it needs none)."""
+    token = _TOKENS.get(base_url.rstrip("/"))
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 class ComfyApiError(RuntimeError):
@@ -79,15 +102,34 @@ class ComfyExecutionError(ComfyApiError):
         return any(s in text for s in UNSUPPORTED_GPU_SIGNS)
 
 
+class LinkLost(ComfyApiError):
+    """A ComfyUI on another computer stopped answering in the middle of a job (Remote GPU)."""
+
+
 class ComfyClient:
-    """Minimal ComfyUI HTTP and websocket client (standard library only)."""
+    """Minimal ComfyUI HTTP and websocket client (standard library only).
+
+    ``link_path`` (Remote GPU): while :meth:`wait_for` runs, a thread asks this cheap path every
+    ``LINK_EVERY`` s; when no answer came for ``link_timeout`` s the job fails with
+    :class:`LinkLost`. The OpenFill GPU server answers ``/openfill/ping`` itself, so a GPU busy
+    with a long step (no progress events for a minute) still answers it."""
+
+    LINK_EVERY = 3.0
+    LINK_REQUEST_TIMEOUT = 4.0
 
     def __init__(
-        self, base_url: str = "http://127.0.0.1:8188", timeout: float = 30.0, client_id: str | None = None
+        self,
+        base_url: str = "http://127.0.0.1:8188",
+        timeout: float = 30.0,
+        client_id: str | None = None,
+        link_path: str = "",
+        link_timeout: float = 15.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.client_id = client_id or uuid.uuid4().hex
+        self.link_path = link_path
+        self.link_timeout = link_timeout
 
     # low level -----------------------------------------------------------
 
@@ -99,7 +141,7 @@ class ComfyClient:
         content_type: str | None = None,
         timeout: float | None = None,
     ) -> bytes:
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", **auth_headers(self.base_url)}
         if content_type:
             headers["Content-Type"] = content_type
         req = Request(self.base_url + path, data=body, headers=headers, method=method)
@@ -241,7 +283,9 @@ class ComfyClient:
 
     def history(self, prompt_id: str) -> dict | None:
         """The /history entry of ``prompt_id``, or None while it has none."""
-        info = self._json("GET", f"/history/{prompt_id}")
+        # Remote GPU: a short wait, so a request lost with the network does not hold the job loop
+        # (the link check decides when the computer is gone).
+        info = self._json("GET", f"/history/{prompt_id}", timeout=self.LINK_REQUEST_TIMEOUT if self.link_path else None)
         return info.get(prompt_id)
 
     def last_model_files(self) -> set[str]:
@@ -308,13 +352,14 @@ class ComfyClient:
         """
         ws: WebSocket | None = None
         try:
-            ws = WebSocket(ws_url(self.base_url, self.client_id), timeout=5.0)
+            ws = WebSocket(ws_url(self.base_url, self.client_id), timeout=5.0, headers=auth_headers(self.base_url))
             ws.connect()
             ws.settimeout(poll_interval)
         except (WebSocketError, OSError):
             ws = None
         done_steps = 0
         unreachable: dict[str, float] = {}  # since when /history has not answered
+        link = _LinkWatch(self) if self.link_path else None
         queued_text = "Waiting for the AI backend..."
         if progress:
             progress(0.0, queued_text)
@@ -323,7 +368,9 @@ class ComfyClient:
             while True:
                 now = time.monotonic()
                 if now > deadline:
-                    raise ComfyApiError("timed out waiting for the backend")
+                    raise ComfyApiError(DEADLINE_MESSAGE)
+                if link is not None and link.silent_for() > self.link_timeout:
+                    raise LinkLost(f"no answer from {self.base_url} for {link.silent_for():.0f} s")
                 if cancel and cancel():
                     for action in (self.interrupt, self.clear_queue):
                         try:
@@ -386,6 +433,8 @@ class ComfyClient:
                             raise ComfyExecutionError(_status_message(status))
                         break
         finally:
+            if link is not None:
+                link.stop()
             if ws is not None:
                 ws.close()
         entry = None
@@ -415,6 +464,33 @@ class ComfyClient:
                     continue
                 images.append(self.view(img["filename"], img.get("subfolder", ""), "output"))
         return images
+
+
+class _LinkWatch:
+    """Asks ``client.link_path`` every LINK_EVERY s in a thread; :meth:`silent_for` is the time
+    since the last answer (any HTTP answer counts: the computer and the network are there)."""
+
+    def __init__(self, client: ComfyClient) -> None:
+        self.client = client
+        self.last = time.monotonic()
+        self._stop = threading.Event()
+        threading.Thread(target=self._run, name="openfill-link", daemon=True).start()
+
+    def _run(self) -> None:
+        c = self.client
+        while not self._stop.wait(c.LINK_EVERY):
+            try:
+                c._request("GET", c.link_path, timeout=c.LINK_REQUEST_TIMEOUT)
+                self.last = time.monotonic()
+            except ComfyApiError as err:
+                if err.status:
+                    self.last = time.monotonic()
+
+    def silent_for(self) -> float:
+        return time.monotonic() - self.last
+
+    def stop(self) -> None:
+        self._stop.set()
 
 
 # Node inputs that name a model file (used to tell a warm model from a cold one).

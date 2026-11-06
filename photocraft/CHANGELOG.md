@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Add an optional cloud service under Engine: OpenRouter or any OpenAI-compatible image API, with your own key. Off unless you pick it; the panel then says your image is sent to it, and it is never used as a fallback. Untested against the real services so far. See docs/cloud.md.
+- Add Remote GPU in the gear's Engine section: use ComfyUI on another computer of yours, over
+  Tailscale or SSH, with the OpenFill GPU server's pairing code. See docs/remote-gpu.md.
 
 ## [0.2.4] - 2026-10-26
 
