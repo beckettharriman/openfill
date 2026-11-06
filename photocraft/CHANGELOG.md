@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version numbers below (0.2.x) are OpenFill for PhotoCraft's own, not PhotoCraft's.
 Each entry from now on says which PhotoCraft versions it works with.
 
-## [Unreleased] - OpenFill for PhotoCraft · works with PhotoCraft 0.12 to 0.20
+## [0.2.5] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
 
 Fixed (update recommended):
 - If you clicked your image's tab while OpenFill was exporting, OpenFill could save your image into its own folder or close it without saving. It now only ever saves or closes its own temporary documents, found by their own names. 0.2.4 and earlier have this bug.

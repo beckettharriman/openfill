@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0-beta.7] - 2026-11-08
 
 - OpenFill for PhotoCraft: fixed a bug where clicking your image's tab while OpenFill was exporting could save your image into OpenFill's folder or close it without saving. Its temporary documents also stay out of sight.
 - GIMP: Generative Expand with FLUX no longer stops after you press Generate to ask whether to use SD 1.5 instead. Expand always runs the model you picked. When the Expand default usually continues a scene better than an SD 1.5 or SDXL pick, the Expand dialog says so before you start.
@@ -605,7 +605,8 @@ Rectangular selections as processing region; Windows startup fix.
 Initial release: text to image, image to image, inpainting, upscaling via the
 AUTOMATIC1111 WebUI API.
 
-[Unreleased]: https://github.com/beckettharriman/openfill/compare/v2.0.0-beta.6...HEAD
+[Unreleased]: https://github.com/beckettharriman/openfill/compare/v2.0.0-beta.7...HEAD
+[2.0.0-beta.7]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.7
 [2.0.0-beta.6]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.6
 [2.0.0-beta.5]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.5
 [2.0.0-beta.4]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.4
