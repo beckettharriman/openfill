@@ -207,17 +207,9 @@ class Service:
             self.rescan_models()
 
     def rescan_models(self) -> None:
-        """The catalog plus the user's own model files in the (new) ComfyUI folder."""
-        from openfill import catalog as cat
-        from openfill import local_models
-
-        app = self.app
-        try:
-            entries = cat.load_merged(plugin_dir=app.plugin_dir, base=app.paths.base)
-            found, _skipped = local_models.scan(app.models_root, entries, app.paths.base)
-            app.catalog = cat.merge_entries(entries, found)
-        except Exception as err:  # noqa: BLE001 - the catalog stays as it was
-            app.log.warning("models not rescanned: %s", err)
+        """The catalog plus the user's own model files in the (new) ComfyUI folder and the
+        models of other installs in the shared folders (read only)."""
+        self.app.rescan()
 
     def _region(self, rect: tuple[int, int, int, int]) -> None:
         with self.state.lock:

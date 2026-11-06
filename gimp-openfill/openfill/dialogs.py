@@ -13,6 +13,7 @@ arguments. All texts live in :mod:`ui_text` (unit tested).
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Callable
 
@@ -1032,6 +1033,8 @@ class SettingsDialog(Gtk.Dialog):
                 grid.attach(_right(label), 0, row, 1, 1)
                 grid.attach(widget, 1, row, 1, 1)
             row += 1
+            if key == "shared_models":
+                hint = ui_text.shared_models_hint(os.pathsep)
             if hint:
                 hint_label = _dim(hint)
                 hint_label.set_margin_bottom(6)
@@ -1075,7 +1078,55 @@ class SettingsDialog(Gtk.Dialog):
             browse.connect("clicked", self._browse, entry)
             box.pack_start(browse, False, False, 0)
             return box
+        if key == "shared_models":
+            from . import shared_models
+
+            entry.set_text(shared_models.display(str(value)))
+            column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            row.pack_start(entry, True, True, 0)
+            add = Gtk.Button(label=ui_text.SHARED_ADD)
+            add.connect("clicked", self._add_shared, entry)
+            row.pack_start(add, False, False, 0)
+            find = Gtk.Button(label=ui_text.SHARED_FIND)
+            find.set_tooltip_text(ui_text.SHARED_FIND_TIP)
+            row.pack_start(find, False, False, 0)
+            column.pack_start(row, False, False, 0)
+            note = _dim("")
+            column.pack_start(note, False, False, 0)
+            find.connect("clicked", self._find_shared, entry, note)
+            return column
         return entry
+
+    def _add_shared(self, _button: Gtk.Button, entry: Gtk.Entry) -> None:
+        """Add folder...: pick a folder of another ComfyUI and add it to the list."""
+        from . import shared_models
+
+        chooser = Gtk.FileChooserDialog(
+            title=ui_text.SHARED_ADD_TITLE, transient_for=self, action=Gtk.FileChooserAction.SELECT_FOLDER
+        )
+        chooser.add_buttons("_Cancel", CANCEL, "_Select", OK)
+        if chooser.run() == OK and chooser.get_filename():
+            folders = [*shared_models.parse(entry.get_text()), chooser.get_filename()]
+            entry.set_text(shared_models.display(shared_models.join(folders)))
+        chooser.destroy()
+
+    def _find_shared(self, _button: Gtk.Button, entry: Gtk.Entry, note: Gtk.Label) -> None:
+        """Find Krita AI Diffusion: add the other installs found on this computer."""
+        from . import shared_models
+
+        have = shared_models.parse(entry.get_text())
+        own = str(self.values.get("comfy_dir") or "")
+        found = [
+            c
+            for c in shared_models.detect(own)
+            if not any(shared_models.inside(c.path, [h]) or shared_models.inside(h, [c.path]) for h in have)
+        ]
+        if not found:
+            note.set_text(ui_text.SHARED_NOTHING_FOUND)
+            return
+        entry.set_text(shared_models.display(shared_models.join([*have, *(str(c.path) for c in found)])))
+        note.set_text(ui_text.SHARED_FOUND.format(what=", ".join(f"{c.source} ({c.path})" for c in found)))
 
     def _browse(self, _button: Gtk.Button, entry: Gtk.Entry) -> None:
         chooser = Gtk.FileChooserDialog(

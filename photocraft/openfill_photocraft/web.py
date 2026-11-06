@@ -29,6 +29,7 @@ EDITABLE = {
     "autostart": bool,
     "idle_timeout_minutes": int,
     "extra_server_args": str,
+    "shared_models": str,  # folders of another ComfyUI, read only (App.set_shared_models)
     "steps": int,
     "cfg": float,
     "grow_percent": float,
@@ -108,8 +109,12 @@ class Api:
         return buf.getvalue()
 
     def settings(self) -> dict[str, Any]:
+        from openfill import shared_models
+
         s = self.service.app.settings
-        return {k: getattr(s, k) for k in EDITABLE}
+        out = {k: getattr(s, k) for k in EDITABLE}
+        out["shared_models"] = shared_models.display(s.shared_models)  # one line for the text field
+        return out
 
     # POST -----------------------------------------------------------------------------
 
@@ -148,12 +153,34 @@ class Api:
             app.save_token(str(body.get("token", "")))
             return {"ok": True}
         if path == "/api/settings":
-            for key, kind in EDITABLE.items():
-                if key in body:
-                    setattr(app.settings, key, kind(body[key]))
+            from openfill import catalog as cat
+            from openfill import shared_models
+
+            shared = str(body["shared_models"]) if "shared_models" in body else None
+            values = {key: kind(body[key]) for key, kind in EDITABLE.items() if key in body and key != "shared_models"}
+            new_comfy = "comfy_dir" in values and values["comfy_dir"] != app.settings.comfy_dir
+            if shared is not None:
+                # checked first, against the ComfyUI folder being saved, so a bad folder leaves
+                # every setting as it was (an unchanged list is not checked again)
+                new_root = cat.default_models_root(values["comfy_dir"]) if new_comfy and values["comfy_dir"] else None
+                shared = app.check_shared_models(shared, new_root)
+            for key, value in values.items():
+                setattr(app.settings, key, value)
             app.settings.save(app.paths.config)
             app.reload_settings()
+            if shared is not None and shared_models.parse(shared) != shared_models.parse(app.settings.shared_models):
+                app.set_shared_models(shared)  # saves, writes the yaml, rescans; the engine picks it up when idle
+            elif new_comfy:
+                app.write_shared_config()  # the yaml names OpenFill's own models folder first
+                app.rescan()
             return self.settings()
+        if path == "/api/shared/find":
+            from openfill import shared_models
+
+            found = app.shared_suggestions()
+            folders = [*shared_models.parse(str(body.get("text", ""))), *(str(c.path) for c in found)]
+            text = shared_models.display(shared_models.join(folders))
+            return {"text": text, "found": [f"{c.source} ({c.path})" for c in found]}
         if path == "/api/comfy/setup":
             return {"task": svc.setup_comfy()}
         if path == "/api/backend/check":

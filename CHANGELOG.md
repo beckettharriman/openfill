@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add uninstall launchers on Windows, Linux and macOS, preserving settings and models.
 - Document downloads, model sizes, existing-engine limits and tested Mac setup.
 - Reuse the FLUX text encoders and VAE already in ComfyUI for your own FLUX.1 Fill file, under other names, formats or the `text_encoders` folder, instead of downloading them again (#8).
+- Use the models of another ComfyUI, such as Krita AI Diffusion's, read only: nothing is downloaded, deleted or installed there (#6).
+- FLUX.1 Fill models from the list also reuse the text encoders and VAE already in ComfyUI.
 - When the ComfyUI OpenFill started crashes or closes during a job, report it right away instead of after 90 seconds.
 - Intel Arc graphics, untested: I don't have an Intel card. On Windows,
   Download ComfyUI gets ComfyUI's own version for Intel

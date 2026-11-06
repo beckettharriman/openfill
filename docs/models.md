@@ -384,3 +384,68 @@ a script asks for the legacy `fast` or `quality` tier. For SDXL, keep the
 Fooocus patch; for SD 1.5, prefer checkpoints trained for inpainting (names
 usually contain `inpainting`), although regular checkpoints also work with
 `InpaintModelConditioning` at reduced quality.
+
+### FLUX text encoders and VAE you already have
+
+A FLUX.1 Fill model uses the T5 and CLIP-L text encoders and the FLUX VAE
+that are already in ComfyUI's folders, so they are not downloaded again. Both
+`clip` and `text_encoders` are looked in (ComfyUI reads them as one folder),
+and other names and formats count:
+
+- T5: `.safetensors` or `.gguf` with `t5` and `xxl` in the name
+  (`t5xxl_fp16`, `t5xxl_fp8_e4m3fn`, `t5-v1_1-xxl-encoder-Q5_K_M`, ...), with
+  T5's own vocabulary (mT5 and UMT5 do not work).
+- CLIP-L: `.safetensors` named `clip_l...`.
+- VAE: `ae.safetensors`, or a name with `flux` and `vae` in it (not FLUX.2's).
+
+Your own FLUX.1 Fill file takes any of these. The FLUX models in the list only
+take one up to a little bigger than their own (1.2 times its size), because
+they were set up for it: the GGUF ones keep the 3.4 GB T5 GGUF rather than a
+4.9 GB `t5xxl_fp8_e4m3fn` or a 9.8 GB `t5xxl_fp16`, and download it if it is
+not there. The file header is checked too. When several fit, the list's own
+file wins, then the same file name, then the one closest in size to the list's
+file. Files found this way are never deleted by Delete downloaded files.
+
+## Models from another ComfyUI (Krita AI Diffusion and others)
+
+If you already have models in another ComfyUI, for example the one Krita AI
+Diffusion installed, OpenFill can use them without downloading them again.
+Put that folder in **Models from another ComfyUI** (GIMP: Settings > General;
+PhotoCraft: the gear, Engine). **Find Krita AI Diffusion** looks for Krita AI
+Diffusion's server and other ComfyUI folders on this computer; **Add folder...**
+lets you pick one. Separate several folders with `;` on Windows and `:` on Mac
+and Linux. Use full paths (`~` works); a folder that is not there, or that is
+OpenFill's own models folder through a link, is refused with a message. A
+ComfyUI that already reads OpenFill's models is fine: that part is skipped.
+
+You can give Krita AI Diffusion's `server` folder (by default
+`%APPDATA%\krita\ai_diffusion\server` on Windows,
+`~/.local/share/krita/ai_diffusion/server` on Linux,
+`~/Library/Application Support/krita/ai_diffusion/server` on a Mac), any
+ComfyUI folder, or a plain models folder.
+
+OpenFill only reads these folders. It never downloads, deletes or installs
+anything there, and never starts that ComfyUI. Its own ComfyUI gets the
+folders on its command line (`--extra-model-paths-config`, with a file kept in
+OpenFill's settings folder), so the other install's files and settings are
+left as they are. Models found there show "uses files from another ComfyUI
+(read only)" in the Models tab, and anything still missing (for example the
+FLUX.1 Fill model itself, which Krita AI Diffusion does not have) is
+downloaded into OpenFill's own models folder. A file with the same name in
+OpenFill's own folder comes first. A new list is used from the next job: if
+the AI engine is running, OpenFill starts it again just before that job, but
+never while it is generating or downloading.
+
+If OpenFill's own models folder sits inside a folder you list (say `C:\AI`
+holds both installs), OpenFill still downloads and deletes its own files as
+before; only the rest of that folder is read only. If OpenFill's models folder
+is a link to the other install's models, OpenFill treats all of it as read only
+and does not download or delete anything there.
+
+If you start ComfyUI yourself instead of letting OpenFill start it, ComfyUI
+only sees these folders when you add
+`--extra-model-paths-config <OpenFill settings folder>/shared-model-paths.yaml`
+to its command line. OpenFill writes that file when you save the setting or
+change the ComfyUI folder, and again each time it starts the engine. When you
+empty the list the file stays, with no folders in it, so that ComfyUI still
+starts.
