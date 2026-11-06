@@ -29,7 +29,7 @@ from PIL import Image, ImageDraw
 from . import ui
 from .menu import Watcher
 from .modelinfo import choose_card_line, download_card_line, hardware_line, needed_by
-from .service import ENGINE_STOPPED, Service, photocraft_text
+from .service import ENGINE_RESTARTING, ENGINE_STOPPED, Service, photocraft_text
 from .ui import ACCENT, BAD, BG, CW, DIM, LABEL_W, LINE, OK, PAD, PANEL, TEXT, WARN, W, photo
 
 WIDTH = W
@@ -1338,7 +1338,7 @@ class Bar:
             return "Checking..."
         if not facts.get("comfy_ok"):
             return "Not set up"
-        if engine == "starting":
+        if engine in ("starting", ENGINE_RESTARTING):
             return "Starting the AI engine..."
         if engine == ENGINE_STOPPED:
             return STOPPED

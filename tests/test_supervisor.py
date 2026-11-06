@@ -114,6 +114,23 @@ class StartLockAndWatcherTests(unittest.TestCase):
         self.assertFalse(supervisor.pid_is_python(pid))
         child.returncode = -9  # already reaped; keep Popen from waiting for it
 
+    def test_windows_access_denied_counts_as_alive(self):
+        # An elevated ComfyUI cannot be opened by a non-elevated GIMP: it exists all the same
+        # (POSIX treats PermissionError the same way).
+        from unittest import mock
+
+        k32 = mock.Mock()
+        k32.OpenProcess.return_value = 0
+        windll = mock.Mock(kernel32=k32)
+        with (
+            mock.patch.object(supervisor, "IS_WINDOWS", True),
+            mock.patch.object(supervisor.ctypes, "windll", windll, create=True),
+        ):
+            k32.GetLastError.return_value = supervisor.ERROR_ACCESS_DENIED
+            self.assertTrue(supervisor.pid_alive(4242))
+            k32.GetLastError.return_value = 87  # ERROR_INVALID_PARAMETER: no such process
+            self.assertFalse(supervisor.pid_alive(4242))
+
     def test_live_watchers(self):
         folder = self.base / supervisor.WATCHERS_DIRNAME
         folder.mkdir()

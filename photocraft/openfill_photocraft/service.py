@@ -19,6 +19,7 @@ from typing import Any
 
 from openfill.app import App, NothingSelected
 from openfill.backend import BackendUnavailable, GenerationCancelled, describe_error
+from openfill.backends.comfy import CONNECTION_LOST
 from openfill.progress import parse_preview_frame
 from openfill.supervisor import process_name
 
@@ -48,8 +49,10 @@ GIMP_TEXT = (
 )
 
 
-# Service.engine when the ComfyUI OpenFill started has exited (crashed or was closed).
+# Service.engine when the ComfyUI OpenFill started has exited (crashed or was closed), and
+# while one it started again is still loading.
 ENGINE_STOPPED = "stopped"
+ENGINE_RESTARTING = "restarting"
 
 
 def photocraft_text(text: str) -> str:
@@ -251,11 +254,12 @@ class Service:
         self._warm.start()
 
     def _engine_ready(self) -> None:
-        self.engine = "ready"
         try:
-            self._engine_watch = self.app.server.death_watch()
+            watch = self.app.server.death_watch()
         except Exception:  # noqa: BLE001 - without it a crash shows when the next job runs
-            self._engine_watch = None
+            watch = None
+        self._engine_watch = watch  # before "ready": check_engine must not read the old one
+        self.engine = "ready"
 
     def engine_stopped(self) -> None:
         """ComfyUI stopped (a job lost it, or Stop engine): the next job starts it again
@@ -263,20 +267,37 @@ class Service:
         self._engine_watch = None
         self.engine = ENGINE_STOPPED if self.app.settings.autostart else "not running"
 
+    def stop_engine(self) -> str:
+        """Settings > Engine > Stop engine. Only a ComfyUI OpenFill runs can be stopped; one
+        the user started keeps running, and so does the status line's "Ready"."""
+        text = self.app.stop_backend()
+        if self.app.server.read_state().get("stop"):
+            self.engine_stopped()
+        return text
+
     def check_engine(self) -> None:
-        """Called every few seconds: the ComfyUI behind "Ready" exited (crashed or was
-        closed), or a stopped one runs again (started by Check, or a job that then failed)."""
+        """Called every few seconds (Refresher thread, no Tk): the ComfyUI behind "Ready"
+        exited (crashed or was closed), or one is back after the status said it was not
+        (started by Check, by the user, or by a job that then failed). "Ready" only once it
+        answers; a managed one that is still loading shows as starting."""
         if self.busy():
             return
+        server = self.app.server
         try:
-            if self.engine == "ready" and self._engine_watch is not None and self._engine_watch():
-                self._engine_watch = None
-                self.engine = ENGINE_STOPPED
-                self.app.log.info("ComfyUI is no longer running")
-            elif self.engine == ENGINE_STOPPED and not self.app.server.read_state().get("stop"):
-                watch = self.app.server.death_watch()
-                if watch is not None and not watch():
+            if self.engine == "ready":
+                if self._engine_watch is not None and self._engine_watch():
+                    self._engine_watch = None
+                    self.engine = ENGINE_STOPPED
+                    self.app.log.info("ComfyUI is no longer running")
+            elif self.engine not in ("", "starting") and not server.read_state().get("stop"):
+                if server.is_healthy():
                     self._engine_ready()
+                    return
+                watch = server.death_watch()
+                if watch is not None and not watch():
+                    self.engine = ENGINE_RESTARTING  # OpenFill's ComfyUI runs but does not answer yet
+                elif self.engine == ENGINE_RESTARTING:
+                    self.engine = ENGINE_STOPPED
         except Exception:  # noqa: BLE001 - the status line stays as it is
             pass
 
@@ -422,8 +443,11 @@ class Service:
         except BaseException as err:  # noqa: BLE001 - reported on the page
             cancelled = isinstance(err, GenerationCancelled) or self.state.cancel_requested
             self.app.log.warning("job %s failed: %s\n%s", kind, err, traceback.format_exc())
-            if isinstance(err, BackendUnavailable):
-                self.engine_stopped()
+            if isinstance(err, BackendUnavailable) and str(err) == CONNECTION_LOST:
+                self.engine_stopped()  # ComfyUI went away during the job: the next job restarts it
+            elif isinstance(err, BackendUnavailable):
+                self._engine_watch = None
+                self.engine = describe(err)  # a setup problem Generate cannot fix: keep the reason
             elif self.engine == "starting":
                 self.engine = engine_before  # check_engine sees a ComfyUI that did come up
             with self.state.lock:

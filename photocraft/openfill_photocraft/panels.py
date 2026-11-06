@@ -428,8 +428,7 @@ class EngineView(tk.Frame):
         threading.Thread(target=work, daemon=True).start()
 
     def stop(self) -> None:
-        self.say(self.bar.service.app.stop_backend(), DIM)
-        self.bar.service.engine_stopped()  # not "Ready" any more
+        self.say(self.bar.service.stop_engine(), DIM)
 
     def logs(self) -> None:
         self.bar.service.app.open_log_folder()

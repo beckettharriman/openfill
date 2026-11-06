@@ -1347,6 +1347,13 @@ class ServiceModelTests(unittest.TestCase):
             self.assertEqual(service.app.settings.active_model, "")
 
 
+def dead_pid() -> int:
+    """The pid of a process that has exited."""
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    return child.pid
+
+
 class EngineFeedbackTests(unittest.TestCase):
     """ComfyUI stopping mid-job or while idle: a clear status and PhotoCraft's own words."""
 
@@ -1360,13 +1367,18 @@ class EngineFeedbackTests(unittest.TestCase):
         service.engine, service._engine_watch, service._warm, service._thread = "ready", None, None, None
         service.bridge = mock.Mock()
         service._one_step = mock.Mock()
-        # now: True/False the managed ComfyUI runs/exited, None none recorded; stop: a stop was asked
-        running = {"now": alive, "stop": False}
+        # now: True/False the managed ComfyUI runs/exited, None none recorded; stop: a stop was
+        # asked; healthy: a ComfyUI (managed or the user's) answers at the URL
+        running = {"now": alive, "stop": False, "healthy": True}
 
         def death_watch():
             return None if running["now"] is None else (lambda: not running["now"])
 
-        server = SimpleNamespace(death_watch=death_watch, read_state=lambda: {"stop": True} if running["stop"] else {})
+        server = SimpleNamespace(
+            death_watch=death_watch,
+            read_state=lambda: {"stop": True} if running["stop"] else {},
+            is_healthy=lambda: running["healthy"],
+        )
         service.app = SimpleNamespace(
             generative_fill=generate,
             settings=SimpleNamespace(autostart=autostart),
@@ -1426,19 +1438,116 @@ class EngineFeedbackTests(unittest.TestCase):
     def test_idle_comfyui_exit_turns_ready_into_stopped_and_back(self):
         from openfill_photocraft.service import ENGINE_STOPPED
 
-        service, alive = self.make(self.lost)
+        service, running = self.make(self.lost)
         service._engine_ready()
         service.check_engine()
         self.assertEqual(service.engine, "ready")  # still running
-        alive["now"] = False
+        running.update(now=False, healthy=False)
         service.check_engine()
         self.assertEqual(service.engine, ENGINE_STOPPED)
-        alive["now"] = None  # the supervisor removed its state: still stopped
+        running["now"] = None  # the supervisor removed its state: still stopped
         service.check_engine()
         self.assertEqual(service.engine, ENGINE_STOPPED)
-        alive["now"] = True  # started again (Check in Settings > Engine)
+        running["now"] = True  # started again (Check in Settings > Engine), still loading
         service.check_engine()
+        self.assertEqual(self.status(service), "Starting the AI engine...")
+        running["healthy"] = True  # it answers
+        service.check_engine()
+        self.assertEqual(self.status(service), "Ready")
+
+    def test_a_restart_that_dies_while_loading_goes_back_to_stopped(self):
+        service, running = self.make(self.lost)
+        service.engine_stopped()
+        running.update(now=True, healthy=False)
+        service.check_engine()
+        self.assertEqual(self.status(service), "Starting the AI engine...")
+        running["now"] = None
+        service.check_engine()
+        self.assertEqual(self.status(service), "Stopped: Generate restarts it")
+
+    def test_new_watch_is_in_place_before_ready(self):
+        service, _running = self.make(self.lost)
+        service._engine_watch = lambda: True  # the watch of the ComfyUI that exited
+        seen = []
+        original = service.app.server.death_watch
+
+        def death_watch():
+            seen.append(service.engine)  # what check_engine on the Refresher could see now
+            return original()
+
+        service.app.server.death_watch = death_watch
+        service.engine = "starting"
+        service._engine_ready()
+        self.assertEqual(seen, ["starting"])
+        self.assertFalse(service._engine_watch())
         self.assertEqual(service.engine, "ready")
+
+    # Adversarial review proofs (fix/comfy-died-feedback): a stopped status only when OpenFill's
+    # ComfyUI is really gone, and it clears by itself once a ComfyUI answers.
+
+    def raiser(self, text):
+        from openfill.backend import BackendUnavailable
+
+        def generate(*_args, **_kwargs):
+            raise BackendUnavailable(text)
+
+        return generate
+
+    def test_stop_engine_with_a_user_started_comfyui_keeps_ready(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.panels import EngineView
+
+        service, _running = self.make(self.lost, alive=None)  # no managed ComfyUI recorded
+        service._engine_ready()
+        service.app.stop_backend = lambda: "No managed backend is running."
+        EngineView.stop(SimpleNamespace(bar=SimpleNamespace(service=service), say=lambda *a: None))
+        for _ in range(3):
+            service.check_engine()
+        self.assertEqual(self.status(service), "Ready")
+
+    def test_user_started_comfyui_that_answered_late_returns_to_ready(self):
+        service, running = self.make(self.raiser("ComfyUI did not answer for 90 s"), alive=None)
+        running["healthy"] = False
+        service._job("fill", {"prompt": "x"})
+        self.assertNotEqual(self.status(service), "Stopped: Generate restarts it")
+        running["healthy"] = True  # it answers again
+        service.check_engine()
+        self.assertEqual(self.status(service), "Ready")
+
+    def test_autostart_off_not_running_recovers_when_comfyui_answers(self):
+        service, running = self.make(self.lost, autostart=False, alive=None)
+        running["healthy"] = False
+        service._job("fill", {})
+        service.check_engine()
+        self.assertEqual(self.status(service), "AI engine: not running")
+        running["healthy"] = True  # the user started ComfyUI again
+        service.check_engine()
+        self.assertEqual(self.status(service), "Ready")
+
+    def test_setup_problem_is_not_reported_as_stopped(self):
+        port_taken = "Port 8188 on 127.0.0.1 is used by another program that is not ComfyUI."
+        service, running = self.make(self.raiser(port_taken), alive=None)
+        running["healthy"] = False
+        service._job("fill", {"prompt": "x"})
+        status = self.status(service)
+        self.assertNotEqual(status, "Stopped: Generate restarts it")
+        self.assertTrue(status.startswith("AI engine: The AI backend is not available: Port 8188"), status)
+
+    def test_stale_state_does_not_flip_a_running_user_comfyui_to_stopped(self):
+        from openfill.config import Paths, Settings
+        from openfill.server import ServerManager
+
+        service, _running = self.make(lambda *a, **k: [])
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = Paths(Path(tmp) / "openfill").ensure()
+            # left behind by a supervisor that was killed: both processes are long gone
+            paths.state.write_text(json.dumps({"server_pid": dead_pid(), "supervisor_pid": dead_pid()}))
+            service.app.server = ServerManager(Settings(), paths)
+            service._job("fill", {"prompt": "x"})  # the user's own ComfyUI did the job
+            self.assertEqual(self.status(service), "Ready")
+            service.check_engine()
+            self.assertEqual(self.status(service), "Ready")
 
     def test_stop_engine_says_stopped_until_it_is_gone(self):
         from types import SimpleNamespace
