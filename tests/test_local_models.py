@@ -208,6 +208,13 @@ class CompanionTests(unittest.TestCase):
         self.assertEqual(status.missing, [])
         self.assertTrue(status.installed)
         d = self.dests(entry)
+        # the main file is the user's own, in place of the catalog's Q4_0
+        main = entry.files[0]
+        self.assertEqual((main.role, main.dest, main.url, main.optional), ("unet", d["unet"], "", True))
+        self.assertEqual(d["unet"], "unet/flux1-fill-dev-Q4_K_S.gguf")
+        template = cat.by_id(ENTRIES, "flux1-fill-dev-gguf-q4")
+        self.assertNotIn(template.file_by_role("unet").dest, [f.dest for f in entry.files])
+        self.assertEqual([f.role for f in entry.files], [f.role for f in template.files])
         self.assertEqual(d["clip1"], "text_encoders/t5xxl_fp8_e4m3fn.safetensors")
         self.assertEqual(d["clip2"], "text_encoders/clip_l.safetensors")
         self.assertEqual(d["vae"], "vae/ae.safetensors")
