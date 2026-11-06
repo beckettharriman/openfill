@@ -24,6 +24,26 @@ ProgressCallback = Callable[[float, str], None]
 LOOPBACK_PROBE_TIMEOUT = 0.5
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
+# Pairing codes of OpenFill GPU servers (Remote GPU), by base URL. Every ComfyClient for that URL
+# sends it, so callers that build their own client (health checks, the hardware probe) need not
+# know about it. Set by remote.RemoteLink; never logged.
+_TOKENS: dict[str, str] = {}
+
+
+def set_token(base_url: str, token: str) -> None:
+    """Send ``token`` (a Remote GPU pairing code) with every request to ``base_url``; "" forgets it."""
+    key = base_url.rstrip("/")
+    if token:
+        _TOKENS[key] = token
+    else:
+        _TOKENS.pop(key, None)
+
+
+def auth_headers(base_url: str) -> dict[str, str]:
+    """The Authorization header for ``base_url`` ({} when it needs none)."""
+    token = _TOKENS.get(base_url.rstrip("/"))
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
 
 class ComfyApiError(RuntimeError):
     """An HTTP or protocol error from ComfyUI (``status`` 0 when the server was not reached)."""
@@ -99,7 +119,7 @@ class ComfyClient:
         content_type: str | None = None,
         timeout: float | None = None,
     ) -> bytes:
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", **auth_headers(self.base_url)}
         if content_type:
             headers["Content-Type"] = content_type
         req = Request(self.base_url + path, data=body, headers=headers, method=method)
@@ -308,7 +328,7 @@ class ComfyClient:
         """
         ws: WebSocket | None = None
         try:
-            ws = WebSocket(ws_url(self.base_url, self.client_id), timeout=5.0)
+            ws = WebSocket(ws_url(self.base_url, self.client_id), timeout=5.0, headers=auth_headers(self.base_url))
             ws.connect()
             ws.settimeout(poll_interval)
         except (WebSocketError, OSError):

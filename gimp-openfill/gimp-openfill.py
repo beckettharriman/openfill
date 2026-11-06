@@ -849,6 +849,8 @@ SETTINGS_KEYS = [
     "comfy_dir",
     "url",
     "a1111_url",
+    "remote_url",
+    "remote_ssh",
     "autostart",
     "idle_timeout_minutes",
     "quality",
@@ -881,6 +883,7 @@ def _settings_test_backend(app: App, values: dict, report: Callable[[str], None]
     values on screen to a private App, start the backend if needed, check it."""
     for key, value in values.items():
         setattr(app.settings, key, value)
+    app.settings.take_pairing_code()
     try:
         backend = app.backend(lambda _f, text: report(ui_text.plain_step_text(text)))
         health = backend.health()
@@ -895,6 +898,21 @@ def _settings_test_backend(app: App, values: dict, report: Callable[[str], None]
     return ui_text.health_text(
         True, health.detail, len(health.checkpoints), health.inpaint_nodes, health.device, health.device_kind
     )
+
+
+# A Remote GPU pairing code pasted in the Settings dialog: saved to config.json only, never into
+# the procedure's arguments (GIMP keeps those as last-used values in its own files).
+_PAIRED: dict[str, str] = {}
+
+
+def _take_pairing_code(values: dict) -> None:
+    """Split ``ofgpu://CODE@HOST:PORT`` in ``values["remote_url"]`` into the address (kept there)
+    and the code (remembered for run_settings)."""
+    probe = Settings(remote_url=str(values.get("remote_url") or ""))
+    probe.take_pairing_code()
+    if probe.remote_token:
+        values["remote_url"] = probe.remote_url
+        _PAIRED["token"] = probe.remote_token
 
 
 def _settings_dialog(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig) -> bool:
@@ -937,6 +955,7 @@ def _settings_dialog(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig) ->
     )
     if result is None:
         return False
+    _take_pairing_code(result)
     for key, value in result.items():
         config.set_property(key.replace("_", "-"), value)
     config.set_property("check-backend", False)  # the dialog has its own Check backend button
@@ -958,6 +977,9 @@ def run_settings(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig, _data:
     settings = Settings.load(paths.config)  # the Models tab may have changed active_model / token meanwhile
     for key in SETTINGS_KEYS:
         setattr(settings, key, config.get_property(key.replace("_", "-")))
+    if _PAIRED.get("token"):
+        settings.remote_token = _PAIRED.pop("token")
+    settings.take_pairing_code()  # a code passed to the procedure by a script
     try:
         settings.save(paths.config)
     except OSError as err:
@@ -1160,13 +1182,23 @@ class OpenFill(Gimp.PlugIn):
             "backend",
             "_Backend",
             "Generation server",
-            _choice([("comfyui", "ComfyUI (managed, recommended)"), ("a1111", "AUTOMATIC1111 WebUI (external)")]),
+            _choice(
+                [
+                    ("comfyui", "ComfyUI (managed, recommended)"),
+                    ("a1111", "AUTOMATIC1111 WebUI (external)"),
+                    ("remote", "Remote GPU (ComfyUI on another computer)"),
+                ]
+            ),
             s.backend,
             RW,
         )
         p.add_string_argument("comfy-dir", "Co_mfyUI folder", "Folder of the ComfyUI portable build", s.comfy_dir, RW)
         p.add_string_argument("url", "Com_fyUI URL", "Base URL of ComfyUI", s.url, RW)
         p.add_string_argument("a1111-url", "_A1111 URL", "Base URL of the WebUI API", s.a1111_url, RW)
+        p.add_string_argument(
+            "remote-url", "Remote GPU pairing code", "ofgpu:// line from the OpenFill GPU server", s.remote_url, RW
+        )
+        p.add_string_argument("remote-ssh", "Remote GPU over SSH", "user@computer, empty = direct", s.remote_ssh, RW)
         p.add_boolean_argument("autostart", "S_tart backend automatically", "", s.autostart, RW)
         p.add_int_argument(
             "idle-timeout-minutes",

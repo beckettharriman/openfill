@@ -62,8 +62,10 @@ class ComfyBackend(Backend):
         request_timeout: float = 0.0,
         logger=None,
         models_root: Path | str | None = None,
+        connection_lost: str = "",
     ) -> None:
         self.url = url
+        self.connection_lost = connection_lost or CONNECTION_LOST  # what to say when ComfyUI goes away mid-job
         self.models_root = Path(models_root) if models_root else None
         self.client = client or ComfyClient(url)
         self.request_timeout = request_timeout  # 0 = estimate per request
@@ -253,11 +255,13 @@ class ComfyBackend(Backend):
             text = str(err)
             if "cancelled" in text or "interrupted" in text:
                 raise GenerationCancelled(text) from err
+            # A server that no longer answers at all: it stopped, or (Remote GPU) the network
+            # dropped. A request that timed out because of that is not a slow generation.
+            if self._connection_lost(err):
+                raise BackendUnavailable(self.connection_lost) from err
             if "timed out" in text:
                 self.cancel()
                 raise GenerationTimeout(f"no result after {time.monotonic() - started:.0f} s") from err
-            if self._connection_lost(err):
-                raise BackendUnavailable(CONNECTION_LOST) from err
             raise BackendUnavailable(text) from err
         finally:
             self._progress = Progress(1.0, "done", False)
@@ -267,7 +271,7 @@ class ComfyBackend(Backend):
             images = self.client.output_images(entry, workflow.OUTPUT_NODE)
         except ComfyApiError as err:
             if self._connection_lost(err):
-                raise BackendUnavailable(CONNECTION_LOST) from err
+                raise BackendUnavailable(self.connection_lost) from err
             raise BackendUnavailable(f"could not download the result: {err}") from err
         if self.log:
             first = self._first_step or finished

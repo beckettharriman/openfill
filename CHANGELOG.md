@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Add OpenFill for Patchy (prototype): the PhotoCraft panel as a Patchy companion app, started from Plugins > Companions, with each result one step in Patchy's history.
+- Add Remote GPU: edit on one computer while ComfyUI runs on another one of yours, over
+  Tailscale or SSH. On the GPU computer, the new OpenFill GPU server starts ComfyUI for that
+  computer only and lets in only requests with a pairing code. It shows only the parts of
+  ComfyUI OpenFill uses, and installs node packs for the Models tab. OpenFill reads the models
+  and node packs from that computer, says plainly when it is asleep or unreachable, and never
+  falls back to this computer or a cloud service. See docs/remote-gpu.md.
 - Detect long Windows paths before ComfyUI startup or download and explain the shorter-folder fix.
 - Add PhotoCraft installation on Apple Silicon, tested with all four tools on an M3 MacBook Air.
 - Fix Finder Python architecture, Aqua panel startup and PhotoCraft discovery on macOS.

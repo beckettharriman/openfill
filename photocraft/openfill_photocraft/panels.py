@@ -5,8 +5,8 @@
 - Models: this computer in one line, the installed models (each with a trash button that
   uninstalls it), the ones to download (Download, Resume, or the progress and a button that
   stops it), and the Hugging Face key FLUX needs.
-- Engine: ComfyUI's folder, when it starts and stops, extra options, and Check, Stop engine
-  and Logs.
+- Engine: ComfyUI's folder, when it starts and stops, extra options, the Remote GPU (ComfyUI
+  on another computer), and Check, Stop engine and Logs.
 - Generation: steps, prompt strictness, repaint margin and edge softness.
 
 The views only read the refresher's facts and the settings on the UI thread; downloads,
@@ -96,6 +96,9 @@ class GearView(tk.Frame):
         self.engine.autostart.set(bool(settings.autostart))
         self.engine.idle.set(str(settings.idle_timeout_minutes))
         self.engine.extra.set(str(settings.extra_server_args or ""))
+        self.engine.remote.set(settings.backend == "remote")
+        self.engine.remote_url.set(settings.remote_url or "")
+        self.engine.remote_ssh.set(settings.remote_ssh or "")
         for key, entry in self.generation.fields.items():
             entry.set(str(getattr(settings, key)))
 
@@ -129,13 +132,27 @@ class GearView(tk.Frame):
                 self.bar.service.warm_up()
             for key, value in values.items():
                 setattr(app.settings, key, value)
+            self._apply_remote(app.settings)
             app.settings.save(app.paths.config)
             app.reload_settings()
+            if app.settings.uses_remote:
+                self.bar.service.warm_up()  # connects, so the bar says at once if the GPU computer answers
         except Exception as err:  # noqa: BLE001 - says what is wrong
             self.say(str(err), BAD)
             return
         self.bar.refresher.wake.set()
         self.say("Settings saved.", OK)
+
+    def _apply_remote(self, settings: Any) -> None:
+        """The Remote GPU choice: the backend, and a pasted pairing code moved out of the address."""
+        if self.engine.remote.get():
+            settings.backend = "remote"
+        elif settings.backend == "remote":
+            settings.backend = "comfyui"
+        settings.remote_url = self.engine.remote_url.get().strip()
+        settings.remote_ssh = self.engine.remote_ssh.get().strip()
+        settings.take_pairing_code()
+        self.engine.remote_url.set(settings.remote_url)
 
 
 class ModelsView(tk.Frame):
@@ -386,6 +403,17 @@ class EngineView(tk.Frame):
         box.pack(fill="x", pady=(12, 0))
         box, self.extra = field(self, "Extra ComfyUI options", lambda b: ui.Field(b, CW, "for example --lowvram"))
         box.pack(fill="x", pady=(12, 0))
+        # Remote GPU: ComfyUI on another computer (docs/remote-gpu.md)
+        self.remote = ui.Checkbox(self, "Use a Remote GPU (ComfyUI on another computer)")
+        self.remote.pack(anchor="w", pady=(12, 0))
+        box, self.remote_url = field(
+            self, "Remote GPU pairing code", lambda b: ui.Field(b, CW, "ofgpu://... from the OpenFill GPU server")
+        )
+        box.pack(fill="x", pady=(8, 0))
+        box, self.remote_ssh = field(
+            self, "Over SSH (optional)", lambda b: ui.Field(b, CW, "user@computer, empty = connect directly")
+        )
+        box.pack(fill="x", pady=(8, 0))
         ui.divider(self).pack(fill="x", pady=(12, 0))
         tools = ui.frame(self)
         tools.pack(fill="x", pady=(12, 0))

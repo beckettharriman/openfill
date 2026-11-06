@@ -140,6 +140,16 @@ ADVANCED_FIELDS = (
 CONNECTION_FIELDS = (
     ("backend", "Backend", "ComfyUI is managed for you. AUTOMATIC1111 must be started by you with --api."),
     ("url", "ComfyUI address", ""),
+    (
+        "remote_url",
+        "Remote GPU pairing code",
+        "Paste the ofgpu:// line the OpenFill GPU server showed. See docs/remote-gpu.md.",
+    ),
+    (
+        "remote_ssh",
+        "Remote GPU over SSH",
+        "Optional: user@computer to go through SSH with your SSH key. Empty connects directly.",
+    ),
     ("a1111_url", "AUTOMATIC1111 address", ""),
     ("startup_timeout", "Startup time limit (s)", "How long to wait for the backend to start."),
     ("request_timeout", "Generation time limit (s)", "0 estimates a limit for each request."),
@@ -553,6 +563,40 @@ def model_option_label(name: str, installed: bool, active: bool) -> str:
 
 # ComfyUI options that force the processor.
 CPU_FLAGS = ("--cpu",)
+
+
+# Remote GPU (backend "remote"): ComfyUI runs on another computer.
+REMOTE_GPU_SERVER = "python openfill/gpu_server.py"  # how docs/remote-gpu.md starts it
+
+
+def remote_message(kind: str) -> str:
+    """Plain words for what a Remote GPU cannot do from this computer."""
+    return {
+        "cpu": "The GPU computer's ComfyUI runs on its processor, not its graphics card, so every result "
+        "takes many times longer. Check the graphics card driver on that computer and how ComfyUI is started there.",
+        "remove": "Remote GPU is chosen: the models are on the GPU computer. Delete model files there, in "
+        "ComfyUI's models folder.",
+        "folder": "Remote GPU is chosen: the models folder is on the GPU computer, in its ComfyUI folder.",
+        "stop": "Remote GPU is chosen: ComfyUI runs on the GPU computer. Stop the OpenFill GPU server there "
+        "(Ctrl+C in its window) to free that graphics card.",
+    }[kind]
+
+
+def remote_connection_lost(host: str) -> str:
+    """A Remote GPU job whose connection broke off (network drop, the computer went to sleep)."""
+    return (
+        f"The connection to the GPU computer {host} was lost while it was generating, so the image was not "
+        "changed. Check that it is awake and connected (Tailscale or your network), then run the command again."
+    )
+
+
+def remote_download_message(name: str, model_id: str) -> str:
+    """Downloads go to the GPU computer, which has the models."""
+    return (
+        f"Remote GPU is chosen, so '{name}' has to be on the GPU computer. Download it there: run "
+        f"'{REMOTE_GPU_SERVER} download {model_id}' on that computer (or put the file in its ComfyUI "
+        "models folder), then press Check backend."
+    )
 
 
 def cpu_backend_message(flags: str) -> str:

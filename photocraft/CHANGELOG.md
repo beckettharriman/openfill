@@ -5,6 +5,11 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Add Remote GPU in the gear's Engine section: use ComfyUI on another computer of yours, over
+  Tailscale or SSH, with the OpenFill GPU server's pairing code. See docs/remote-gpu.md.
+
 ## [0.2.4] - 2026-10-26
 
 - Fix Mac prompt typing by keeping the expanded panel keyboard-focusable.

@@ -137,6 +137,37 @@ logs a warning when the listen address is not a loopback address. The
 plug-in's own HTTP and WebSocket clients connect to the configured URL, plus the
 model hosts listed under "Live model search" and the download hosts.
 
+### Remote GPU
+
+With the Remote GPU backend ([remote-gpu.md](remote-gpu.md)) the picture and mask go to
+another computer of yours, and the results come back. OpenFill never talks to an open ComfyUI
+on another computer: it goes through the OpenFill GPU server (`gpu_server.py`) or an SSH tunnel
+it opens with the system's `ssh` (key login only, `BatchMode=yes`, the login checked so it
+cannot be read as an ssh option).
+
+The GPU server:
+
+- starts ComfyUI on `127.0.0.1` only and listens on one address itself: the Tailscale address
+  by default. It refuses `0.0.0.0`, `::` and public addresses, and warns that a home network
+  address is not encrypted;
+- requires the pairing code (`Authorization: Bearer`) on every request, the progress
+  websocket included. The code is 24 random bytes, shown once; only its SHA-256 is stored
+  (owner-only file) and compared with `hmac.compare_digest`. A wrong code costs 0.25 s, and 8
+  wrong codes from one address within a minute lock that address out for the rest of the
+  minute (HTTP 429). The code is never logged and never passed on to ComfyUI;
+- passes only the endpoints OpenFill uses (`/system_stats`, `/object_info`, `/models`,
+  `/upload/image`, `/prompt`, `/queue`, `/history`, `/view`, `/interrupt`, `/free`, `/ws`) and
+  answers 404 to everything else, so ComfyUI's settings and user files, and any node pack's
+  own web routes (for example a manager that installs from URLs) stay private. `Origin`,
+  `Referer` and cookies are dropped. Uploads need a `Content-Length` and are capped at 256 MB,
+  other requests at 32 MB, at most 64 connections at a time;
+- installs node packs only as its own catalog names them for a model id (pinned commit, the
+  same code as the Models tab), never from a repository the request names.
+
+On the editor computer the pairing code is kept in `config.json` next to the Hugging Face token
+(owner-only on Linux and macOS, left out of `repr()` and the log), and sent only to the address it
+was paired with.
+
 ## Telemetry
 
 None. OpenFill collects no usage data, sends no analytics or crash reports,

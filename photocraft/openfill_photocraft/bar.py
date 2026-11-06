@@ -279,9 +279,7 @@ class Refresher:
         facts["rows"] = rows
         if self._hardware is None or self._vendor is None:
             try:
-                from openfill import hardware
-
-                hw = hardware.detect(app.models_root, app.server.url())
+                hw = app.hardware()  # this computer's card, or the Remote GPU's
                 self._hardware, self._vendor = hardware_line(hw), hw.gpu_vendor
             except Exception:  # noqa: BLE001 - only shown in the Models view
                 self._hardware, self._vendor = "", ""

@@ -30,6 +30,8 @@ EDITABLE = {
     "autostart": bool,
     "idle_timeout_minutes": int,
     "extra_server_args": str,
+    "remote_url": str,  # Remote GPU address (a pasted pairing code is moved into remote_token)
+    "remote_ssh": str,
     "steps": int,
     "cfg": float,
     "grow_percent": float,
@@ -81,9 +83,7 @@ class Api:
                 row["neededBy"] = needed_by(list(app.catalog), row["id"])
         hw = None
         try:
-            from openfill import hardware
-
-            detected = hardware.detect(app.models_root, app.server.url())
+            detected = app.hardware()  # this computer's card, or the Remote GPU's
             hw = hardware_line(detected)
             if detected.is_amd:
                 cat.add_amd_notes(rows, app.catalog)  # what may not work on an AMD card
@@ -109,7 +109,7 @@ class Api:
 
     def settings(self) -> dict[str, Any]:
         s = self.service.app.settings
-        return {k: getattr(s, k) for k in EDITABLE}
+        return {**{k: getattr(s, k) for k in EDITABLE}, "use_remote": s.backend == "remote"}
 
     # POST -----------------------------------------------------------------------------
 
@@ -151,6 +151,12 @@ class Api:
             for key, kind in EDITABLE.items():
                 if key in body:
                     setattr(app.settings, key, kind(body[key]))
+            if "use_remote" in body:
+                if body["use_remote"]:
+                    app.settings.backend = "remote"
+                elif app.settings.backend == "remote":
+                    app.settings.backend = "comfyui"
+            app.settings.take_pairing_code()
             app.settings.save(app.paths.config)
             app.reload_settings()
             return self.settings()

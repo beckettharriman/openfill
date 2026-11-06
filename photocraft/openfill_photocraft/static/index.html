@@ -179,6 +179,9 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <label class="check"><input type="checkbox" id="s-autostart"><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span>Start the AI engine with PhotoCraft</span></label>
       <div class="field"><span class="label">Stop after idle</span><div style="display:flex;gap:8px;align-items:center"><input id="s-idle_timeout_minutes" type="number" style="width:72px" aria-label="Stop after idle, minutes"><span class="small">minutes, 0 = never</span></div></div>
       <div class="field"><span class="label">Extra ComfyUI options</span><input id="s-extra_server_args" type="text" placeholder="for example --lowvram" aria-label="Extra ComfyUI options"></div>
+      <label class="check"><input type="checkbox" id="s-use_remote"><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span>Use a Remote GPU (ComfyUI on another computer)</span></label>
+      <div class="field"><span class="label">Remote GPU pairing code</span><input id="s-remote_url" type="text" placeholder="ofgpu://... from the OpenFill GPU server" aria-label="Remote GPU pairing code"></div>
+      <div class="field"><span class="label">Over SSH (optional)</span><input id="s-remote_ssh" type="text" placeholder="user@computer, empty = connect directly" aria-label="Remote GPU over SSH"></div>
       <div class="divider"></div>
       <div class="stack"><div class="label">Engine</div><div style="display:flex;gap:8px"><button class="btn" id="check">Check</button><button class="btn" id="stop">Stop engine</button><button class="btn" id="logs">Logs</button></div><div class="note dim" id="check-out" hidden></div></div>
     </div>
