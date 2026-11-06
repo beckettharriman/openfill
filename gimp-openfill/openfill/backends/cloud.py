@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from .. import __version__, imaging
 from ..backend import (
@@ -73,6 +73,7 @@ MAX_SEND_SIDE = 1536
 DEFAULT_TIMEOUT = 240.0  # seconds; image models take 10 to 120 s, slower when busy
 EXPECTED_SECONDS = 30.0  # for the progress bar only
 MAX_ANSWER_BYTES = 64 * 1024 * 1024  # an answer (JSON with base64 pictures, or a picture) larger than this is refused
+HEALTH_TIMEOUT = 20.0  # seconds for the whole Check
 MAX_VARIATIONS = 4  # each one is a separate paid picture
 PROJECT_URL = "https://github.com/beckettharriman/openfill"
 
@@ -285,7 +286,10 @@ class CloudBackend(Backend):
         self.request_timeout = float(request_timeout or 0) or DEFAULT_TIMEOUT
         self.log = logger
         self.decode = decode  # the editor's reader for JPEG / WebP results: (width, height, RGBA bytes)
-        self.opener = opener or build_opener(_NoRedirect)
+        # Plain http goes straight to the address (it was checked to be local): never through a
+        # system proxy, which would see the key. https may use a proxy, which sees no key (CONNECT).
+        plain = urlparse(self.url).scheme == "http"
+        self.opener = opener or (build_opener(_NoRedirect, ProxyHandler({})) if plain else build_opener(_NoRedirect))
         self.where = destination(provider_id, url)
         self._progress = Progress()
         self._cancelled = threading.Event()
@@ -474,15 +478,16 @@ class CloudBackend(Backend):
         progress: ProgressCallback | None,
         cancel: CancelCallback | None,
         requests: int = 1,
-    ) -> list[bytes]:
+        limit: float = 0.0,
+    ) -> Any:
         """``call`` in a worker thread; progress by elapsed time. Cancel stops waiting at once and
         stops the worker before its next request; the whole job has one deadline (the time limit
         per request times the requests it makes), so a server that answers slowly byte by byte
         cannot keep it waiting."""
         self._cancelled.clear()
-        limit = self.request_timeout * max(1, requests)
+        limit = limit or self.request_timeout * max(1, requests)
         self._deadline = time.monotonic() + limit
-        result: list[list[bytes]] = []
+        result: list[Any] = []
         error: list[BaseException] = []
 
         def worker() -> None:
@@ -714,15 +719,18 @@ class CloudBackend(Backend):
         """Check the key and the address without sending any picture."""
         try:
             self._check_ready()
+            # one deadline for the whole check, as for a job: a service that answers a byte at a
+            # time cannot keep the Check button waiting
+            path = "/key" if self.provider.id == "openrouter" else "/models"
+            limit = min(HEALTH_TIMEOUT, self.request_timeout)
+            data = self._run("Checking", lambda: self._send("GET", path, None, "", limit), None, None, limit=limit)
             if self.provider.id == "openrouter":
-                data = self._send("GET", "/key", None, "", 20)
                 info = data.get("data") if isinstance(data.get("data"), dict) else {}
                 left = info.get("limit_remaining")
                 credit = f", {left:.2f} credits left on this key" if isinstance(left, (int, float)) else ""
                 return HealthStatus(
                     True, f"{self.where} accepted the key{credit}. Model: {self.model}", device_kind="cloud"
                 )
-            data = self._send("GET", "/models", None, "", 20)
             listed = data.get("data") if isinstance(data.get("data"), list) else []
             ids = [str(m.get("id")) for m in listed if isinstance(m, dict)]
             known = "" if not ids or self.model in ids else f" (it does not list {self.model}; check the model name)"

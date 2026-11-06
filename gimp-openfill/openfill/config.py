@@ -286,6 +286,12 @@ class Settings:
             return ""
         from .backends.cloud import destination
 
+        if not self.cloud_key_for:  # saved by a test build before keys were tied to their service
+            return (
+                "Please paste your API key again in the cloud settings: OpenFill now remembers which "
+                "service each key is for, and sends it only there."
+            )
+
         return (
             f"The saved API key was entered for another service or address, so it is not sent to "
             f"{destination(self.cloud_provider, self.cloud_url)}. Paste the API key for this service in the "

@@ -365,7 +365,7 @@ def edit_mask_png(mask: bytes, width: int, height: int) -> bytes:
 
 def _inside_distance(mask: bytes, width: int, height: int, box: tuple[int, int, int, int], cap: int) -> list[int]:
     """Chessboard distance (at most ``cap``) from each pixel of ``box`` to the nearest
-    unselected pixel; 0 for unselected pixels. Every pixel outside ``box`` but inside the
+    unselected pixel (mask 0); 0 for unselected pixels. Every pixel outside ``box`` but inside the
     picture is unselected. Past the picture's own edge nothing is unselected: a selection
     that reaches the edge (or Expand's new canvas) stays solid there instead of fading out."""
     x0, y0, x1, y1 = box
@@ -381,7 +381,7 @@ def _inside_distance(mask: bytes, width: int, height: int, box: tuple[int, int, 
         row = y * width
         base = (y - y0 + 1) * gw + 1
         for x in range(x0, x1):
-            if mask[row + x] >= 128:
+            if mask[row + x]:
                 d[base + x - x0] = cap
     for y in range(1, gh - 1):
         for i in range(y * gw + 1, y * gw + gw - 1):
@@ -396,15 +396,15 @@ def _inside_distance(mask: bytes, width: int, height: int, box: tuple[int, int, 
 
 
 def mask_box(mask: bytes, width: int, height: int) -> tuple[int, int, int, int] | None:
-    """Bounding box (x0, y0, x1, y1) of the selected pixels (>= 128), None when none are."""
-    ys = [y for y in range(height) if max(mask[y * width : (y + 1) * width], default=0) >= 128]
+    """Bounding box (x0, y0, x1, y1) of the selected pixels (any value above 0), None when none are."""
+    ys = [y for y in range(height) if max(mask[y * width : (y + 1) * width], default=0)]
     if not ys:
         return None
     x0, x1 = width, 0
     for y in ys:
         row = mask[y * width : (y + 1) * width]
-        first = next(i for i, v in enumerate(row) if v >= 128)
-        last = width - 1 - next(i for i, v in enumerate(reversed(row)) if v >= 128)
+        first = next(i for i, v in enumerate(row) if v)
+        last = width - 1 - next(i for i, v in enumerate(reversed(row)) if v)
         x0, x1 = min(x0, first), max(x1, last + 1)
     return x0, ys[0], x1, ys[-1] + 1
 
@@ -419,10 +419,13 @@ def overlay(
 ) -> Rgba:
     """A layer of ``width`` x ``height`` that holds ``generated`` inside the selection only.
 
-    Every pixel the mask does not select (below 128) is fully transparent, so the layer can
-    change nothing outside the selection, whatever lies under it (transparency, 16-bit or
-    float pixels). Within ``feather`` pixels of the selection's edge the layer fades in, so
-    the edge does not show as a hard line. ``source`` is as in :func:`composite`.
+    Every pixel the mask does not select (0) is fully transparent, so the layer can change
+    nothing outside the selection, whatever lies under it (transparency, 16-bit or float
+    pixels). It is meant to be inserted with the selection itself as its layer mask: the
+    selection's own softness (a feathered or anti-aliased edge) then blends it in, as for a
+    local fill. On top of that it fades in over ``feather`` pixels at the edge, but never
+    over more than a third of the selection's depth, so a thin selection is fully covered.
+    ``source`` is as in :func:`composite`.
     """
     return _paint(None, generated, mask, width, height, source, feather)
 
@@ -434,8 +437,9 @@ def composite(
     source: tuple[float, float, float, float],
     feather: int = 4,
 ) -> Rgba:
-    """``original`` with the selected pixels taken from ``generated`` (the same blend as
-    :func:`overlay` placed over ``original``); every unselected pixel is copied unchanged.
+    """``original`` with the selected pixels taken from ``generated``: the same result as
+    :func:`overlay` placed over ``original`` with the mask as its layer mask. Every
+    unselected pixel (mask 0) is copied unchanged.
 
     ``source`` is the rectangle (x, y, width, height) of ``generated`` that shows the
     picture: the result is sampled from it with bilinear filtering, whatever size the
@@ -460,7 +464,10 @@ def _paint(
     if box is None:
         return Rgba(w, h, bytes(out))
     feather = max(1, int(feather))
-    dist = _inside_distance(mask, w, h, box, feather)
+    dist = _inside_distance(mask, w, h, box, 3 * feather)
+    # The fade inside the edge is at most a third of the selection's own depth, so a thin
+    # selection (a 4 px wire) is still covered fully in its middle.
+    feather = max(1, min(feather, max(dist) // 3))
     gw, gh, gen = generated.width, generated.height, generated.data
     sx0, sy0, sw, sh = source
     fx, fy = sw / w, sh / h
@@ -492,13 +499,14 @@ def _paint(
             a -= lo
             b -= lo
             i = base + x * 4
-            if d >= feather:
+            weight = 1.0 if original is None else mask[y * w + x] / 255  # a layer gets the mask as its mask
+            if d >= feather and weight >= 1.0:
                 out[i] = int(row[a] + (row[b] - row[a]) * tx + 0.5)
                 out[i + 1] = int(row[a + 1] + (row[b + 1] - row[a + 1]) * tx + 0.5)
                 out[i + 2] = int(row[a + 2] + (row[b + 2] - row[a + 2]) * tx + 0.5)
                 out[i + 3] = 255
                 continue
-            alpha = d / feather
+            alpha = min(1.0, d / feather) * weight
             if original is None:  # a layer: the colour as generated, fading in by its alpha
                 out[i] = int(row[a] + (row[b] - row[a]) * tx + 0.5)
                 out[i + 1] = int(row[a + 1] + (row[b + 1] - row[a + 1]) * tx + 0.5)

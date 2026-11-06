@@ -713,7 +713,7 @@ class PhotoCraftBridge:
 
     def new_image_from_pngs(self, images: list[bytes], base_name: str, temp_dir: Path | None) -> PCImage:
         """A new document from the first image; further variations become hidden layers."""
-        with Image.open(_io.BytesIO(images[0])) as im:
+        with Image.open(_io.BytesIO(images[0]), formats=["PNG"]) as im:  # results are PNGs OpenFill made
             first = im.convert("RGBA")
         # The document takes the file's name: make it the prompt's, not a temporary one.
         stem = re.sub(r"[^A-Za-z0-9 ,._-]+", "", base_name).strip()[:60] or "Text to Image"
@@ -731,7 +731,7 @@ class PhotoCraftBridge:
         if base is not None:
             self.client.run("layer.setProps", layer=base, name=base_name if len(images) == 1 else f"{base_name} (1)")
         for number, data in enumerate(images[1:], start=2):
-            with Image.open(_io.BytesIO(data)) as im:
+            with Image.open(_io.BytesIO(data), formats=["PNG"]) as im:
                 rgba = im.convert("RGBA")
             extra = PCLayer(
                 None, f"{base_name} ({number})", Rect(0, 0, rgba.width, rgba.height), rgba.tobytes(), visible=False

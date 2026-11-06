@@ -129,6 +129,9 @@ class GearView(tk.Frame):
         if backend == self.engine.loaded_backend:
             # not switched here: keep what is set now (the browser page may have changed it since)
             backend = app.settings.backend
+        for key in ("cloud_provider", "cloud_url", "cloud_model"):  # the same for the cloud fields
+            if cloud[key] == self.engine.loaded_cloud.get(key):
+                cloud[key] = getattr(app.settings, key)
         trial = replace(app.settings)
         trial.set_cloud(cloud["cloud_provider"], cloud["cloud_url"], cloud["cloud_model"], cloud["cloud_api_key"])
         if backend == "cloud" and not trial.cloud_key_usable:
@@ -385,6 +388,7 @@ class EngineView(tk.Frame):
         super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
         self.bar = bar
         self.loaded_backend = ""  # what the switch showed when the settings were loaded
+        self.loaded_cloud: dict[str, str] = {}  # and the cloud fields
         from openfill.config import BACKENDS
 
         choices = [(b.id, b.short or b.label) for b in BACKENDS if b.photocraft]
@@ -477,6 +481,7 @@ class EngineView(tk.Frame):
         self.key.set("")  # the saved key is never put on screen
         self._cloud_changed()
         self.loaded_backend = backend
+        self.loaded_cloud = self.backend_values()[1]
         self._show_backend(backend)
 
     def backend_values(self) -> tuple[str, dict[str, str]]:

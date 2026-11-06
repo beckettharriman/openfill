@@ -164,37 +164,14 @@ def mask_png_from_bytes(rect: Rect, pixels: bytes) -> bytes:
 
 
 def decode_image(data: bytes) -> tuple[int, int, bytes]:
-    """A JPEG or WebP picture from the cloud service as (width, height, RGBA bytes), read
-    with GdkPixbuf (part of GIMP); the cloud backend reads PNG itself. Only GdkPixbuf's
-    reader for that one format is used, picked by the first bytes, never any other loader."""
-    gi.require_version("GdkPixbuf", "2.0")
-    from gi.repository import GdkPixbuf, GLib
+    """A JPEG or WebP picture from the cloud service as (width, height, RGBA bytes): GdkPixbuf's
+    loader for that one format, with the size checked before pixels are allocated (``pixbuf``)."""
+    from .pixbuf import PixbufError, decode
 
-    from .imaging import MAX_RESULT_PIXELS, picture_size, sniff
-
-    kind = sniff(data)
-    if kind not in ("jpeg", "webp"):
-        raise GimpIoError("not a JPEG or WebP picture")
-    width, height = picture_size(data, kind)
-    if width * height > MAX_RESULT_PIXELS:
-        raise GimpIoError(f"{width} x {height} pixels is larger than OpenFill accepts")
     try:
-        loader = GdkPixbuf.PixbufLoader.new_with_type(kind)
-    except GLib.Error as err:
-        raise GimpIoError(f"this GIMP cannot read {kind.upper()} pictures ({err.message})") from None
-    try:
-        loader.write(data)
-    finally:
-        loader.close()
-    pixbuf = loader.get_pixbuf()
-    if pixbuf is None:
-        raise GimpIoError("the picture could not be read")
-    if not pixbuf.get_has_alpha():
-        pixbuf = pixbuf.add_alpha(False, 0, 0, 0)
-    width, height, stride = pixbuf.get_width(), pixbuf.get_height(), pixbuf.get_rowstride()
-    raw = pixbuf.read_pixel_bytes()
-    pixels = raw.get_data() if isinstance(raw, GLib.Bytes) else bytes(raw)
-    return width, height, b"".join(pixels[y * stride : y * stride + width * 4] for y in range(height))
+        return decode(data)
+    except PixbufError as err:
+        raise GimpIoError(str(err)) from None
 
 
 # ---------------------------------------------------------------- writing ----

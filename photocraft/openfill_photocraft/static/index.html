@@ -228,7 +228,7 @@ const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0
 const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create"};
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
-let cloud=null, loadedBackend="", mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
+let cloud=null, loaded={}, mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
 
 function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
 $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
@@ -376,19 +376,24 @@ $("save-token").onclick=async()=>{try{await post("/api/models/token",{token:$("t
 
 async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el)continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}
   $("cloud-key").value="";$("cloud-key").placeholder=s.cloud_key_saved?"Saved. Paste a new key to replace it.":(s.cloud_key_elsewhere?"Paste the key for this service. The saved key is for another one.":"Paste your API key");
-  loadedBackend=s.backend;cloudFields()}
+  loaded={backend:s.backend,cloud_provider:s.cloud_provider,cloud_url:s.cloud_url,cloud_model:s.cloud_model};cloudFields()}
 // The cloud fields show only while the cloud is picked; the note says where pictures go.
 function cloudFields(){const on=$("s-backend").value==="cloud";$("cloud-fields").hidden=!on;
   const p=$("s-cloud_provider").value,u=$("s-cloud_url").value.trim();
   $("s-cloud_model").placeholder=p==="openrouter"?"google/gemini-2.5-flash-image":"the model name your service uses";
   $("s-cloud_url").placeholder=p==="openrouter"?"https://openrouter.ai/api/v1":"https://api.openai.com/v1";
-  let where=p==="openrouter"&&!u?"OpenRouter":"";if(!where){try{where=new URL(u||$("s-cloud_url").placeholder).host}catch(e){where=u}}
-  if(p==="openrouter"&&where.endsWith("openrouter.ai"))where="OpenRouter";
+  // the same rule as the panel and GIMP: "OpenRouter" only for openrouter.ai itself or its subdomains,
+  // otherwise the host and port, never a user name or password written into the address
+  let where="an address that is not valid";
+  try{const a=new URL(u||$("s-cloud_url").placeholder),h=a.hostname.toLowerCase();
+    where=p==="openrouter"&&(h==="openrouter.ai"||h.endsWith(".openrouter.ai"))?"OpenRouter":a.host.toLowerCase()}catch(e){}
   $("cloud-note").textContent=`Cloud: your image is sent to ${where}.`}
 ["s-backend","s-cloud_provider","s-cloud_url"].forEach(id=>$(id).addEventListener("input",cloudFields));
 function settingsNote(t,kind){const n=section==="generation"?$("gen-out"):$("check-out");n.hidden=!t;n.textContent=t;n.className="note "+(kind||"dim")}
 $("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.type==="checkbox"?el.checked:(el.type==="number"?+el.value:el.value)});
-  if(b.backend===loadedBackend)delete b.backend; // not switched here: never write back a value loaded earlier
+  // what was not changed in this form is not sent: a page opened earlier never writes back an old
+  // backend, service, address or model that was changed elsewhere since
+  for(const k of ["backend","cloud_provider","cloud_url","cloud_model"])if(b[k]===loaded[k])delete b[k];
   const key=$("cloud-key").value.trim();if(key)b.cloud_api_key=key;
   try{await post("/api/settings",b);await loadSettings();settingsNote("Settings saved.","ok")}catch(e){settingsNote(e.message,"bad")}};
 $("check").onclick=async()=>{settingsNote("Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:"."),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};

@@ -1569,6 +1569,34 @@ class CloudCompanionTests(unittest.TestCase):
                     PhotoCraftBridge.decode_image(None, data)
         self.assertEqual(calls, [])
 
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_page_note_uses_the_exact_host_rule(self):
+        """The settings page's note before saving: the same rule as the panel and GIMP."""
+        from openfill.backends.cloud import cloud_note
+
+        page = ROOT / "photocraft" / "openfill_photocraft" / "static" / "index.html"
+        script = r"""
+const fs=require("fs");const html=fs.readFileSync(process.argv[1],"utf8");
+const src=html.slice(html.indexOf("function cloudFields"),html.indexOf('["s-backend","s-cloud_provider"'));
+const out=[];for(const [p,u] of JSON.parse(process.argv[2])){
+  const els={"s-backend":{value:"cloud"},"cloud-fields":{},"s-cloud_provider":{value:p},
+    "s-cloud_url":{value:u,placeholder:""},"s-cloud_model":{},"cloud-note":{}};
+  const $=id=>els[id];eval(src);cloudFields();out.push(els["cloud-note"].textContent)}
+console.log(JSON.stringify(out));
+"""
+        cases = [
+            ["openrouter", ""],
+            ["openrouter", "https://evilopenrouter.ai/api/v1"],
+            ["openrouter", "https://eu.openrouter.ai/api/v1"],
+            ["openai", "https://user:hunter2@LLM.example.com:8443/v1"],
+            ["openai", "http://localhost:4000/v1"],
+        ]
+        run = subprocess.run(
+            ["node", "-e", script, str(page), json.dumps(cases)], capture_output=True, text=True, timeout=30
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), [cloud_note(p, u) for p, u in cases])
+
     def test_no_comfyui_warm_up_while_the_cloud_is_picked(self):
         from openfill_photocraft.service import Service
 

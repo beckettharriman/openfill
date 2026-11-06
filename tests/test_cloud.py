@@ -170,6 +170,18 @@ def inpaint_request(width=300, height=200, mode="fill", batch=1, prompt="a red b
     )
 
 
+def _has_gdkpixbuf():
+    try:
+        import gi
+
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf  # noqa: F401
+
+        return True
+    except (ImportError, ValueError):
+        return False
+
+
 class CloudTestCase(unittest.TestCase):
     def setUp(self):
         self.fake = FakeService()
@@ -769,16 +781,17 @@ class ImagingTests(unittest.TestCase):
         mask = bytearray(w * h)
         for y in range(2, 8):
             mask[y * w + 4 : y * w + 16] = b"\xff" * 12
-        mask[0] = 100  # a soft pixel below 128 stays original
+        mask[0] = 100  # a soft pixel (39 % selected): blended by that much, as by a layer mask
         out = imaging.composite(original, generated, bytes(mask), (0, 0, 2, 1), feather=3)
         for i in range(w * h):
             pixel = out.data[i * 4 : i * 4 + 4]
-            if mask[i] < 128:
+            if not mask[i]:
                 self.assertEqual(pixel, bytes([50, 60, 70, 255]))
+        self.assertTrue(50 < out.data[0] < 200 * 100 / 255 + 50)
         centre = out.data[(5 * w + 10) * 4 :][:4]
         self.assertEqual(centre, bytes([200, 0, 0, 255]))
         rim = out.data[(5 * w + 4) * 4 :][:4]
-        self.assertTrue(50 < rim[0] < 200)
+        self.assertEqual(rim[0], 200)  # 6 px deep: the fade is at most a third of that, here 1 px
 
 
 # ---------------------------------------------------- the App: no fallback ----
@@ -1212,6 +1225,198 @@ class OutsideSelectionTests(AppNoFallbackTests):
                 self.assertEqual(layer.data[(ly * layer.width + lx) * 4 + 3], 0, (x, y))
         lx, ly = 160 - rect.x, 100 - rect.y
         self.assertEqual(layer.data[(ly * layer.width + lx) * 4 : (ly * layer.width + lx) * 4 + 4], b"\xff\x00\x00\xff")
+
+
+# ------------------------------------------------- second review (2026-11-06) ----
+
+
+class ThinSelectionTests(unittest.TestCase):
+    def test_thin_selection_is_fully_covered(self):
+        """A 4 px tall, 600 px wide selection (a wire), with the feather App passes for it."""
+        w, h = 640, 40
+        mask = bytearray(w * h)
+        for y in range(18, 22):
+            mask[y * w + 20 : y * w + 620] = b"\xff" * 600
+        gen = imaging.Rgba(64, 4, bytes((255, 0, 0, 255)) * (64 * 4))
+        layer = imaging.overlay(gen, bytes(mask), w, h, (0, 0, 64, 4), 8)
+        alphas = [layer.data[(y * w + 300) * 4 + 3] for y in range(18, 22)]
+        self.assertEqual(alphas, [255, 255, 255, 255])
+        self.assertEqual(max(layer.data[(17 * w + 300) * 4 + 3], layer.data[(22 * w + 300) * 4 + 3]), 0)
+
+    def test_wide_selection_still_fades_in_at_its_edge(self):
+        w, h = 100, 100
+        mask = bytearray(w * h)
+        for y in range(10, 90):
+            mask[y * w + 10 : y * w + 90] = b"\xff" * 80
+        gen = imaging.Rgba(4, 4, bytes((255, 0, 0, 255)) * 16)
+        layer = imaging.overlay(gen, bytes(mask), w, h, (0, 0, 4, 4), 8)
+        row = [layer.data[(50 * w + x) * 4 + 3] for x in range(10, 20)]
+        self.assertTrue(0 < row[0] < row[3] < row[8] == 255, row)
+
+    def test_feathered_selection_keeps_its_outer_half(self):
+        """A soft selection: pixels selected less than 50 % get the layer too, and the selection
+        itself (the layer mask) blends them, as for a local fill."""
+        w, h = 200, 20
+        mask = bytearray(w * h)
+        for y in range(h):
+            for x in range(w):
+                mask[y * w + x] = min(255, max(0, (x - 50) * 3))  # an 85 px ramp
+        gen = imaging.Rgba(8, 8, bytes((255, 0, 0, 255)) * 64)
+        layer = imaging.overlay(gen, bytes(mask), w, h, (0, 0, 8, 8), 8)
+        x = next(i for i in range(w) if mask[10 * w + i] >= 100)
+        self.assertGreater(layer.data[(10 * w + x) * 4 + 3], 0, "a 39 % selected pixel gets nothing")
+        self.assertEqual(layer.data[(10 * w + 50) * 4 + 3], 0)  # not selected at all: transparent
+        # placed over a picture with the selection as layer mask = composite: a smooth blend
+        original = imaging.Rgba(w, h, bytes((0, 0, 255, 255)) * (w * h))
+        merged = imaging.composite(original, gen, bytes(mask), (0, 0, 8, 8), 8)
+        reds = [merged.data[(10 * w + x) * 4] for x in range(50, 140)]
+        self.assertEqual(reds[0], 0)
+        self.assertEqual(reds, sorted(reds))  # rises steadily, no step at the 50 % contour
+        self.assertEqual(reds[-1], 255)
+
+
+class _Drip(BaseHTTPRequestHandler):
+    def log_message(self, *_a):
+        pass
+
+    def do_GET(self):  # noqa: N802
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "100000")
+        self.end_headers()
+        try:
+            for _ in range(200):
+                self.wfile.write(b" ")
+                self.wfile.flush()
+                time.sleep(0.2)
+        except OSError:
+            pass
+
+
+class HealthDeadlineTests(unittest.TestCase):
+    def test_check_has_an_overall_deadline(self):
+        """Check with a server that drips a byte every 0.2 s: ends at the limit, not after 40 s."""
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _Drip)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f"http://127.0.0.1:{server.server_address[1]}/api/v1"
+        started = time.monotonic()
+        health = CloudBackend("openrouter", KEY, "m", url, request_timeout=1).health()
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertFalse(health.ok)
+        self.assertIn("did not answer within", health.detail)
+
+
+class ProxyTests(CloudTestCase):
+    def test_plain_http_never_goes_through_a_system_proxy(self):
+        from unittest import mock
+
+        proxy = FakeService()  # would see the key if the request went through it
+        self.addCleanup(proxy.close)
+        self.fake.json_route("/v1/models", {"data": [{"id": "m"}]})
+        env = {"http_proxy": proxy.url, "HTTP_PROXY": proxy.url, "https_proxy": proxy.url, "no_proxy": ""}
+        with mock.patch.dict(os.environ, env):
+            health = CloudBackend("openai", KEY, "m", self.fake.url + "/v1", logger=self.logger).health()
+        self.assertTrue(health.ok, health.detail)
+        self.assertEqual(proxy.requests, [])
+        self.assertEqual(len(self.fake.requests), 1)
+
+
+class LocalNeverTouchesTheNetworkTests(AppNoFallbackTests):
+    """backend=comfyui with a cloud key saved: no lookup or connection to anything but loopback."""
+
+    test_cloud_fill_end_to_end_without_comfyui = None
+    test_cloud_failure_never_falls_back_to_comfyui = None
+    test_comfyui_failure_never_falls_back_to_the_cloud = None
+    test_check_backend_for_the_cloud_sends_no_picture = None
+
+    def test_local_backend_makes_no_non_loopback_connection(self):
+        seen = []
+        real_connect, real_gai = socket.socket.connect, socket.getaddrinfo
+
+        def connect(sock, addr):
+            seen.append(addr[0] if isinstance(addr, tuple) else addr)
+            return real_connect(sock, addr)
+
+        def gai(host, *a, **k):
+            seen.append(host)
+            return real_gai(host, *a, **k)
+
+        socket.socket.connect, socket.getaddrinfo = connect, gai
+        try:
+            app = self.app(backend="comfyui")
+            for job in (
+                app.check_backend,
+                lambda: app.generative_fill(FakeImage(300, 200), "x", "", 1, 1.0, -1, "active"),
+            ):
+                try:
+                    job()
+                except Exception:  # noqa: BLE001 - no ComfyUI here
+                    pass
+        finally:
+            socket.socket.connect, socket.getaddrinfo = real_connect, real_gai
+        bad = [str(h) for h in seen if not str(h).startswith(("127.", "localhost", "::1"))]
+        self.assertEqual(bad, [])
+        self.assertEqual(self.cloud.requests, [])
+
+
+class MigrationTests(unittest.TestCase):
+    def test_key_saved_before_binding_is_not_sent_and_asked_for_again(self):
+        from openfill.config import Settings
+
+        s = Settings(backend="cloud", cloud_api_key=KEY)  # no cloud_key_for: saved by an earlier test build
+        self.assertFalse(s.cloud_key_usable)
+        self.assertIn("paste your API key again", s.cloud_key_problem())
+        self.assertNotIn("another service", s.cloud_key_problem())
+
+
+@unittest.skipUnless(_has_gdkpixbuf(), "GdkPixbuf (part of GIMP) is not available")
+class PixbufTests(unittest.TestCase):
+    """GIMP's reader for JPEG and WebP answers (openfill.pixbuf), with the system's GdkPixbuf."""
+
+    def jpeg(self, width, height):
+        import gi
+
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf
+
+        pb = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, width, height)
+        pb.fill(0xC0102000)
+        return bytes(pb.save_to_bufferv("jpeg", [], [])[1])
+
+    def test_reads_a_jpeg(self):
+        from openfill import pixbuf
+
+        width, height, rgba = pixbuf.decode(self.jpeg(40, 30))
+        self.assertEqual((width, height, len(rgba)), (40, 30, 40 * 30 * 4))
+
+    def test_limit_is_checked_before_the_pixels_are_allocated(self):
+        """If the loader reports a size other than OpenFill's own reading of the header (or over
+        the limit), it is told to decode to 1 x 1 and the picture is refused."""
+        from unittest import mock
+
+        from openfill import pixbuf
+
+        data = self.jpeg(400, 300)
+        with self.assertRaises(pixbuf.PixbufError):
+            pixbuf.decode(data, max_pixels=1000)  # refused by the header check
+        fooled = mock.patch.object(pixbuf, "picture_size", lambda d, k: (10, 10))  # a header scan fooled
+        with fooled, self.assertRaises(pixbuf.PixbufError) as caught:
+            pixbuf.decode(data, max_pixels=1000)
+        self.assertIn("400 x 300", str(caught.exception))
+
+    def test_other_formats_never_reach_gdkpixbuf(self):
+        from openfill import pixbuf
+
+        for data in (
+            b"BM" + b"\0" * 60,
+            b"\x89PNG\r\n\x1a\n" + b"\0" * 30,
+            b"<svg xmlns='http://www.w3.org/2000/svg'/>",
+        ):
+            with self.assertRaises(pixbuf.PixbufError):
+                pixbuf.decode(data)
 
 
 if __name__ == "__main__":
