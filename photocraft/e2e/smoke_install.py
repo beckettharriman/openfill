@@ -3,7 +3,7 @@
 """Install, start, check and uninstall OpenFill for PhotoCraft against a real PhotoCraft
 (the Windows CI job runs it after installing PhotoCraft's .msi). No GPU or ComfyUI needed.
 
-    python photocraft/e2e/smoke_install.py [--first-run]
+    python photocraft/e2e/smoke_install.py [--first-run] [--port 7878]
 
 With ``--first-run`` (a fresh machine: no ComfyUI, no models) it also checks what the panel
 shows the first time: the AI engine not found, no model installed, and on Windows that
@@ -84,7 +84,13 @@ def first_run_checks(info: dict, state: dict) -> bool:
 
 
 def main() -> int:
-    first_run = "--first-run" in sys.argv[1:]
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--first-run", action="store_true", help="also check a fresh machine's first-run states")
+    parser.add_argument("--port", type=int, default=7878, help="PhotoCraft control port (default 7878)")
+    args = parser.parse_args()
+    first_run = args.first_run
     sys.path[:0] = [str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")]
     from openfill_photocraft import install
     from openfill_photocraft.bridge import default_profile
@@ -128,7 +134,7 @@ def main() -> int:
     (profile / "companion.json").unlink(missing_ok=True)
     run_env = dict(os.environ, OPENFILL_NO_BROWSER="1")
     command = [sys.executable, str(boot)] if boot else [str(Path.home() / ".local" / "bin" / "openfill-photocraft")]
-    companion = subprocess.Popen([*command, "--no-bar"], env=run_env)
+    companion = subprocess.Popen([*command, "--no-bar", "--port", str(args.port)], env=run_env)
     info = None
     for _ in range(240):
         if (profile / "companion.json").is_file():
@@ -151,7 +157,7 @@ def main() -> int:
             break
         time.sleep(0.5)
     print("photocraft:", state["photocraft"])
-    pc = ControlClient(7878, profile / "control.token")
+    pc = ControlClient(args.port, profile / "control.token")
     entries = [m["label"] for m in pc.call("ui.menu.list") if m.get("path", [])[:2] == ["Filter", "Plug-ins"]]
     print("Filter > Plug-ins:", [label.encode("ascii", "replace").decode() for label in entries])
     ok = True
