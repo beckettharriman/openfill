@@ -20,6 +20,7 @@ import tkinter as tk
 from typing import TYPE_CHECKING, Any
 
 from . import ui
+from .service import photocraft_text
 from .ui import BAD, BG, CW, DIM, OK
 
 if TYPE_CHECKING:
@@ -119,7 +120,7 @@ class GearView(tk.Frame):
         try:
             values = self.values()
         except ValueError as err:
-            self.say(str(err), BAD)
+            self.say(photocraft_text(str(err)), BAD)
             return
         folder = self.engine.folder.get().strip()
         try:
@@ -132,7 +133,7 @@ class GearView(tk.Frame):
             app.settings.save(app.paths.config)
             app.reload_settings()
         except Exception as err:  # noqa: BLE001 - says what is wrong
-            self.say(str(err), BAD)
+            self.say(photocraft_text(str(err)), BAD)
             return
         self.bar.refresher.wake.set()
         self.say("Settings saved.", OK)
@@ -320,7 +321,7 @@ class ModelsView(tk.Frame):
                 if done:
                     bar.call_soon(self.say, done, OK)
             except Exception as err:  # noqa: BLE001 - shown in the view
-                bar.call_soon(self.say, str(err), BAD)
+                bar.call_soon(self.say, photocraft_text(str(err)), BAD)
             bar.refresher.wake.set()
 
         threading.Thread(target=work, daemon=True).start()
@@ -418,17 +419,17 @@ class EngineView(tk.Frame):
             try:
                 health = bar.service.app.check_backend()
                 device = getattr(health, "device", "")
-                text = ("Working: " if health.ok else "Not working: ") + str(health.detail)
+                text = ("Working: " if health.ok else "Not working: ") + photocraft_text(str(health.detail))
                 text += f" on {device}." if device else "."
                 bar.call_soon(self.say, text, OK if health.ok else BAD)
             except Exception as err:  # noqa: BLE001
-                bar.call_soon(self.say, str(err), BAD)
+                bar.call_soon(self.say, photocraft_text(str(err)), BAD)
 
         threading.Thread(target=work, daemon=True).start()
 
     def stop(self) -> None:
         self.say(self.bar.service.app.stop_backend(), DIM)
-        self.bar.service.engine = ""
+        self.bar.service.engine_stopped()  # not "Ready" any more
 
     def logs(self) -> None:
         self.bar.service.app.open_log_folder()

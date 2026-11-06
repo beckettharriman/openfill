@@ -5,6 +5,13 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- When ComfyUI crashes or closes during a job, say so right away instead of after 90 seconds.
+- The status line says "Stopped: Generate restarts it" after ComfyUI stops, instead of "Ready".
+- Error messages point to OpenFill's settings in PhotoCraft, not to GIMP's menus and profile folder.
+- Mac model menu: a menu closed while it is open is removed only after macOS has dismissed it.
+
 ## [0.2.4] - 2026-10-26
 
 - Fix Mac prompt typing by keeping the expanded panel keyboard-focusable.

@@ -17,10 +17,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from openfill import catalog as cat
-from openfill.backend import describe_error
 
 from . import __version__
-from .service import Service
+from .service import Service, describe
 
 STATIC = Path(__file__).with_name("static")
 
@@ -69,7 +68,7 @@ class Api:
         try:
             rows = app.model_rows(app.server_model_files())
         except Exception as err:  # noqa: BLE001
-            return {"rows": [], "error": describe_error(err)}
+            return {"rows": [], "error": describe(err)}
         status = app.task_status()
         current = status.get("current") or {}
         pending = [t.get("model_id") for t in app.server.pending_tasks()]
@@ -240,7 +239,7 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
                 else:
                     self._send(404, b"not found", "text/plain")
             except Exception as err:  # noqa: BLE001
-                self._json(500, {"error": describe_error(err)})
+                self._json(500, {"error": describe(err)})
 
         def do_POST(self) -> None:  # noqa: N802
             if not self._authorised():
@@ -255,7 +254,7 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
             except KeyError as err:
                 self._json(404, {"error": f"unknown request {err}"})
             except Exception as err:  # noqa: BLE001
-                self._json(400, {"error": describe_error(err) if not isinstance(err, RuntimeError) else str(err)})
+                self._json(400, {"error": describe(err) if not isinstance(err, RuntimeError) else str(err)})
 
     return Handler
 
