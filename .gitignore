@@ -148,4 +148,5 @@ gimp-openfill/openfill/tmp/
 docs/evidence/daytime-2026-10-09/benchmark/*/
 photocraft/e2e/out/
 patchy/e2e/out/
+patchy/e2e/out-real/
 dist-smoke/

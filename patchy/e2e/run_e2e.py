@@ -37,7 +37,13 @@ sys.path[:0] = [
 
 import stub_backend  # noqa: E402
 from openfill_patchy.bridge import PatchyBridge  # noqa: E402
-from openfill_patchy.client import PatchyClient, PatchyError, protocol_problem  # noqa: E402
+from openfill_patchy.client import (  # noqa: E402
+    PatchyClient,
+    PatchyError,
+    connector_command,
+    is_appimage,
+    protocol_problem,
+)
 from openfill_patchy.service import PatchyService, Watcher  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
@@ -123,6 +129,18 @@ def history(client, doc) -> str:
     return str(d["historyStateId"])
 
 
+def launcher_home(root: Path) -> tuple[dict, Path]:
+    """The environment that keeps the launcher's per-user folders under ``root`` on every
+    platform, and the profile folder it then uses (``bridge.default_profile``)."""
+    if sys.platform == "win32":
+        env = {"APPDATA": str(root / "AppData" / "Roaming"), "LOCALAPPDATA": str(root / "AppData" / "Local")}
+        return env, root / "AppData" / "Roaming" / "OpenFill for Patchy"
+    if sys.platform == "darwin":
+        return {"HOME": str(root)}, root / "Library" / "Application Support" / "OpenFill for Patchy"
+    env = {"XDG_CONFIG_HOME": str(root / ".config"), "XDG_DATA_HOME": str(root / ".local" / "share")}
+    return env, root / ".config" / "openfill-patchy"
+
+
 def run_job(service: PatchyService, kind: str, params: dict, timeout: float = 120) -> dict:
     service.start(kind, params)
     deadline = time.monotonic() + timeout
@@ -150,7 +168,9 @@ def main() -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     patchy = Path(args.patchy).resolve()
-    connector = Path(args.connector) if args.connector else patchy.with_name("patchy-mcp" + patchy.suffix)
+    # Patchy's AppImage is its own connector (``<file> patchy-mcp``); elsewhere patchy-mcp is beside patchy.
+    default = patchy if is_appimage(patchy) else patchy.with_name("patchy-mcp" + patchy.suffix)
+    connector = Path(args.connector) if args.connector else default
 
     scratch = Path(tempfile.mkdtemp(prefix="openfill-patchy-e2e-"))
     settings = scratch / "settings"
@@ -182,7 +202,7 @@ def main() -> int:
         if holder.get("watcher"):
             holder["watcher"].on_event(event)
 
-    client = PatchyClient([str(connector), "--attach"], on_event=on_event, env=env, log=out / "connector.log")
+    client = PatchyClient(connector_command(str(connector)), on_event=on_event, env=env, log=out / "connector.log")
     try:
         client.start()
         deadline = time.monotonic() + 60
@@ -395,19 +415,15 @@ def main() -> int:
         # 7. the real launcher (no panel) attached next to this script, and how it ends: a
         # Quit from Plugins > Companions ends it through this same path (``until_quit``), but
         # an offscreen Patchy offers no way to pick that menu entry from outside.
-        launcher_profile = scratch / "launcher-appdata"
-        settings_dir = launcher_profile / "OpenFill for Patchy" / "openfill"
+        # Its own settings and logs on every platform, so it never starts a ComfyUI.
+        home_env, launcher_profile = launcher_home(scratch / "launcher-home")
+        settings_dir = launcher_profile / "openfill"
         settings_dir.mkdir(parents=True)
         (settings_dir / "config.json").write_text('{"autostart": false}', encoding="utf-8")
-        launcher_env = {
-            **env,
-            "APPDATA": str(launcher_profile),  # its own settings and logs, never ComfyUI
-            "LOCALAPPDATA": str(scratch / "launcher-local"),
-            "OPENFILL_NO_BROWSER": "1",
-        }
+        launcher_env = {**env, **home_env, "OPENFILL_NO_BROWSER": "1"}
         # Its output to a file, not NUL (on Windows NUL reports itself as a terminal), so the
         # launcher writes companion.log as it does when Patchy starts it.
-        log_path = launcher_profile / "OpenFill for Patchy" / "companion.log"
+        log_path = launcher_profile / "companion.log"
         launcher_log = (out / "launcher-output.log").open("w", encoding="utf-8")
         launcher = subprocess.Popen(
             [sys.executable, "-m", "openfill_patchy", "--no-bar", "--connector", str(connector)],

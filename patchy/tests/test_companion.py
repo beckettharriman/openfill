@@ -550,6 +550,15 @@ class ConnectorClientTests(Fixture):
             time.sleep(0.01)
         self.assertEqual([e["type"] for e in self.events], ["selectionChanged", "companionCommand"])
 
+    def test_a_line_that_is_not_a_json_object_is_skipped(self):
+        for line in (b"5\n", b"[1, 2]\n", b'"text"\n', b"null\n"):
+            with self.fake._lock:
+                self.fake._writer.write(line)
+                self.fake._writer.flush()
+        state = self.client.get_state()  # the reader thread is still there
+        self.assertEqual(state["activeDocumentId"], "7")
+        self.assertFalse(self.client.lost)
+
     def test_the_connector_is_found_from_patchys_variable_first(self):
         with mock.patch.dict(os.environ, {"PATCHY_MCP": r"C:\Patchy\patchy-mcp.exe"}):
             self.assertEqual(find_connector(), [r"C:\Patchy\patchy-mcp.exe", "--attach"])
@@ -1102,6 +1111,79 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(
                 install.companions_dir(), Path(r"C:\Users\a\AppData\Roaming") / "RTsoft" / "Patchy" / "companions"
             )
+
+    def test_the_entry_runs_the_python_the_installer_checked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            fake = folder / "bin" / "python3"
+            on_path = mock.patch.object(install.shutil, "which", lambda name: str(fake) if name == "python3" else None)
+            with on_path:
+                self.assertEqual(install.full_path("python3"), str(fake))  # a bare name, from PATH
+            self.assertEqual(install.full_path(str(fake)), str(fake))
+            self.assertTrue(Path(install.full_path(os.path.join("bin", "python3"))).is_absolute())
+            checked = []
+            with (
+                mock.patch.object(install, "has_pillow", side_effect=lambda py: checked.append(py) or True),
+                mock.patch.object(install, "target_dirs", return_value=[folder / "companions"]),
+                on_path,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(install.main(["--python", "python3"]), 0)
+            entry = json.loads((folder / "companions" / "openfill.json").read_text(encoding="utf-8"))
+            self.assertEqual(checked, [str(fake)])
+            self.assertEqual(entry["command"], str(fake))
+
+
+class LauncherFoldersTests(unittest.TestCase):
+    def test_only_folders_that_hold_the_code_are_used_package_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            top = Path(tmp)
+            here = top / "release" / "openfill_patchy"
+            here.mkdir(parents=True)
+            (top / "release" / "openfill").mkdir()
+            (top / "release" / "openfill" / "app.py").write_text("", encoding="utf-8")
+            (top / "release" / "openfill_photocraft").mkdir()
+            (top / "release" / "openfill_photocraft" / "bar.py").write_text("", encoding="utf-8")
+            # stray folders beside the release, as a GIMP or PhotoCraft download would leave
+            for stray in ("gimp-openfill/openfill/app.py", "photocraft/openfill_photocraft/bar.py"):
+                (top / stray).parent.mkdir(parents=True)
+                (top / stray).write_text("", encoding="utf-8")
+            self.assertEqual(launch.code_folders(here), [top / "release"])
+            # the repository: the core in gimp-openfill/, the panel in photocraft/
+            repo = top / "repo"
+            (repo / "patchy" / "openfill_patchy").mkdir(parents=True)
+            (repo / "gimp-openfill" / "openfill").mkdir(parents=True)
+            (repo / "gimp-openfill" / "openfill" / "app.py").write_text("", encoding="utf-8")
+            (repo / "photocraft" / "openfill_photocraft").mkdir(parents=True)
+            (repo / "photocraft" / "openfill_photocraft" / "bar.py").write_text("", encoding="utf-8")
+            (repo / "photocraft" / "openfill").mkdir()  # an empty folder of that name is not the core
+            self.assertEqual(
+                launch.code_folders(repo / "patchy" / "openfill_patchy"),
+                [repo / "gimp-openfill", repo / "photocraft"],
+            )
+
+    def test_the_repository_layout_is_found(self):
+        self.assertEqual(
+            launch.code_folders(ROOT / "patchy" / "openfill_patchy"), [ROOT / "gimp-openfill", ROOT / "photocraft"]
+        )
+
+    def test_the_e2e_launcher_keeps_its_profile_in_scratch_on_every_platform(self):
+        sys.path.insert(0, str(ROOT / "patchy" / "e2e"))
+        try:
+            import run_e2e
+        finally:
+            sys.path.remove(str(ROOT / "patchy" / "e2e"))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for platform in ("win32", "darwin", "linux"):
+                with mock.patch.object(sys, "platform", platform):
+                    env, profile = run_e2e.launcher_home(root)
+                    with (
+                        mock.patch.dict(os.environ, env),
+                        mock.patch.object(Path, "home", return_value=Path(env.get("HOME", "/nowhere"))),
+                    ):
+                        self.assertEqual(bridge_module.default_profile(), profile, platform)
+                    self.assertTrue(str(profile).startswith(str(root)), platform)
 
 
 class FullJobTests(Fixture):

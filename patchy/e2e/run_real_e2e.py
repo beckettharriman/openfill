@@ -17,8 +17,9 @@ the companion has to stop, and so does a ComfyUI it started. Last, the uninstall
 leave settings and models in place. Writes a report and the document's image after each job
 to --out.
 
-``--home-root`` keeps the companion's settings and the companions folder under that folder
-(``APPDATA`` on Windows, ``HOME`` on macOS, the XDG folders on Linux) instead of the user's.
+The companion's settings and the companions folder are kept under ``--home-root``
+(``APPDATA`` on Windows, ``HOME`` on macOS, the XDG folders on Linux), by default a new
+scratch folder, so the user's own are never touched.
 """
 
 from __future__ import annotations
@@ -103,10 +104,8 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
-def isolated(env: dict, home_root: Path | None) -> dict:
+def isolated(env: dict, home_root: Path) -> dict:
     """``env`` with the companion's per-user folders under ``home_root``."""
-    if home_root is None:
-        return env
     env = dict(env)
     if sys.platform == "win32":
         env["APPDATA"] = str(home_root / "AppData" / "Roaming")
@@ -155,7 +154,7 @@ def main() -> int:
     parser.add_argument("--connector", help="patchy-mcp beside it by default")
     parser.add_argument("--python", default=sys.executable, help="the Python the companion runs with")
     parser.add_argument("--comfy", help="ComfyUI folder to choose when the companion does not find one")
-    parser.add_argument("--home-root", help="keep the companion's per-user folders here")
+    parser.add_argument("--home-root", help="keep the companion's per-user folders here (default: a scratch folder)")
     parser.add_argument("--out", default=str(HERE / "out-real"))
     parser.add_argument("--keep-install", action="store_true", help="skip the uninstall at the end")
     args = parser.parse_args()
@@ -165,10 +164,10 @@ def main() -> int:
     # Patchy's AppImage is its own connector (``<file> patchy-mcp``); elsewhere patchy-mcp is beside patchy.
     default = patchy if is_appimage(patchy) else patchy.with_name("patchy-mcp" + patchy.suffix)
     connector = Path(args.connector) if args.connector else default
-    home_root = Path(args.home_root).resolve() if args.home_root else None
     python = args.python
 
     scratch = Path(tempfile.mkdtemp(prefix="openfill-patchy-real-"))
+    home_root = Path(args.home_root).resolve() if args.home_root else scratch / "home"
     ini = scratch / "settings" / "RTsoft" / "Patchy" / "Patchy.ini"
     ini.parent.mkdir(parents=True)
     ini.write_text("[updates]\ncheckOnStartup=false\n", encoding="utf-8")

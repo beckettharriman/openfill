@@ -251,6 +251,8 @@ class PatchyClient:
                 message = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(message, dict):
+                continue  # not a JSON-RPC message
             if "id" in message and ("result" in message or "error" in message):
                 with self._replies_lock:
                     slot = self._replies.get(message["id"])

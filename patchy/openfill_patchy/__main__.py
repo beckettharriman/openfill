@@ -19,11 +19,24 @@ from collections.abc import Callable
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-# The shared OpenFill core and the PhotoCraft companion's panel: next to this package in a
-# release, in gimp-openfill/ and photocraft/ in the repository.
-for candidate in (HERE.parent, HERE.parent.parent / "gimp-openfill", HERE.parent.parent / "photocraft"):
-    if candidate.is_dir() and str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
+
+
+def code_folders(here: Path) -> list[Path]:
+    """Where the shared OpenFill core and the PhotoCraft companion's panel are, first match
+    first: next to this package in a release, in gimp-openfill/ and photocraft/ in the
+    repository. Only folders that really hold them, so a stray folder of the same name is
+    never used."""
+    found: list[Path] = []
+    for marker in ("openfill/app.py", "openfill_photocraft/bar.py"):
+        for folder in (here.parent, here.parent.parent / "gimp-openfill", here.parent.parent / "photocraft"):
+            if (folder / marker).is_file():
+                if folder not in found:
+                    found.append(folder)
+                break
+    return found
+
+
+sys.path[:0] = [str(folder) for folder in code_folders(HERE) if str(folder) not in sys.path]
 
 from openfill_patchy import __version__  # noqa: E402
 from openfill_patchy.bridge import PatchyBridge, default_profile  # noqa: E402

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -95,6 +96,13 @@ def package_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def full_path(python: str) -> str:
+    """``python`` as an absolute path (a bare name is looked up on PATH), so the menu entry
+    runs the Python the installer checked, whatever PATH Patchy has."""
+    found = shutil.which(python) if os.sep not in python and "/" not in python else python
+    return str(Path(found or python).absolute())
+
+
 def windowless(python: str) -> str:
     """``pythonw.exe`` beside ``python.exe`` on Windows, when there is one."""
     path = Path(python)
@@ -148,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--python", default=sys.executable, help="the Python that runs OpenFill (needs Pillow)")
     parser.add_argument("--uninstall", action="store_true", help="take OpenFill out of Plugins > Companions")
     args = parser.parse_args(argv)
+    args.python = full_path(args.python)
     if args.uninstall:
         removed = [folder for folder in target_dirs() if uninstall(folder)]
         print("Removed." if removed else "OpenFill was not in Patchy's Companions menu.")
