@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add Remove Background to the PhotoCraft panel (Cutout): BiRefNet cuts the subject out of the whole image
+  and adds it as a new layer with a transparent background, with no selection and no prompt. It runs on
+  ComfyUI's own `RemoveBackground` nodes, so it needs ComfyUI 0.39 or newer (the one Download ComfyUI
+  fetches). New catalog model `birefnet` (424 MB, MIT), new template `bgremove`, new capability `bgremove`.
+  The GIMP plug-in does not have the command yet.
 - Detect long Windows paths before ComfyUI startup or download and explain the shorter-folder fix.
 - Add PhotoCraft installation on Apple Silicon, tested with all four tools on an M3 MacBook Air.
 - Fix Finder Python architecture, Aqua panel startup and PhotoCraft discovery on macOS.

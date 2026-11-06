@@ -27,6 +27,7 @@ OUTPUT_NODE = "save"
 class Capabilities:
     inpaint_nodes: bool = False
     native_lama: bool = False  # OpenFill's own node pack (OpenFillLamaNative) is loaded
+    bg_removal: bool = False  # ComfyUI's own BiRefNet nodes (RemoveBackground) are on the server
 
 
 class Graph:
@@ -872,6 +873,32 @@ def build_removal(
     return g.to_dict()
 
 
+def build_bgremove(
+    req: InpaintRequest,
+    image_ref: str,
+    mask_ref: str,
+    seed: int,
+    caps: Capabilities,
+    filename_prefix: str = "openfill/bgremove",
+) -> dict:
+    """Remove Background with BiRefNet (ComfyUI's own nodes, v0.39 and newer): the whole image
+    goes in, a PNG with the background made transparent comes out. The mask file and the seed
+    are not used (the model is deterministic and needs no selection)."""
+    if not caps.bg_removal:
+        raise ValueError("Remove Background needs ComfyUI 0.39 or newer (the RemoveBackground node)")
+    if not req.model.bg_removal_model:
+        raise ValueError("Remove Background needs a background removal model (BiRefNet)")
+    g = Graph()
+    g.add("load_image", "LoadImage", image=image_ref)
+    g.add("bg_model", "LoadBackgroundRemovalModel", bg_removal_name=req.model.bg_removal_model)
+    g.add("foreground", "RemoveBackground", bg_removal_model=g.out("bg_model"), image=g.out("load_image", 0))
+    # JoinImageWithAlpha reads its mask as transparency, so the foreground mask is inverted first
+    g.add("transparency", "InvertMask", mask=g.out("foreground"))
+    g.add("cutout", "JoinImageWithAlpha", image=g.out("load_image", 0), alpha=g.out("transparency"))
+    g.add(OUTPUT_NODE, "SaveImage", images=g.out("cutout"), filename_prefix=filename_prefix)
+    return g.to_dict()
+
+
 # Blend band (px) of a removal tile into the parts earlier tiles finished; it
 # lies inside the band the tile repaints (half the overlap).
 REMOVAL_BLEND = 24
@@ -992,6 +1019,7 @@ BUILDERS = {
     "inpaint_model": build_removal,
     "sdxl_eraser": build_inpaint,
     "flux_eraser": build_inpaint,
+    "bgremove": build_bgremove,
 }
 
 

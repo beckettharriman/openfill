@@ -36,14 +36,14 @@ WIDTH = W
 PREVIEW_MAX = (CW - 24, 230)
 THUMB_H = 72
 
-TABS = (("fill", "Fill"), ("remove", "Remove"), ("expand", "Expand"), ("txt2img", "Create"))
+TABS = (("fill", "Fill"), ("remove", "Remove"), ("expand", "Expand"), ("txt2img", "Create"), ("bgremove", "Cutout"))
 CREATE_SIZES = (("Square", 1024, 1024), ("Landscape", 1216, 832), ("Portrait", 832, 1216))
 STARTER = ("lama-big", "dreamshaper-8-inpainting")
 HEAD_H = 45  # the header and its divider
 FOOTER_H = 65  # the action bar: divider, 12 px, a 36 px button, 16 px
 GEAR_BAR_H = 44  # Models and settings' section control: 12 px and 32 px
 CREATE_TOTAL = 474  # the Create tools, as on the board: Models and settings is about this tall
-GO = {"fill": "Generate", "remove": "Remove", "expand": "Expand", "txt2img": "Create"}
+GO = {"fill": "Generate", "remove": "Remove", "expand": "Expand", "txt2img": "Create", "bgremove": "Remove background"}
 PLACEHOLDERS = {
     "fill": "Describe what to add, or leave it empty to fill from the surroundings.",
     "expand": "Optional: describe what the new area shows.",
@@ -51,6 +51,7 @@ PLACEHOLDERS = {
 }
 NO_SELECTION = "Select an area first: Marquee, Lasso or Object Selection."
 NO_MODELS = "No models installed"
+NO_BG_MODEL = "Download BiRefNet in Models"
 STATUS_COLOR = {"Ready": OK, "Not set up": WARN, "Checking...": DIM, "Starting the AI engine...": WARN}
 
 
@@ -423,6 +424,9 @@ class Bar:
         self.context = ui.small(self.context_row, "", wrap=CW - 20)
         self.context.pack(side="left", padx=(6, 0), fill="x")
         self.remove_line = ui.small(m, "Erases what you selected and fills in the background around it.")
+        self.bg_line = ui.small(
+            m, "Cuts the subject out of the whole image and adds it as a new layer with a transparent background."
+        )
 
         from .expand_view import ExpandView
 
@@ -998,9 +1002,16 @@ class Bar:
     def _layout_main(self) -> None:
         """Pack the tool view's parts for the current mode (12 px apart)."""
         key = self.tab.get()
+        var_row, model_row = self.var_seg.master.master, self.model_box.master.master
+        if key == "bgremove":
+            var_row.pack_forget()  # one cutout per run: nothing to choose
+        elif not var_row.winfo_manager():
+            var_row.pack(fill="x", before=model_row)
         parts: list[tk.Misc] = [self.modes, self.context_row]
         if key == "remove":
             parts.append(self.remove_line)
+        if key == "bgremove":
+            parts.append(self.bg_line)
         if key == "expand":
             parts.append(self.expand_view)
         if key in ("fill", "expand", "txt2img"):
@@ -1105,6 +1116,8 @@ class Bar:
         if self.tab.get() == "remove":
             self.prefs["removal"] = label
             return
+        if self.tab.get() == "bgremove":
+            return  # BiRefNet only cuts out backgrounds: it never becomes the active fill model
         model_id = self._model_ids.get(label)
         facts = self.refresher.get()
         removers = {i for i, _n in (facts.get("models") or {}).get("remove", [])}
@@ -1135,6 +1148,11 @@ class Bar:
                     if removal in (*PROMPT_FREE, "default"):
                         body.update(variations=1)  # same input, same result: one is enough
                 self.service.start("fill", body)
+            elif kind == "bgremove":
+                if not self.watcher.snapshot().get("document"):
+                    self._say("Open an image in PhotoCraft first.", BAD)
+                    return
+                self.service.start("bgremove", body)
             elif kind == "expand":
                 left, top, right, bottom = self.expand_view.margins()
                 if not any((left, top, right, bottom)):
@@ -1266,7 +1284,7 @@ class Bar:
         if not facts:
             shown = "Checking..."
         elif not names:
-            shown = NO_MODELS
+            shown = NO_BG_MODEL if tab == "bgremove" else NO_MODELS
         else:
             shown = current
         self.model_box.set(shown)
@@ -1291,6 +1309,8 @@ class Bar:
             return "Makes a new image" + (f", or a layer in {doc['name']}" if doc else ""), DIM, "image"
         if not doc:
             return "Open an image in PhotoCraft.", DIM, "image"
+        if tab == "bgremove":
+            return f"{doc['name']} · {doc['width']} x {doc['height']} · the whole image", DIM, "image"
         if tab in ("fill", "remove"):
             if sel:
                 return f"{doc['name']} · selection {sel[2]} x {sel[3]} px", DIM, "selection"
