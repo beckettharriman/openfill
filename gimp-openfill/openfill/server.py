@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 from .backend import BackendUnavailable, GenerationCancelled
 from .comfy_api import ComfyClient
 from .config import Paths, Settings, comfy_layout, comfy_problem, in_app_bundle, windows_path_problem
-from .supervisor import WATCHERS_DIRNAME, pid_is_python
+from .supervisor import WATCHERS_DIRNAME, pid_alive, pid_is_python
 
 ProgressCallback = Callable[[float, str], None]
 IS_WINDOWS = sys.platform == "win32"
@@ -163,6 +163,15 @@ class ServerManager:
         """URL of the running managed backend, else the configured one."""
         state = self.read_state()
         return state.get("url") or self.settings.active_url
+
+    def death_watch(self) -> Callable[[], bool] | None:
+        """For the ComfyUI the supervisor runs: a check that turns True once that process has
+        exited, so a job waiting on it can stop at once. None when no managed ComfyUI is
+        recorded (one the user started is given the usual grace period)."""
+        pid = self.read_state().get("server_pid")
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return None
+        return lambda: not pid_alive(pid)
 
     def is_healthy(self, url: str | None = None) -> bool:
         """True when the selected backend answers at ``url``."""

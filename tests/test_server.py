@@ -67,6 +67,29 @@ class EnsureRunningTests(ManagerCase):
         self.assertIn("Check backend", text)
 
 
+class DeathWatchTests(ManagerCase):
+    def write_state(self, **state):
+        self.paths.state.write_text(json.dumps(state), encoding="utf-8")
+
+    def test_none_without_a_managed_comfyui(self):
+        self.assertIsNone(self.manager.death_watch())  # no state: a ComfyUI the user started
+        self.write_state(url="http://127.0.0.1:8199")
+        self.assertIsNone(self.manager.death_watch())
+
+    def test_running_process_is_not_gone(self):
+        self.write_state(server_pid=os.getpid())
+        watch = self.manager.death_watch()
+        self.assertIsNotNone(watch)
+        self.assertFalse(watch())
+
+    def test_exited_process_is_gone(self):
+        self.write_state(server_pid=4242)
+        watch = self.manager.death_watch()
+        with mock.patch.object(server, "pid_alive", return_value=False) as alive:
+            self.assertTrue(watch())
+        alive.assert_called_once_with(4242)
+
+
 class LongPathTests(ManagerCase):
     def test_long_windows_path_stops_before_spawn(self):
         layout = dict(FAKE_LAYOUT, python=Path("C:/" + "deep/" * 40 + "python_embeded/python.exe"))
