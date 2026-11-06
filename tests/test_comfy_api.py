@@ -189,6 +189,26 @@ class ComfyClientTests(unittest.TestCase):
             self.client.wait_for("pid-1", 10, time.monotonic() + 60, poll_interval=0.05, server_gone=lambda: True)
         self.assertLess(time.monotonic() - started, 5)
 
+    def test_backend_says_stopped_within_seconds_when_comfyui_dies_mid_job(self):
+        # comfy-died-feedback through the whole backend, after the Remote GPU merge: the managed
+        # ComfyUI is gone (death watch True, nothing answers), so the job fails at once with the
+        # plain "stopped" message, not after the 90 s grace and not as a timeout.
+        from unittest import mock
+
+        from openfill.backend import BackendUnavailable
+        from openfill.backends.comfy import CONNECTION_LOST
+
+        STATE.history_drop = 10**6
+        backend = ComfyBackend(self.url, client=self.client, request_timeout=120, server_gone=lambda: True)
+        started = time.monotonic()
+        with (
+            mock.patch.object(self.client, "is_alive", return_value=False),
+            self.assertRaises(BackendUnavailable) as ctx,
+        ):
+            backend._run({"1": {"class_type": "SaveImage", "inputs": {}}}, 20, 1, 512 * 512, None)
+        self.assertEqual(str(ctx.exception), CONNECTION_LOST)
+        self.assertLess(time.monotonic() - started, 5)
+
     def test_wait_keeps_the_grace_while_the_server_process_runs(self):
         STATE.history_drop = 3
         entry = self.client.wait_for("pid-1", 10, time.monotonic() + 20, poll_interval=0.05, server_gone=lambda: False)

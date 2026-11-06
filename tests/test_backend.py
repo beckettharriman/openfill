@@ -149,6 +149,40 @@ class ConnectionLostTests(unittest.TestCase):
         self.assertNotIn("urlopen", describe_error(BackendUnavailable(text)))
         self.assertTrue(has_next_step(text))
 
+    def test_app_gives_a_local_comfyui_backend_the_death_watch(self):
+        # comfy-died-feedback after the Remote GPU and Cloud merge: the local backend still gets
+        # the managed ComfyUI's death watch (and no Remote GPU link check).
+        import logging
+        import tempfile
+        from unittest import mock
+
+        from openfill.app import App
+        from openfill.config import Settings
+
+        watch = object()
+        app = App.__new__(App)
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        app.settings = Settings(backend="comfyui", comfy_dir=folder.name)
+        app.server = mock.Mock(ensure_running=mock.Mock(return_value="http://127.0.0.1:1"))
+        app.server.death_watch.return_value = watch
+        app.log = logging.getLogger("test")
+        app._restart_for_shared_models = lambda: None
+        app._check_device = lambda url: None
+        backend_ = app.backend()
+        self.assertIs(backend_.server_gone, watch)
+        self.assertEqual(backend_.client.link_path, "")
+
+    def test_a_timed_out_request_to_a_gone_server_reads_as_stopped(self):
+        # Remote GPU's R6 checks the deadline first, then a lost connection, then "timed out":
+        # a /history request that timed out against a ComfyUI that is gone is still "stopped".
+        from openfill.backends.comfy import CONNECTION_LOST
+        from openfill.comfy_api import ComfyApiError
+
+        client = self.FakeClient(alive=False)
+        client.wait_for = lambda *a, **k: (_ for _ in ()).throw(ComfyApiError("GET /history/p1 failed: timed out"))
+        self.assertEqual(self.run_with(client), CONNECTION_LOST)
+
     def test_server_still_up_keeps_detail(self):
         self.assertIn("/history", self.run_with(self.FakeClient(alive=True)))
 

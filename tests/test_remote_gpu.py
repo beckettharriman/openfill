@@ -933,6 +933,8 @@ class AppTests(GpuServerCase):
         backend = self.app.backend()
         self.assertEqual(backend.url, self.url)
         self.assertIn("GPU computer", backend.connection_lost)
+        self.assertIsNone(backend.server_gone)  # no ComfyUI process on this computer to watch
+        self.assertTrue(backend.client.link_path)
         self.assertTrue(backend.health().ok)
         self.comfy.stop()
         self.server.comfy._checked = 0.0
