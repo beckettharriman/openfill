@@ -30,7 +30,7 @@ from ..backend import (
     UnsupportedGpu,
     WorkflowRejected,
 )
-from ..comfy_api import ComfyApiError, ComfyClient, ComfyExecutionError, LinkLost
+from ..comfy_api import DEADLINE_MESSAGE, ComfyApiError, ComfyClient, ComfyExecutionError, LinkLost
 from ..geometry import estimate_timeout, seed_or_random
 
 # While the server keeps sending progress, previews or node events, the
@@ -260,8 +260,11 @@ class ComfyBackend(Backend):
             text = str(err)
             if "cancelled" in text or "interrupted" in text:
                 raise GenerationCancelled(text) from err
-            # A server that no longer answers at all: it stopped, or (Remote GPU) the network
-            # dropped. A request that timed out because of that is not a slow generation.
+            if text == DEADLINE_MESSAGE:  # the job ran past its time: stop it on the server too
+                self.cancel()
+                raise GenerationTimeout(f"no result after {time.monotonic() - started:.0f} s") from err
+            # A request that failed because the server no longer answers at all: it stopped, or
+            # (Remote GPU) the network dropped. That is not a slow generation.
             if self._connection_lost(err):
                 raise BackendUnavailable(self.connection_lost) from err
             if "timed out" in text:
@@ -332,6 +335,8 @@ class ComfyBackend(Backend):
 
     @staticmethod
     def _translate_queue_error(err: ComfyApiError, graph: dict) -> Exception:
+        if err.status == 403 and (err.payload or {}).get("error"):  # the OpenFill GPU server refused the job
+            return WorkflowRejected(str(err.payload["error"]))
         if err.node_errors:
             text = workflow.describe_node_errors(err.node_errors, graph)
             lowered = text.lower()

@@ -1116,3 +1116,59 @@ def describe_node_errors(node_errors: dict, graph: dict) -> str:
                 text += f" - {details}"
             lines.append(text)
     return "\n".join(lines)
+
+
+# Every node type the workflows above use. The OpenFill GPU server (Remote GPU) runs only jobs
+# made of these, so its pairing code runs OpenFill's jobs, not any node a pack offers. A test
+# checks that every Graph.add in this file names one of them: add new types here.
+NODE_CLASSES = frozenset(
+    {
+        "CFGNorm",
+        "CLIPLoader",
+        "CLIPLoaderGGUF",
+        "CLIPTextEncode",
+        "CheckpointLoaderSimple",
+        "CropMask",
+        "DifferentialDiffusion",
+        "DualCLIPLoader",
+        "DualCLIPLoaderGGUF",
+        "EmptyLatentImage",
+        "FluxGuidance",
+        "GrowMask",
+        "INPAINT_ApplyFooocusInpaint",
+        "INPAINT_ColorMatch",
+        "INPAINT_ExpandMask",
+        "INPAINT_InpaintWithModel",
+        "INPAINT_LoadFooocusInpaint",
+        "INPAINT_LoadInpaintModel",
+        "INPAINT_MaskedBlur",
+        "INPAINT_MaskedFill",
+        "INPAINT_StabilizeMask",
+        "INPAINT_VAEEncodeInpaintConditioning",
+        "ImageBlur",
+        "ImageCompositeMasked",
+        "ImageCrop",
+        "ImageFromBatch",
+        "ImageScale",
+        "ImageToMask",
+        "InpaintModelConditioning",
+        "KSampler",
+        "LoadImage",
+        "LoraLoaderModelOnly",
+        "MaskComposite",
+        "MaskToImage",
+        "ModelSamplingAuraFlow",
+        NATIVE_LAMA_NODE,
+        "RepeatImageBatch",
+        "RepeatLatentBatch",
+        "SaveImage",
+        "SetLatentNoiseMask",
+        "SolidMask",
+        "TextEncodeQwenImageEditPlus",
+        "UNETLoader",
+        "UnetLoaderGGUF",
+        "VAEDecode",
+        "VAEEncode",
+        "VAELoader",
+    }
+)

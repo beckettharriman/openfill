@@ -30,14 +30,15 @@ Never open a ComfyUI port on your router or to the internet. ComfyUI has no pass
    ~/ComfyUI/venv/bin/python ~/openfill/gimp-openfill/openfill/gpu_server.py serve --comfy-dir ~/ComfyUI
    ```
 
-4. The first time, it shows a **pairing code**, a line like `ofgpu://3fK...q9@100.101.102.103:8390`. Copy the whole line. It is shown only this once. Treat it like a password.
+4. The first time, it shows a **pairing code**, a line like `ofgpu://3fK...q9@100.101.102.103:8390`. Copy the whole line. It is shown only this once. Treat it like a password, and don't run the server in a way that saves its window output to a log.
 5. Leave the window open while you edit. Press Ctrl+C in it to stop the GPU server and ComfyUI.
 
 What the GPU server does:
 
 - It starts ComfyUI so that only that computer can reach it (`127.0.0.1`).
 - It listens on your Tailscale address only. Without Tailscale it asks which address to use. It refuses "every network" (`0.0.0.0`) and internet addresses.
-- It lets in only requests with the pairing code. After 8 wrong codes in a minute, it waits a minute before it accepts any from that computer.
+- It lets in only requests with the pairing code. After 8 wrong codes in a minute, it refuses wrong codes from that computer for a minute (the right code still works).
+- It runs only OpenFill's own jobs. The pairing code can't run other nodes a node pack on that computer offers.
 - It passes on only what OpenFill needs: progress, image uploads up to 256 MB, and results. The rest of ComfyUI, including any extension's web pages, stays private.
 - It keeps only a fingerprint (SHA-256) of the code, in `%APPDATA%\OpenFill\gpu-server` on Windows or `~/.config/openfill/gpu-server` elsewhere. Its log is there too.
 
@@ -47,7 +48,7 @@ Useful options:
 - `--port <number>`: another port than 8390.
 - `--comfy-url http://127.0.0.1:8188`: use a ComfyUI that already runs on that computer instead of starting one. Then it cannot restart ComfyUI after a node install. Add `--custom-nodes <ComfyUI>\custom_nodes` so it can see and install node packs.
 - `--comfy-arg=--lowvram`: an extra ComfyUI option. Repeat it for more.
-- `gpu_server.py pair`: make a new pairing code. The old one stops working at once. Use it if the code got out, or when you set up a new editor computer.
+- `gpu_server.py pair`: make a new pairing code. The old one stops working at once, even while the GPU server runs. Use it if the code got out, or when you set up a new editor computer. Add `--port` if the server uses another port, so the line you paste is right.
 - `gpu_server.py addresses`: show the addresses it could listen on.
 
 ## 2. Set up the editor computer
@@ -56,7 +57,7 @@ Useful options:
 
 **PhotoCraft:** open the gear, then **Engine**. Tick **Use a Remote GPU**, paste the line into **Remote GPU pairing code**, and press **Save**.
 
-After you save, OpenFill keeps the code in its settings file, not in the address box. To pair again, paste the new line.
+After you save, OpenFill keeps the code in its settings file, not in the address box. To pair again, paste the new line. If you change the address by hand, paste the pairing line again: OpenFill sends the code only to the address it was paired with.
 
 ## Tailscale
 
@@ -118,4 +119,5 @@ While a job runs, OpenFill checks every few seconds that the GPU computer still 
 
 - Speed: over Tailscale at home, sending the picture and getting the result back took 0.1 to 0.4 s per job in my tests. The work itself takes as long as it does on that computer.
 - One editor at a time works best. Cancel stops the job that is running on the GPU computer.
-- The GPU server and the editor should run the same OpenFill version, so both use the same model list.
+- The GPU server and the editor should run the same OpenFill version, so both use the same model list. The GPU server refuses a job that uses a node type it doesn't know ("runs only OpenFill's own jobs"); updating OpenFill on the GPU computer fixes that.
+- Install nodes waits until no job is running on the GPU computer, because it restarts ComfyUI.

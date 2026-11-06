@@ -108,6 +108,14 @@ def parse_address(text: str) -> tuple[str, str]:
     return f"{parts.scheme}://{host}:{port}", token
 
 
+def same_address(a: str, b: str) -> bool:
+    """``a`` and ``b`` name the same GPU server (scheme, host and port compared)."""
+    try:
+        return bool(a) and bool(b) and parse_address(a)[0].lower() == parse_address(b)[0].lower()
+    except RemoteSetupError:
+        return False
+
+
 def parse_ssh_target(text: str) -> tuple[str, int | None]:
     """``("user@host", port)`` from ``user@host``, ``user@host:2222`` or a ~/.ssh/config name.
     Refuses anything ssh could read as an option."""
@@ -232,11 +240,14 @@ class SshTunnel:
             "-o",
             "ServerAliveCountMax=3",
             "-L",
-            f"127.0.0.1:{local_port}:{self.dest_host}:{self.dest_port}",
+            f"127.0.0.1:{local_port}:{self._dest()}:{self.dest_port}",
         ]
         if self.port:
             cmd += ["-p", str(self.port)]
         return [*cmd, "--", self.target]
+
+    def _dest(self) -> str:
+        return f"[{self.dest_host}]" if ":" in self.dest_host else self.dest_host  # IPv6 in brackets for -L
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -488,11 +499,24 @@ class RemoteLink:
         return bool((self.settings.remote_ssh or "").strip())
 
     def address(self) -> tuple[str, str]:
-        """``(url as seen from the GPU computer or Tailscale, pairing code)``."""
+        """``(url as seen from the GPU computer or Tailscale, pairing code)``. A stored code is
+        used only for the address it was paired with: after the address is edited it needs a new
+        code, so the code is never sent to another computer."""
         url, token = parse_address(self.settings.remote_url)
         if not url and self.via_ssh:
             url = "http://127.0.0.1:8188"  # SSH to a plain ComfyUI on its default port
-        return url, token or (self.settings.remote_token or "").strip()
+        if not token and same_address(getattr(self.settings, "remote_paired", ""), url):
+            token = (self.settings.remote_token or "").strip()
+        return url, token
+
+    @property
+    def paired_elsewhere(self) -> bool:
+        """A code is stored, but for another address than the one set now."""
+        try:
+            _url, token = self.address()
+        except RemoteSetupError:
+            return False
+        return not token and bool((self.settings.remote_token or "").strip())
 
     @property
     def host(self) -> str:
@@ -591,6 +615,11 @@ class RemoteLink:
                 "and pair with it, or connect over SSH (see docs/remote-gpu.md)."
             )
         if kind == "gpu-server" and not token:
+            if self.paired_elsewhere:
+                raise BackendUnavailable(
+                    f"The address of the GPU computer changed since you paired, so OpenFill does not send "
+                    f"the old pairing code to {self.host}. {SETUP_HINT}"
+                )
             raise BackendUnavailable(f"The GPU server on {self.host} needs its pairing code. {SETUP_HINT}")
         return url
 
@@ -605,7 +634,13 @@ class RemoteLink:
             # dropped network makes the connection hang instead.
             if "connect failed" in stderr or "open failed" in stderr or (kind == "reset" and self.tunnel.alive()):
                 kind = "nothing-behind-tunnel"
+        if kind == "bad-token" and self.paired_elsewhere:
+            kind = "paired-elsewhere"
         messages = {
+            "paired-elsewhere": (
+                f"The address of the GPU computer changed since you paired, so OpenFill does not send "
+                f"the old pairing code to {host}. {SETUP_HINT}"
+            ),
             "bad-token": (
                 f"The GPU computer {host} did not accept the pairing code. On that computer run the OpenFill "
                 "GPU server's pair command to get a new code, then paste it in Settings > Connection."

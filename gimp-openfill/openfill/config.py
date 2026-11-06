@@ -56,6 +56,7 @@ class Settings:
     # address as seen from the GPU computer), its pairing code, and "user@host" to go through ssh.
     remote_url: str = ""
     remote_token: str = field(default="", repr=False)  # secret: the pairing code
+    remote_paired: str = ""  # the address remote_token belongs to; it is sent nowhere else
     remote_ssh: str = ""
     autostart: bool = True  # start ComfyUI when needed
     idle_timeout_minutes: int = 20  # 0 = keep running until GIMP exits
@@ -232,7 +233,7 @@ class Settings:
         except RemoteSetupError:
             return
         if token:
-            self.remote_url, self.remote_token = url, token
+            self.remote_url, self.remote_token, self.remote_paired = url, token, url
 
     @property
     def active_url(self) -> str:

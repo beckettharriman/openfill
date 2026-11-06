@@ -15,6 +15,7 @@ import threading
 import time
 import unittest
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,7 +24,7 @@ from urllib.error import HTTPError, URLError
 
 from openfill import catalog as cat
 from openfill import comfy_api, downloads, gpu_server, remote
-from openfill.backend import BackendUnavailable
+from openfill.backend import BackendUnavailable, GenerationTimeout
 from openfill.comfy_api import ComfyApiError, ComfyClient
 from openfill.config import Settings
 from openfill.websocket import OP_TEXT, WebSocket
@@ -83,6 +84,8 @@ class FakeComfyHandler(BaseHTTPRequestHandler):
             pid = path.split("/", 2)[2]
             out = {"9": {"images": [{"filename": "r.png", "subfolder": "", "type": "output"}]}}
             self._json({pid: {"status": {"status_str": "success"}, "outputs": out}} if srv.done else {})
+        elif path == "/queue":
+            self._json({"queue_running": [["1", "p1"]] if srv.running else [], "queue_pending": []})
         elif path == "/view":
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
@@ -124,7 +127,7 @@ class FakeComfyHandler(BaseHTTPRequestHandler):
             self.server.done = True
             time.sleep(0.3)
         else:  # a GPU busy for a while: an open websocket and no news
-            time.sleep(5)
+            time.sleep(self.server.ws_hold)
         self.close_connection = True
 
 
@@ -136,6 +139,8 @@ class FakeComfy(ThreadingHTTPServer):
         self.seen: list = []
         self.uploads: list[int] = []
         self.done = False
+        self.running = False  # /queue says a job runs
+        self.ws_hold = 5.0  # seconds a silent websocket stays open
         self.nodes_dir = nodes_dir
         self.models = {
             "checkpoints": {"sd-v1-5-inpainting.ckpt"},
@@ -218,7 +223,7 @@ class ProxyTests(GpuServerCase):
         status, body = self.get("/system_stats")
         self.assertEqual(status, 200)
         self.assertIn("devices", json.loads(body))
-        self.assertTrue(any("wrong or missing pairing code" in line for line in self.logged))
+        self.assertTrue(any("wrong pairing code" in line for line in self.logged))
         self.assertFalse(any(TOKEN in line or "W" * 32 in line for line in self.logged))
 
     def test_the_code_also_works_as_x_openfill_token(self):
@@ -266,7 +271,9 @@ class ProxyTests(GpuServerCase):
         )
         self.assertIn(b" 413 ", answer)
         self.assertEqual(self.comfy.uploads, [])
-        status, _ = self.get("/prompt", method="POST", body=b"{}", headers={"Content-Type": "application/json"})
+        status, _ = self.get(
+            "/prompt", method="POST", body=b'{"prompt": {}}', headers={"Content-Type": "application/json"}
+        )
         self.assertEqual(status, 200)
         answer = self.raw(
             f"POST /upload/image HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
@@ -275,17 +282,19 @@ class ProxyTests(GpuServerCase):
 
     def test_repeated_wrong_codes_lock_the_address_out_for_a_minute(self):
         for _ in range(gpu_server.MAX_FAILURES):
-            self.get("/system_stats", token="W" * 32)
-        status, body = self.get("/system_stats")
+            self.assertEqual(self.get("/system_stats", token="W" * 32)[0], 401)
+        status, body = self.get("/system_stats", token="W" * 32)
         self.assertEqual(status, 429)
         self.assertIn(b"wait a minute", body)
+        self.assertEqual(self.get("/system_stats")[0], 200)  # the right code still gets in
 
     def test_the_lockout_ends_after_the_window(self):
         now = [0.0]
         gate = gpu_server.Gate(gpu_server.token_digest(TOKEN), clock=lambda: now[0])
         bad = {"Authorization": "Bearer " + "W" * 32}
         for _ in range(gpu_server.MAX_FAILURES):
-            self.assertFalse(gate.check("1.2.3.4", bad))
+            self.assertEqual(gate.verdict("1.2.3.4", bad), "wrong")
+        self.assertEqual(gate.verdict("1.2.3.4", bad), "locked")
         self.assertTrue(gate.locked("1.2.3.4"))
         self.assertFalse(gate.locked("5.6.7.8"))
         now[0] = gpu_server.FAILURE_WINDOW + 1
@@ -538,8 +547,15 @@ class AddressTests(unittest.TestCase):
         self.assertEqual(comfy_api.auth_headers("http://100.1.2.3:8390"), {})
 
 
-def link(url: str = "", token: str = "", ssh: str = "", **kw) -> remote.RemoteLink:
-    settings = SimpleNamespace(remote_url=url, remote_token=token, remote_ssh=ssh, startup_timeout=30)
+def link(url: str = "", token: str = "", ssh: str = "", paired: str | None = None, **kw) -> remote.RemoteLink:
+    """A link with ``token`` paired with ``url`` (or with ``paired``)."""
+    settings = SimpleNamespace(
+        remote_url=url,
+        remote_token=token,
+        remote_paired=url if paired is None else paired,
+        remote_ssh=ssh,
+        startup_timeout=30,
+    )
     return remote.RemoteLink(settings, **kw)
 
 
@@ -837,6 +853,7 @@ class AppTests(GpuServerCase):
                     "backend": "remote",
                     "remote_url": self.url,
                     "remote_token": TOKEN,
+                    "remote_paired": self.url,
                     "comfy_dir": str(local_comfy),
                     "autostart": True,
                 }
@@ -967,6 +984,339 @@ class LinkWatchTests(GpuServerCase):
     def test_without_a_link_path_nothing_is_watched(self):
         c = ComfyClient(self.url)
         self.assertEqual(c.link_path, "")
+
+
+# ----------------------------------------------------- review fixes (R0..R9) ----
+# Proofs from the security review (review-remote), kept as permanent tests.
+
+
+class PreAuthResourceTests(GpuServerCase):
+    def test_unauthenticated_slow_connections_are_bounded(self):
+        """R1: MAX_CONNECTIONS (64) is taken only after the headers arrive, so a client that never
+        finishes its headers holds a thread each (for Handler.timeout = 120 s per byte) without
+        any pairing code."""
+        before = threading.active_count()
+        socks = []
+        try:
+            for _ in range(150):
+                s = socket.create_connection(self.server.server_address[:2], timeout=5)
+                s.sendall(b"GET /system_stats HTTP/1.1\r\nHost: x\r\n")  # never ends the headers
+                socks.append(s)
+            time.sleep(0.5)
+            grown = threading.active_count() - before
+            self.assertLessEqual(grown, gpu_server.MAX_CONNECTIONS + 4, f"{grown} handler threads, no code sent")
+        finally:
+            for s in socks:
+                s.close()
+
+    def test_the_failure_table_forgets_old_addresses(self):
+        """R5: Gate._failures keeps an entry for every address that ever sent a wrong code."""
+        now = [0.0]
+        gate = gpu_server.Gate(gpu_server.token_digest(TOKEN), clock=lambda: now[0])
+        for i in range(5000):
+            gate.check(f"fd00::{i:x}", {})
+        now[0] = 3600.0
+        gate.check("fd00::ffff", {})
+        gate.locked("fd00::ffff")
+        self.assertLess(len(gate._failures), 100)
+
+    def test_concurrent_wrong_codes_respect_the_limit(self):
+        """Checked, not a defect: parallel wrong codes still stop at MAX_FAILURES."""
+        with ThreadPoolExecutor(40) as pool:
+            codes = list(pool.map(lambda _: self.get("/system_stats", token="wrong" * 8)[0], range(40)))
+        self.assertLessEqual(codes.count(401), gpu_server.MAX_FAILURES, codes)
+
+
+class LockoutTests(GpuServerCase):
+    def test_others_on_the_same_address_cannot_lock_out_the_right_code(self):
+        """R2: over SSH every client is 127.0.0.1 on the GPU computer. Requests with no code at all
+        (any local program, a web page's fetch() in a browser there) lock out the paired editor."""
+        for _ in range(gpu_server.MAX_FAILURES):
+            self.get("/system_stats", token="")
+        code, _ = self.get("/system_stats")  # the right code
+        self.assertEqual(code, 200)
+
+    def test_a_running_job_is_not_killed_by_a_lockout(self):
+        """R2 (consequence): a 429 on the job's /history poll ends the job at once."""
+        comfy_api.set_token(self.url, TOKEN)
+        client = ComfyClient(self.url, timeout=5, link_path="/openfill/ping")
+        self.comfy.done = True
+        for _ in range(gpu_server.MAX_FAILURES):
+            self.get("/system_stats", token="")
+        try:
+            entry = client._history_patiently("p1", {})
+        except ComfyApiError as err:
+            self.fail(f"the job's history poll failed with HTTP {err.status}: {err}")
+        self.assertIsNotNone(entry)
+
+
+class _SlowStatsHandler(FakeComfyHandler):
+    def do_GET(self):  # noqa: N802
+        if self.path.startswith("/system_stats"):
+            time.sleep(2.5)  # a busy ComfyUI (model load, VAE decode) answers its stats slowly
+        super().do_GET()
+
+
+class UnmanagedComfyTests(GpuServerCase):
+    def setUp(self):
+        super().setUp()
+        self.slow = FakeComfy(self.nodes)
+        self.slow.RequestHandlerClass = _SlowStatsHandler
+        self.slow.done = True
+        self.server.comfy = gpu_server.Comfy(self.slow.url, log=self.logged.append)  # --comfy-url
+
+    def tearDown(self):
+        self.slow.stop()
+        super().tearDown()
+
+    def test_a_busy_comfyui_is_not_reported_down(self):  # R4
+        """R4: with --comfy-url, Comfy.status() asks /system_stats with a 2 s limit; a slow answer
+        marks ComfyUI "down" and every proxied request (the job's /history poll) gets 502."""
+        code, body = self.get("/history/p1")
+        self.assertEqual(code, 200, body)
+
+
+class RepairTests(unittest.TestCase):
+    def test_pair_while_serving_revokes_the_old_code(self):
+        """R0: docs say 'pair' makes the old code stop working at once ("use it if the code got
+        out"). The running server read the hash once at start, so the leaked code keeps working
+        and the new one is refused until the GPU server is restarted."""
+        import tempfile
+        import urllib.request
+        from pathlib import Path
+        from urllib.error import HTTPError
+
+        fake = FakeComfy()
+        tmp = tempfile.TemporaryDirectory()
+        home = Path(tmp.name)
+        gpu_server.write_state(home, {"token_sha256": gpu_server.token_digest(TOKEN)})
+        holder = {}
+        ready = threading.Event()
+
+        def on_ready(srv):
+            holder["srv"] = srv
+            ready.set()
+
+        comfy = gpu_server.Comfy(fake.url, log=lambda _t: None)
+        t = threading.Thread(
+            target=gpu_server.run,
+            args=("127.0.0.1", "loopback", 0, home, comfy, None, None),
+            kwargs={"log": lambda _t: None, "ready": on_ready},
+            daemon=True,
+        )
+        t.start()
+        ready.wait(5)
+        srv = holder["srv"]
+        url = f"http://127.0.0.1:{srv.server_address[1]}"
+
+        def code(token):
+            req = urllib.request.Request(url + "/openfill/ping", headers={"Authorization": f"Bearer {token}"})
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return r.status
+            except HTTPError as err:
+                err.close()
+                return err.code
+
+        try:
+            new = gpu_server.new_pairing(home)  # what "gpu_server.py pair" does
+            self.assertEqual((code(TOKEN), code(new)), (401, 200))
+        finally:
+            srv.shutdown()
+            t.join(5)
+            fake.stop()
+            tmp.cleanup()
+
+
+class TokenScopeTests(unittest.TestCase):
+    def test_the_code_goes_only_to_the_address_it_was_paired_with(self):
+        """R3: docs/security.md says the code is "sent only to the address it was paired with",
+        but remote_token is sent to whatever address remote_url names later."""
+        other = FakeComfy()  # a plain ComfyUI (or anything) at another address
+        try:
+            lk = link(
+                other.url, TOKEN, paired="http://100.1.2.3:8390"
+            )  # paired with another host, address edited since
+            try:
+                lk.ensure()
+            except Exception:  # noqa: BLE001 - only what was sent matters here
+                pass
+            sent = [h.get("Authorization", "") for _m, _p, h in other.seen]
+            self.assertFalse(any(TOKEN in a for a in sent), sent)
+        finally:
+            comfy_api.set_token(other.url, "")
+            other.stop()
+
+
+class SshTests(unittest.TestCase):
+    def test_an_ipv6_destination_is_bracketed(self):
+        """R9: ssh rejects -L 127.0.0.1:P:::1:8188 ("Bad local forwarding specification")."""
+        cmd = remote.SshTunnel("me@gpu", "[::1]", 8188, ssh="ssh").command(5555)  # R8
+        self.assertIn("127.0.0.1:5555:[::1]:8188", cmd)
+
+
+class TimeoutOrderTests(unittest.TestCase):
+    def test_a_deadline_with_a_slow_server_still_interrupts_the_job(self):
+        """R6: backends/comfy.py now asks is_alive(2 s) before the "timed out" branch. A server
+        that is only slow to answer is told "stopped", and the job is no longer interrupted."""
+        from openfill.backends.comfy import ComfyBackend
+
+        client = mock.Mock()
+        client.queue_prompt.return_value = "p1"
+        client.wait_for.side_effect = ComfyApiError("timed out waiting for the backend")
+        client.is_alive.return_value = False  # busy: /system_stats took longer than 2 s
+        client.last_model_files.return_value = set()
+        backend = ComfyBackend("http://127.0.0.1:8188", client=client)
+        with self.assertRaises(GenerationTimeout):
+            backend._run({"1": {"class_type": "KSampler", "inputs": {"steps": 2}}}, 2, 1, 4096, None)
+
+
+class AllowlistProbeTests(GpuServerCase):
+    """Checked, not a defect: odd request targets and methods do not reach other ComfyUI routes."""
+
+    def raw(self, line: str, extra: str = "") -> int:
+        s = socket.create_connection(self.server.server_address[:2], timeout=5)
+        s.sendall(f"{line}\r\nAuthorization: Bearer {TOKEN}\r\n{extra}\r\n".encode("latin-1"))
+        data = b""
+        while chunk := s.recv(4096):
+            data += chunk
+        s.close()
+        return int(data.split(b" ", 2)[1]) if data.startswith(b"HTTP/") else 0
+
+    def test_odd_targets(self):
+        before = len(self.comfy.seen)
+        for target in (
+            "//userdata",
+            "///api/userdata",
+            "/system_stats/",
+            "/System_stats",
+            "/api/userdata",
+            "/userdata/x",
+            "http://127.0.0.1:8188/userdata",
+            "/view/../userdata",
+            "/object_info/%2e%2e/userdata",
+            "/upload/mask",
+            "/history/../userdata",
+            "/internal/logs",
+            "/ws",
+            "/prompt%23",
+            "*",
+        ):
+            for version in ("HTTP/1.1", "HTTP/1.0"):
+                code = self.raw(f"GET {target} {version}", "Host: evil\r\n")
+                self.assertIn(code, (400, 404), f"{target} {version}")
+        for method in ("OPTIONS", "HEAD", "TRACE", "PATCH", "CONNECT"):
+            self.assertIn(self.raw(f"{method} /system_stats HTTP/1.1"), (400, 404, 405, 501), method)
+        self.assertEqual(self.raw("POST /upload/mask HTTP/1.1", "Upgrade: websocket\r\nConnection: Upgrade\r\n"), 404)
+        self.assertEqual(len(self.comfy.seen), before)
+
+
+class PromptSurfaceTests(GpuServerCase):
+    def test_prompt_runs_only_node_types_openfill_uses(self):
+        """R7: /prompt is passed as is, so a pairing code runs ANY installed node class, for example
+        a node pack's "run Python" or "save to any path" node. The docs suggest a narrow surface."""
+        import json as _json
+
+        graph = {"1": {"class_type": "SomePack_ExecPythonCode", "inputs": {"code": "import os"}}}
+        code, _ = self.get(
+            "/prompt",
+            method="POST",
+            body=_json.dumps({"prompt": graph}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertNotEqual(code, 200, "an arbitrary node class reached ComfyUI's /prompt")
+
+
+class ReviewFollowUpTests(GpuServerCase):
+    """More checks for the review fixes."""
+
+    def post_prompt(self, graph):
+        return self.get(
+            "/prompt",
+            method="POST",
+            body=json.dumps({"prompt": graph}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+
+    def test_only_openfill_node_types_reach_comfyui(self):  # R7
+        before = len(self.comfy.seen)
+        code, body = self.post_prompt(
+            {
+                "1": {"class_type": "LoadImage", "inputs": {}},
+                "2": {"class_type": "SomePack_ExecPythonCode", "inputs": {"code": "import os"}},
+            }
+        )
+        self.assertEqual(code, 403)
+        self.assertIn(b"only OpenFill's own jobs", body)
+        self.assertIn(b"SomePack_ExecPythonCode", body)
+        self.assertEqual(len(self.comfy.seen), before)
+        self.assertEqual(self.post_prompt({"1": {"class_type": "LoadImage", "inputs": {}}})[0], 200)
+        self.assertEqual(self.get("/prompt", method="POST", body=b"not json")[0], 400)
+
+    def test_every_node_type_the_workflows_use_is_allowed(self):  # R7
+        import re
+
+        from openfill import workflow
+
+        source = (Path(workflow.__file__)).read_text(encoding="utf-8")
+        calls = re.findall(r"\.add\(\s*[^,()]+,\s*([^,)\s]+)", source)
+        self.assertEqual(len(calls), source.count(".add("))
+        named = {c.strip('"') if c.startswith('"') else getattr(workflow, c) for c in calls}
+        self.assertEqual(named - workflow.NODE_CLASSES, set())
+        self.assertIn("OpenFillLamaNative", workflow.NODE_CLASSES)
+
+    def test_a_refused_job_reads_plainly_in_the_editor(self):  # R7
+        from openfill.backend import WorkflowRejected
+        from openfill.backends.comfy import ComfyBackend
+
+        err = ComfyApiError(
+            "POST /prompt -> HTTP 403", 403, payload={"error": "This GPU server runs only OpenFill's own jobs"}
+        )
+        self.assertIsInstance(ComfyBackend._translate_queue_error(err, {}), WorkflowRejected)
+        self.assertEqual(
+            str(ComfyBackend._translate_queue_error(err, {})), "This GPU server runs only OpenFill's own jobs"
+        )
+
+    def test_an_idle_websocket_is_closed(self):  # R9
+        self.server.ws_idle = 0.6
+        self.comfy.ws_messages = []
+        self.comfy.ws_hold = 30
+        ws = WebSocket(remote_ws(self.url), timeout=5, headers={"Authorization": f"Bearer {TOKEN}"})
+        ws.connect()
+        ws.settimeout(8)
+        t0 = time.monotonic()
+        with self.assertRaises((ConnectionError, OSError)):
+            ws.recv()
+        self.assertLess(time.monotonic() - t0, 4)
+        self.assertTrue(any("idle progress connection" in line for line in self.logged))
+        ws.close()
+
+    def test_no_node_install_while_a_job_runs(self):
+        self.comfy.running = True
+        status, body = self.get("/openfill/install-nodes", method="POST", body=b'{"model_id": "lama-big"}')
+        self.assertEqual(status, 409)
+        self.assertIn(b"a job is running", body)
+
+    def test_a_changed_address_needs_a_new_code(self):  # R3
+        lk = link(self.url, TOKEN, paired="http://100.1.2.3:8390")
+        with self.assertRaises(BackendUnavailable) as caught:
+            lk.ensure()
+        self.assertIn("changed since you paired", str(caught.exception))
+        s = Settings(remote_url=f"ofgpu://{TOKEN}@gpu-pc:8390")
+        s.take_pairing_code()
+        self.assertEqual(s.remote_paired, "http://gpu-pc:8390")
+
+
+class PairCommandTests(unittest.TestCase):
+    def test_pair_prints_the_port_given(self):
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                gpu_server.main(["--home", tmp, "pair", "--bind", "100.64.0.9", "--port", "9100"])
+        self.assertRegex(out.getvalue(), r"ofgpu://[A-Za-z0-9_-]{32}@100\.64\.0\.9:9100")
 
 
 class _Relay:

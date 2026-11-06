@@ -152,21 +152,39 @@ The GPU server:
   address is not encrypted;
 - requires the pairing code (`Authorization: Bearer`) on every request, the progress
   websocket included. The code is 24 random bytes, shown once; only its SHA-256 is stored
-  (owner-only file) and compared with `hmac.compare_digest`. A wrong code costs 0.25 s, and 8
-  wrong codes from one address within a minute lock that address out for the rest of the
-  minute (HTTP 429). The code is never logged and never passed on to ComfyUI;
+  (owner-only file) and compared with `hmac.compare_digest`. `pair` makes a new code, and a
+  running server stops accepting the old one with the next request (it reads the file again
+  when it changes). A wrong code costs 0.25 s, and after 8 wrong codes from one address within a
+  minute that address gets HTTP 429 for wrong codes for the rest of the minute. Requests with no
+  code are refused but not counted, and the right code always gets in, so another program on a
+  shared address (everything is 127.0.0.1 over SSH) cannot lock out the editor or end its job.
+  The table of wrong codes forgets addresses after a minute and holds at most 1024. The code is
+  never logged and never passed on to ComfyUI;
 - passes only the endpoints OpenFill uses (`/system_stats`, `/object_info`, `/models`,
   `/upload/image`, `/prompt`, `/queue`, `/history`, `/view`, `/interrupt`, `/free`, `/ws`) and
   answers 404 to everything else, so ComfyUI's settings and user files, and any node pack's
   own web routes (for example a manager that installs from URLs) stay private. `Origin`,
   `Referer` and cookies are dropped. Uploads need a `Content-Length` and are capped at 256 MB,
-  other requests at 32 MB, at most 64 connections at a time;
+  other requests at 32 MB;
+- runs only OpenFill's own jobs: a `/prompt` whose graph uses a node type OpenFill's workflows
+  do not use (`workflow.NODE_CLASSES`) gets HTTP 403. The pairing code therefore cannot run, for
+  example, a node pack's "run Python" or "save to any path" node;
+- takes at most 64 connections at a time, counted when they connect, before anything is read;
+  more are closed at once. A client has 15 s to send its request. A progress websocket uses TCP
+  keepalive and is closed after 5 minutes without traffic either way;
 - installs node packs only as its own catalog names them for a model id (pinned commit, the
   same code as the Models tab), never from a repository the request names.
 
 On the editor computer the pairing code is kept in `config.json` next to the Hugging Face token
-(owner-only on Linux and macOS, left out of `repr()` and the log), and sent only to the address it
-was paired with.
+(owner-only on Linux and macOS, left out of `repr()` and the log), with the address it was paired
+with (`remote_paired`). It is sent only to that address: after the address is edited, OpenFill
+asks for a new code instead of sending the old one somewhere else.
+
+The GPU server prints the pairing code to its window once. A service or script that logs that
+output keeps the code in its log.
+
+Over SSH to a plain ComfyUI (no GPU server), the tunnel's local port has no code, like a local
+ComfyUI: any program on the editor computer can use it while the tunnel is open.
 
 ## Telemetry
 

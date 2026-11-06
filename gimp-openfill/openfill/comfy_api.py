@@ -25,6 +25,8 @@ ProgressCallback = Callable[[float, str], None]
 LOOPBACK_PROBE_TIMEOUT = 0.5
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
+DEADLINE_MESSAGE = "timed out waiting for the backend"  # wait_for past its deadline
+
 # Pairing codes of OpenFill GPU servers (Remote GPU), by base URL. Every ComfyClient for that URL
 # sends it, so callers that build their own client (health checks, the hardware probe) need not
 # know about it. Set by remote.RemoteLink; never logged.
@@ -366,7 +368,7 @@ class ComfyClient:
             while True:
                 now = time.monotonic()
                 if now > deadline:
-                    raise ComfyApiError("timed out waiting for the backend")
+                    raise ComfyApiError(DEADLINE_MESSAGE)
                 if link is not None and link.silent_for() > self.link_timeout:
                     raise LinkLost(f"no answer from {self.base_url} for {link.silent_for():.0f} s")
                 if cancel and cancel():

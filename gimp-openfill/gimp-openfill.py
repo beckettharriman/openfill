@@ -979,6 +979,7 @@ def run_settings(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig, _data:
         setattr(settings, key, config.get_property(key.replace("_", "-")))
     if _PAIRED.get("token"):
         settings.remote_token = _PAIRED.pop("token")
+        settings.remote_paired = settings.remote_url  # the code is sent to this address only
     settings.take_pairing_code()  # a code passed to the procedure by a script
     try:
         settings.save(paths.config)

@@ -41,6 +41,7 @@ import json
 import os
 import re
 import secrets
+import select
 import shutil
 import socket
 import subprocess
@@ -67,7 +68,10 @@ MAX_BODY = 32 * 1024 * 1024  # workflow graphs and the other JSON requests
 MAX_OWN_BODY = 64 * 1024  # the GPU server's own requests
 FAILURE_WINDOW = 60.0
 MAX_FAILURES = 8  # wrong codes from one address within FAILURE_WINDOW before it is locked out
-MAX_CONNECTIONS = 64
+MAX_CONNECTIONS = 64  # connections at a time, counted before their request is read
+HEAD_TIMEOUT = 15  # seconds a client has to send its request (and between parts of an upload)
+MAX_TRACKED = 1024  # addresses remembered for wrong codes
+WS_IDLE = 300  # a progress websocket with no traffic either way for this long is closed
 TAILSCALE_NET = ipaddress.ip_network("100.64.0.0/10")
 TAILSCALE_DNS = "100.100.100.100"
 
@@ -163,33 +167,91 @@ def pairing_line(token: str, host: str, port: int) -> str:
 
 
 class Gate:
-    """Checks the pairing code in constant time and slows down guessing."""
+    """Checks the pairing code in constant time and slows down guessing.
 
-    def __init__(self, digest: str, clock: Callable[[], float] = time.monotonic) -> None:
-        self.digest = bytes.fromhex(digest)
+    - The right code always gets in, even from an address that is locked out: over SSH or behind
+      NAT every client has the same address, and a program sending wrong codes must not lock out
+      the paired editor (or end its running job).
+    - Only requests with a wrong code count; requests without any code are refused but not counted.
+    - With ``state_path``, a new pairing (``pair``, while the server runs) takes effect on the next
+      request: the file is read again when it changes, and the old code stops working at once.
+    - The table of wrong codes forgets addresses after FAILURE_WINDOW and never holds more than
+      MAX_TRACKED addresses.
+    """
+
+    def __init__(
+        self,
+        digest: str = "",
+        clock: Callable[[], float] = time.monotonic,
+        state_path: Path | None = None,
+    ) -> None:
+        self.digest = bytes.fromhex(digest) if digest else b""
         self.clock = clock
+        self.state_path = state_path
+        self._stamp: tuple | None = None
         self._failures: dict[str, deque] = {}
         self._lock = threading.Lock()
+        self._reload()
+
+    def _reload(self) -> None:
+        if self.state_path is None:
+            return
+        try:
+            st = os.stat(self.state_path)
+        except OSError:
+            return
+        stamp = (st.st_mtime_ns, st.st_size)
+        if stamp == self._stamp:
+            return
+        try:
+            digest = json.loads(self.state_path.read_text(encoding="utf-8")).get("token_sha256") or ""
+            self.digest = bytes.fromhex(digest)
+            self._stamp = stamp
+        except (OSError, ValueError, AttributeError):
+            pass  # half written: keep the code we have and read it again next time
+
+    @staticmethod
+    def token(headers: Any) -> str:
+        auth = str(headers.get("Authorization") or "")
+        return auth[7:].strip() if auth[:7].lower() == "bearer " else str(headers.get("X-OpenFill-Token") or "")
+
+    def verdict(self, client: str, headers: Any) -> str:
+        """ "ok", "missing" (no code), "wrong", or "locked" (a wrong code from an address that sent
+        too many)."""
+        self._reload()
+        token = self.token(headers)
+        if not token:
+            return "missing"
+        given = hashlib.sha256(token.encode("utf-8", "replace")).digest()
+        if self.digest and hmac.compare_digest(given, self.digest):
+            return "ok"
+        with self._lock:
+            now = self.clock()
+            self._prune(now)
+            times = self._failures.setdefault(client, deque())
+            if len(times) >= MAX_FAILURES:
+                return "locked"
+            times.append(now)
+            return "wrong"
+
+    def check(self, client: str, headers: Any) -> bool:
+        return self.verdict(client, headers) == "ok"
 
     def locked(self, client: str) -> bool:
         with self._lock:
-            times = self._failures.get(client)
-            if not times:
-                return False
-            now = self.clock()
+            self._prune(self.clock())
+            return len(self._failures.get(client) or ()) >= MAX_FAILURES
+
+    def _prune(self, now: float) -> None:
+        for client in list(self._failures):
+            times = self._failures[client]
             while times and now - times[0] > FAILURE_WINDOW:
                 times.popleft()
-            return len(times) >= MAX_FAILURES
-
-    def check(self, client: str, headers: Any) -> bool:
-        auth = str(headers.get("Authorization") or "")
-        token = auth[7:].strip() if auth[:7].lower() == "bearer " else str(headers.get("X-OpenFill-Token") or "")
-        given = hashlib.sha256(token.encode("utf-8", "replace")).digest()
-        ok = bool(token) and hmac.compare_digest(given, self.digest)
-        if not ok:
-            with self._lock:
-                self._failures.setdefault(client, deque()).append(self.clock())
-        return ok
+            if not times:
+                del self._failures[client]
+        while len(self._failures) > MAX_TRACKED:  # many addresses at once: forget the oldest
+            oldest = min(self._failures, key=lambda c: self._failures[c][-1])
+            del self._failures[oldest]
 
 
 # --------------------------------------------------------------- addresses ----
@@ -333,11 +395,37 @@ class Comfy:
         self.proc: subprocess.Popen | None = None
         self.state = "down"  # "down", "starting" or "up"
         self._checked = 0.0
+        self._checking = False
         self._lock = threading.Lock()
 
     @property
     def managed(self) -> bool:
         return self.cmd is not None
+
+    def reachable(self, timeout: float = 10.0) -> bool | None:
+        """True when ComfyUI answers /system_stats, None when it took the connection but was too
+        busy to answer in time (still running), False when nothing listens."""
+        try:
+            conn = http.client.HTTPConnection(self.host, self.port, timeout=timeout)
+            conn.request("GET", "/system_stats")
+            ok = conn.getresponse().status == 200
+            conn.close()
+            return ok
+        except TimeoutError:
+            return None
+        except (OSError, http.client.HTTPException):
+            return False
+
+    def busy(self) -> bool:
+        """ComfyUI is running or has queued a job (installing node packs restarts it)."""
+        try:
+            conn = http.client.HTTPConnection(self.host, self.port, timeout=5)
+            conn.request("GET", "/queue")
+            data = json.loads(conn.getresponse().read().decode("utf-8"))
+            conn.close()
+            return bool(data.get("queue_running") or data.get("queue_pending"))
+        except (OSError, ValueError, AttributeError, http.client.HTTPException):
+            return False  # unknown: do not block the install
 
     def answers(self, timeout: float = 2.0) -> bool:
         try:
@@ -359,10 +447,20 @@ class Comfy:
                 return "down"
             if self.managed and self.state == "up":
                 return "up"  # its process runs: busy with a long step is not down
-            if time.monotonic() - self._checked > 2.0:
+            if self._checking or time.monotonic() - self._checked <= 2.0:
+                return self.state
+            self._checking = True
+        seen: bool | None = False
+        try:  # outside the lock: other requests keep the last answer meanwhile
+            seen = self.reachable()
+        finally:
+            with self._lock:
+                self._checking = False
                 self._checked = time.monotonic()
-                self.state = "up" if self.answers() else "down"
-            return self.state
+                # Only a refused connection (or an error answer) means down: a ComfyUI busy with a
+                # model load that takes longer than the limit to answer is still up.
+                self.state = "up" if seen is None or seen else "down"
+        return self.state
 
     def start(self, wait: bool = False) -> None:
         """Start ComfyUI (managed only) and, in a thread unless ``wait``, wait until it answers."""
@@ -525,6 +623,8 @@ class Tasks:
             return {"task_id": "", "message": "everything this model needs is installed"}
         if any(not n.bundled for n in missing) and not self.python:
             raise ValueError("this GPU server does not know ComfyUI's Python (start it with --comfy-dir)")
+        if self.comfy.busy():
+            raise RuntimeError("a job is running on the GPU computer; install the node packs when it is done")
         with self._lock:
             if self.status["current"]:
                 raise RuntimeError("another install is running on the GPU computer; try again when it is done")
@@ -589,7 +689,23 @@ class GpuServer(ThreadingHTTPServer):
         self.max_upload = max_upload
         self.log = log
         self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        self.ws_idle = WS_IDLE
         super().__init__(address, Handler)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        """One thread per connection, at most MAX_CONNECTIONS at a time, counted before anything
+        is read: connections over the limit are closed at once."""
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+
+        def work() -> None:
+            try:
+                self.process_request_thread(request, client_address)
+            finally:
+                self.slots.release()
+
+        threading.Thread(target=work, name="gpu-server-request", daemon=True).start()
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         """One log line, not a traceback, for a client that went away (network drop, closed editor)."""
@@ -603,7 +719,7 @@ class GpuServer(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     server: GpuServer
     server_version = "OpenFillGPU/" + __version__
-    timeout = 120  # seconds a client may take to send its request
+    timeout = HEAD_TIMEOUT  # seconds a client may take to send its request
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - BaseHTTPRequestHandler's name
         pass  # no access log: paths are enough noise; problems are logged on their own
@@ -623,25 +739,21 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------------
 
     def _handle(self) -> None:
-        if not self.server.slots.acquire(blocking=False):
-            self._send_json(503, {"error": "too many connections"})
-            return
         try:
             self._dispatch()
         except (ConnectionError, TimeoutError):
             self.close_connection = True
-        finally:
-            self.server.slots.release()
 
     def _dispatch(self) -> None:
         client = self.client_address[0]
-        gate = self.server.gate
-        if gate.locked(client):
+        verdict = self.server.gate.verdict(client, self.headers)
+        if verdict == "locked":
             self._send_json(429, {"error": "too many wrong pairing codes; wait a minute"})
             return
-        if not gate.check(client, self.headers):
-            time.sleep(0.25)  # each wrong code costs the guesser time
-            self.server.log(f"refused a request from {client}: wrong or missing pairing code")
+        if verdict != "ok":
+            if verdict == "wrong":
+                time.sleep(0.25)  # each wrong code costs the guesser time
+                self.server.log(f"refused a request from {client}: wrong pairing code")
             self._send_json(401, {"error": "wrong or missing pairing code"})
             return
         path = self.path.partition("?")[0]
@@ -658,8 +770,34 @@ class Handler(BaseHTTPRequestHandler):
         body = self._read_body(self.server.max_upload if path == "/upload/image" else MAX_BODY)
         if body is None:
             return
+        if path == "/prompt" and self.command == "POST" and not self._only_openfill_nodes(body):
+            return
         if self._comfy_ready():
             self._forward(body)
+
+    def _only_openfill_nodes(self, body: bytes) -> bool:
+        """A job may use only the node types OpenFill's own workflows use (workflow.NODE_CLASSES):
+        the pairing code runs OpenFill's jobs, not any node a pack on this computer offers."""
+        from .workflow import NODE_CLASSES
+
+        try:
+            graph = json.loads(body.decode("utf-8")).get("prompt")
+            classes = {str(n.get("class_type")) for n in graph.values()}
+        except (ValueError, AttributeError, UnicodeDecodeError):
+            self._send_json(400, {"error": "not a ComfyUI job"})
+            return False
+        unknown = sorted(classes - NODE_CLASSES)
+        if unknown:
+            self.server.log(f"refused a job with node types OpenFill does not use: {', '.join(unknown)[:200]}")
+            self._send_json(
+                403,
+                {
+                    "error": "This GPU server runs only OpenFill's own jobs, and this one uses "
+                    f"{', '.join(unknown)[:200]}. Use the same OpenFill version on both computers."
+                },
+            )
+            return False
+        return True
 
     def _comfy_ready(self) -> bool:
         comfy = self.server.comfy
@@ -779,16 +917,23 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
             if b" 101 " not in bytes(head).split(b"\r\n", 1)[0]:
                 return
+            # A vanished editor (network drop, no FIN or RST) must not hold the slot: TCP keepalive
+            # notices a dead peer within about a minute, and no traffic either way for WS_IDLE
+            # seconds closes the websocket (OpenFill then follows the job by polling).
+            _keepalive(self.connection)
+            tick = min(5.0, max(0.2, self.server.ws_idle / 4))
             up.settimeout(None)
             self.connection.settimeout(None)
             done = threading.Event()
+            last = [time.monotonic()]
 
             def client_to_comfy() -> None:
                 try:
                     while not done.is_set():
-                        data = self.rfile.read1(65536)
+                        data = self.rfile.read1(65536)  # ends when the other side shuts the sockets down
                         if not data:
                             break
+                        last[0] = time.monotonic()
                         up.sendall(data)
                 except OSError:
                     pass
@@ -800,9 +945,15 @@ class Handler(BaseHTTPRequestHandler):
             pump.start()
             try:
                 while not done.is_set():
+                    if not select.select([up], [], [], tick)[0]:
+                        if time.monotonic() - last[0] > self.server.ws_idle:
+                            self.server.log(f"closing an idle progress connection from {self.client_address[0]}")
+                            break
+                        continue
                     data = up.recv(65536)
                     if not data:
                         break
+                    last[0] = time.monotonic()
                     self.connection.sendall(data)
             except OSError:
                 pass
@@ -867,6 +1018,20 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
 
+def _keepalive(sock: socket.socket) -> None:
+    """TCP keepalive after 30 s idle, every 10 s, 3 tries (best effort per platform)."""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(sock, "ioctl") and hasattr(socket, "SIO_KEEPALIVE_VALS"):  # Windows
+            sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 30000, 10000))
+        else:
+            for name, value in (("TCP_KEEPIDLE", 30), ("TCP_KEEPINTVL", 10), ("TCP_KEEPCNT", 3)):
+                if hasattr(socket, name):
+                    sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, name), value)
+    except OSError:
+        pass
+
+
 def _shutdown(sock: socket.socket) -> None:
     try:
         sock.shutdown(socket.SHUT_RDWR)
@@ -914,9 +1079,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--bind", help="the address to listen on (default: this computer's Tailscale address)")
     s.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"the port to listen on (default {DEFAULT_PORT})")
     s.add_argument("--max-upload-mb", type=int, default=MAX_UPLOAD_MB, help="largest image upload")
-    sub.add_parser("pair", help="make a new pairing code (the old one stops working)").add_argument(
-        "--bind", help="the address OpenFill connects to (shown in the code)"
-    )
+    pr = sub.add_parser("pair", help="make a new pairing code (the old one stops working at once)")
+    pr.add_argument("--bind", help="the address OpenFill connects to (shown in the code)")
+    pr.add_argument("--port", type=int, default=DEFAULT_PORT, help="the port the server listens on")
     d = sub.add_parser("download", help="download a model of OpenFill's catalog into this computer's ComfyUI")
     d.add_argument("model_id")
     d.add_argument("--comfy-dir", required=True)
@@ -937,7 +1102,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "pair":
         host = args.bind or tailscale_ip() or "THIS-COMPUTER"
         token = new_pairing(home)
-        print(_pairing_banner(pairing_line(token, host, DEFAULT_PORT)))
+        print(_pairing_banner(pairing_line(token, host, args.port)))
         return 0
     if args.command == "download":
         return download(args.model_id, args.comfy_dir, os.environ.get(args.hf_token_env, ""))
@@ -989,7 +1154,7 @@ def run(
     if not state.get("token_sha256"):
         fresh = new_pairing(home)
         state = read_state(home)
-    gate = Gate(state["token_sha256"])
+    gate = Gate(state["token_sha256"], state_path=home / STATE_FILENAME)
     tasks = Tasks(custom_nodes, python, comfy, log)
     try:
         server = GpuServer((host, port), gate, comfy, tasks, max_upload_mb * 1024 * 1024, log)
