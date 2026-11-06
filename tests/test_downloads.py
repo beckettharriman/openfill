@@ -942,3 +942,26 @@ class LocalModelTaskTests(WorkerFixture):
         evil = dict(task, files=[{"url": "https://evil.example/x.gguf", "dest": "unet/my-fill.gguf", "size": 1}])
         with self.assertRaises(ValueError):
             self.worker.checked_download_files(evil)
+
+    def test_removing_a_local_flux_entry_keeps_the_encoders_it_found(self):
+        """Issue #8: the T5, CLIP-L and VAE a local FLUX.1 Fill file reuses are the user's own
+        files (no download address); deleting the entry's files never deletes them."""
+        from openfill import local_models
+        from tests.test_local_models import CLIP_L, FLUX_FILL, T5_ST, write_gguf, write_safetensors
+
+        main = write_gguf(self.models_root / "unet" / "my-fill.gguf", FLUX_FILL)
+        t5 = write_safetensors(self.models_root / "text_encoders" / "t5xxl_fp8_e4m3fn.safetensors", T5_ST)
+        clip = write_safetensors(self.models_root / "text_encoders" / "clip_l.safetensors", CLIP_L)
+        entry = next(e for e in self.worker._catalog() if e.source == local_models.SOURCE)
+        self.assertEqual(entry.file_by_role("clip1").dest, "text_encoders/t5xxl_fp8_e4m3fn.safetensors")
+        task = {
+            "id": "t",
+            "model_id": entry.id,
+            "type": "remove",
+            "models_root": str(self.models_root),
+            "files": [f.dest for f in entry.files],
+        }
+        self.worker._remove(task)
+        self.assertTrue(t5.exists())
+        self.assertTrue(clip.exists())
+        self.assertFalse(main.exists())  # the entry's own file goes, as before

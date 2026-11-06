@@ -221,3 +221,51 @@ class GpuErrorWordingTests(unittest.TestCase):
         self.assertIn("AMD", text)
         self.assertIn("RX 7000", text)
         self.assertNotIn("cu126", text)
+
+
+class ServerSeparatorTests(unittest.TestCase):
+    """ComfyUI lists a file in a sub folder with its own system's separator (os.path.relpath:
+    ``flux\\clip_l.safetensors`` on Windows) and accepts only that exact name."""
+
+    GRAPH = {
+        "clip": {
+            "class_type": "DualCLIPLoader",
+            "inputs": {"clip_name1": "t5.gguf", "clip_name2": "flux/clip_l.safetensors"},
+        },
+        "unet": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": "mine/fill.gguf"}},
+        "pos": {"class_type": "CLIPTextEncode", "inputs": {"text": "a/b", "clip": ["clip", 0]}},
+    }
+
+    def test_names_follow_the_server(self):
+        from openfill.backends import comfy
+
+        win = comfy.with_server_separator(self.GRAPH, True)
+        self.assertEqual(win["clip"]["inputs"]["clip_name2"], "flux\\clip_l.safetensors")
+        self.assertEqual(win["unet"]["inputs"]["unet_name"], "mine\\fill.gguf")
+        self.assertEqual(win["pos"]["inputs"]["text"], "a/b")  # prompts are not names
+        self.assertEqual(win["pos"]["inputs"]["clip"], ["clip", 0])
+        self.assertIs(comfy.with_server_separator(self.GRAPH, False), self.GRAPH)
+        self.assertEqual(self.GRAPH["unet"]["inputs"]["unet_name"], "mine/fill.gguf")  # not changed in place
+        self.assertTrue(comfy.has_sub_folder_names(self.GRAPH))
+        self.assertFalse(comfy.has_sub_folder_names({"pos": self.GRAPH["pos"]}))
+
+    def test_server_system_is_asked_once(self):
+        from openfill.backends import comfy
+
+        class Client:
+            calls = 0
+
+            def __init__(self, os_name):
+                self.os_name = os_name
+
+            def system_stats(self):
+                Client.calls += 1
+                return {"system": {"os": self.os_name}}
+
+        be = comfy.ComfyBackend("http://127.0.0.1:9", client=Client("win32"))
+        self.assertTrue(be.server_on_windows())
+        self.assertTrue(be.server_on_windows())
+        self.assertEqual(Client.calls, 1)
+        for os_name, expected in (("linux", False), ("darwin", False), ("nt", True)):
+            be = comfy.ComfyBackend("http://127.0.0.1:9", client=Client(os_name))
+            self.assertEqual(be.server_on_windows(), expected, os_name)

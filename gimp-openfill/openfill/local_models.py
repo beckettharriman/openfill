@@ -20,6 +20,10 @@ Families OpenFill can drive, and how they are recognised:
 Each recognised file becomes a catalog entry copied from the bundled model of its family
 (settings, companion files such as the FLUX text encoders and VAE, custom nodes), with the
 file itself as the main file. Results are cached by path, size and modification time.
+
+Companion files are looked up too (see :func:`resolve_companion`): a FLUX.1 Fill file uses
+the T5, CLIP-L and VAE files already in ComfyUI's folders, under any of the names and formats
+its loaders take, so only what is really missing is downloaded.
 """
 
 from __future__ import annotations
@@ -52,6 +56,29 @@ TEMPLATES = {
     ("flux-fill", ".safetensors"): "flux1-fill-dev",
 }
 FAMILY_NAMES = {"sd15-inpaint": "SD 1.5 inpainting", "sdxl": "SDXL", "flux-fill": "FLUX.1 Fill"}
+
+# ComfyUI reads each of these model folders from both names (folder_paths.py), so a file in
+# either one loads under the same name. In ComfyUI's order: for one name in both folders it
+# loads the file in the first one.
+FOLDER_ALIASES = {
+    "clip": ("text_encoders", "clip"),
+    "text_encoders": ("text_encoders", "clip"),
+    "unet": ("unet", "diffusion_models"),
+    "diffusion_models": ("unet", "diffusion_models"),
+}
+# FLUX's T5 v1.1 XXL: 32128-token vocabulary, 4096 wide (mT5 and UMT5 have 250k+ tokens)
+T5_VOCAB, T5_WIDTH = 32128, 4096
+T5_EMBEDDINGS = ("shared.weight", "embed_tokens.weight", "token_embd.weight")
+
+# Which kind of file each companion role of a template is (roles not listed are taken as the
+# catalog has them). The SD 1.5 and SDXL templates have no companions besides the preview
+# decoder, which is optional and looked up by ComfyUI itself.
+COMPANION_KINDS = {
+    ("flux_fill", "clip1"): "t5xxl",
+    ("flux_fill", "clip2"): "clip_l",
+    ("flux_fill", "vae"): "flux_vae",
+}
+GGUF_NODE_FOLDER = "ComfyUI-GGUF"  # loads .gguf text encoders (DualCLIPLoaderGGUF)
 
 
 @dataclass(frozen=True)
@@ -242,6 +269,8 @@ def scan(
     entries = list(entries)
     known = {f.dest.replace("\\", "/").lower() for e in entries for f in e.files}
     by_id = {e.id: e for e in entries}
+    # the GGUF loader node, for a safetensors FLUX file whose text encoder found is a .gguf
+    gguf_nodes = tuple(n for e in entries for n in e.requires_nodes if n.folder == GGUF_NODE_FOLDER)[:1]
     cache = _cache(base)
     fresh: dict[str, Any] = {}
     out: list[cat.ModelEntry] = []
@@ -276,9 +305,126 @@ def scan(
         if not found.family or template is None:
             skipped.append({"file": rel, "reason": found.note or "no matching bundled model to copy settings from"})
             continue
-        out.append(entry_for(path, rel, st.st_size, found.family, template))
+        out.append(entry_for(path, rel, st.st_size, found.family, template, Path(models_root), gguf_nodes))
     _save_cache(base, fresh)
     return out, skipped
+
+
+# ---------------------------------------------------------------- companions --
+
+
+def _name(path: Path) -> str:
+    """Lower-case file stem with ``-`` and spaces read as ``_``."""
+    return path.name.rsplit(".", 1)[0].lower().replace("-", "_").replace(" ", "_")
+
+
+def _shapes(path: Path) -> dict[str, list[int]] | None:
+    """Tensor name -> shape of a header (GGUF dims reversed to PyTorch order); None if unreadable."""
+    try:
+        if path.suffix.lower() == ".gguf":
+            return {k: list(reversed(d)) for k, d in gguf_shapes(path).items()}
+        return safetensors_shapes(path)
+    except (OSError, ValueError, UnicodeDecodeError, struct.error):
+        return None
+
+
+def compatible(kind: str, path: Path) -> bool:
+    """True when ``path`` can stand in for a companion of ``kind``: by name, then by header.
+
+    - ``t5xxl`` (FLUX's T5 v1.1 XXL encoder): ``.safetensors`` or ``.gguf`` whose name holds
+      ``t5`` and ``xxl`` (t5xxl_fp16, t5xxl_fp8_e4m3fn, t5-v1_1-xxl-encoder-Q5_K_M, ...), not
+      UMT5; the header has the token embedding (``shared.weight``, ``embed_tokens.weight`` or
+      GGUF ``token_embd.weight``) with T5's 32128-token vocabulary at 4096 wide, so mT5 and
+      UMT5 (250k+ tokens) are refused whatever their name.
+    - ``clip_l`` (CLIP-L text encoder): ``.safetensors`` named ``clip_l*``; 768-wide tensors.
+    - ``flux_vae``: ``.safetensors``/``.sft`` named ``ae`` or with ``flux`` and ``vae`` in it
+      (not FLUX.2's); the decoder takes 16 latent channels.
+    """
+    name, ext = _name(path), path.suffix.lower()
+    if kind == "t5xxl":
+        ok = ext in (".safetensors", ".gguf") and "t5" in name and "xxl" in name and "umt5" not in name
+    elif kind == "clip_l":
+        ok = ext == ".safetensors" and name.startswith("clip_l")
+    elif kind == "flux_vae":
+        ok = ext in (".safetensors", ".sft") and (
+            name == "ae" or ("flux" in name and "vae" in name and "flux2" not in name and "flux_2" not in name)
+        )
+    else:
+        return False
+    if not ok:
+        return False
+    shapes = _shapes(path)
+    if not shapes:
+        return False
+    if kind == "t5xxl":
+        embeddings = [v for k, v in shapes.items() if k.endswith(T5_EMBEDDINGS)]
+        return any(sorted(v) == sorted([T5_VOCAB, T5_WIDTH]) for v in embeddings)
+    if kind == "flux_vae":  # decoder.conv_in: 512 features from 16 latent channels
+        return any(d[:2] == [512, 16] and len(d) == 4 for d in shapes.values())
+    return any(768 in d for d in shapes.values())
+
+
+def _folder_files(models_root: Path, folder: str) -> list[Path]:
+    root = Path(models_root) / folder
+    if not root.is_dir():
+        return []
+    try:
+        return sorted(p for p in root.rglob("*") if p.is_file() and not p.name.startswith("."))
+    except OSError:
+        return []
+
+
+def _loaded_first(models_root: Path, rel: str) -> bool:
+    """True when ComfyUI loads ``rel`` for its name: no folder it reads earlier (``text_encoders``
+    before ``clip``, ``unet`` before ``diffusion_models``) has a file of the same name."""
+    folder, _, name = rel.replace("\\", "/").partition("/")
+    for earlier in FOLDER_ALIASES.get(folder, (folder,)):
+        if earlier == folder:
+            return True
+        if (Path(models_root) / earlier / name).is_file():
+            return False
+    return True
+
+
+def resolve_companion(models_root: Path, spec: cat.FileSpec, kind: str) -> cat.FileSpec:
+    """The file to use for the companion ``spec`` of kind ``kind`` (see :func:`compatible`).
+
+    Preference, first match wins:
+
+    1. the catalog's own file, where the catalog puts it with the catalog size (``spec``
+       itself, unchanged), if ComfyUI loads it for that name;
+    2. compatible files in the catalog's folder or its ComfyUI alias (``text_encoders`` and
+       ``clip``), ordered by: the catalog's file name first, then the size closest to the
+       catalog file's (the variant nearest to what the bundled model was set up with, so an
+       fp8 T5 wins over fp16 when both are there), then ComfyUI's folder order, then the path
+       (alphabetical) so the pick never changes between runs. A file ComfyUI would not load
+       for its name (the same name is in a folder it reads first) is never picked;
+    3. ``spec`` unchanged, to be downloaded, when nothing compatible is there.
+
+    A found file is returned as an optional file without a download address, like the
+    user's own main file: it is never downloaded or replaced.
+    """
+    if cat.file_installed(models_root, spec) and _loaded_first(models_root, spec.dest):
+        return spec
+    folder = spec.dest.replace("\\", "/").split("/", 1)[0]
+    folders = FOLDER_ALIASES.get(folder, (folder,))
+    best: tuple[tuple[Any, ...], str, int] | None = None
+    for index, name in enumerate(folders):
+        for path in _folder_files(models_root, name):
+            rel = path.relative_to(models_root).as_posix()
+            if not _loaded_first(models_root, rel) or not compatible(kind, path):
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            key = (path.name != spec.filename, abs(size - (spec.size or 0)), index, rel.lower())
+            if best is None or key < best[0]:
+                best = (key, rel, size)
+    if best is None:
+        return spec
+    _key, rel, size = best
+    return cat.FileSpec(spec.role, "", rel, size, None, False, True, "")
 
 
 def with_local(
@@ -296,14 +442,33 @@ def local_id(rel: str) -> str:
     return "local-" + hashlib.sha1(rel.lower().encode("utf-8")).hexdigest()[:12]
 
 
-def entry_for(path: Path, rel: str, size: int, family: str, template: cat.ModelEntry) -> cat.ModelEntry:
-    """The template entry with ``path`` as its main file."""
+def entry_for(
+    path: Path,
+    rel: str,
+    size: int,
+    family: str,
+    template: cat.ModelEntry,
+    models_root: Path | None = None,
+    gguf_nodes: tuple[cat.NodeSpec, ...] = (),
+) -> cat.ModelEntry:
+    """The template entry with ``path`` as its main file. With ``models_root``, each companion
+    file is the compatible one already there, if any (:func:`resolve_companion`); a ``.gguf``
+    text encoder found for a template without the GGUF node adds ``gguf_nodes``."""
     main = cat.live_main_file(template) or template.files[0]
     folder = rel.split("/", 1)[0]
     role = main.role
     # optional: an existing file is never downloaded (it has no download address anyway)
     files = [cat.FileSpec(role, "", rel, size, None, False, True, "")]
-    files += [f for f in template.files if f is not main]
+    for f in template.files:
+        if f is main:
+            continue
+        kind = COMPANION_KINDS.get((template.template or "", f.role))
+        files.append(resolve_companion(models_root, f, kind) if kind and models_root is not None else f)
+    nodes = template.requires_nodes
+    if any(f.dest.lower().endswith(".gguf") for f in files[1:]) and not any(
+        n.folder == GGUF_NODE_FOLDER for n in nodes
+    ):
+        nodes = nodes + tuple(gguf_nodes)
     stem = path.stem.removesuffix(".inpainting")
     return replace(
         template,
@@ -316,6 +481,7 @@ def entry_for(path: Path, rel: str, size: int, family: str, template: cat.ModelE
         source_type="local",
         uploader=f"found in ComfyUI's {folder} folder",
         files=tuple(files),
+        requires_nodes=nodes,
         source=SOURCE,
         family=template.family or family,
         repo=rel,
