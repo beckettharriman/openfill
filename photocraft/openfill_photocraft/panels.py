@@ -36,6 +36,10 @@ SETTINGS = (
     ("extra_server_args", "Extra ComfyUI options", str),
 )
 SECTIONS = (("models", "Models"), ("engine", "Engine"), ("generation", "Generation"))
+SHARED_HINT = (
+    "Use the models of another ComfyUI, such as Krita AI Diffusion's, without downloading them again. "
+    "OpenFill only reads these folders: it never downloads, deletes or installs anything there."
+)
 BUSY = ("Downloading", "Waiting", "Installing", "Removing", "Working")
 
 
@@ -96,6 +100,7 @@ class GearView(tk.Frame):
         self.engine.autostart.set(bool(settings.autostart))
         self.engine.idle.set(str(settings.idle_timeout_minutes))
         self.engine.extra.set(str(settings.extra_server_args or ""))
+        self.engine.shared.set(str(settings.shared_models or ""))
         for key, entry in self.generation.fields.items():
             entry.set(str(getattr(settings, key)))
 
@@ -131,6 +136,9 @@ class GearView(tk.Frame):
                 setattr(app.settings, key, value)
             app.settings.save(app.paths.config)
             app.reload_settings()
+            shared = self.engine.shared.get().strip()
+            if shared != (app.settings.shared_models or ""):
+                app.set_shared_models(shared)  # checks the folders, rescans, restarts the engine
         except Exception as err:  # noqa: BLE001 - says what is wrong
             self.say(str(err), BAD)
             return
@@ -386,6 +394,22 @@ class EngineView(tk.Frame):
         box.pack(fill="x", pady=(12, 0))
         box, self.extra = field(self, "Extra ComfyUI options", lambda b: ui.Field(b, CW, "for example --lowvram"))
         box.pack(fill="x", pady=(12, 0))
+
+        def shared_row(box):
+            column = ui.frame(box)
+            row = ui.frame(column)
+            add = ui.Button(row, "Add", self._add_shared)
+            find = ui.Button(row, "Find", self._find_shared)
+            self.shared = ui.Field(row, CW - 16 - add.w - find.w, "Krita AI Diffusion's server folder")
+            self.shared.pack(side="left")
+            add.pack(side="left", padx=(8, 0))
+            find.pack(side="left", padx=(8, 0))
+            row.pack(anchor="w")
+            ui.small(column, SHARED_HINT).pack(anchor="w", pady=(6, 0))
+            return column
+
+        box, _ = field(self, "Models from another ComfyUI", shared_row)
+        box.pack(fill="x", pady=(12, 0))
         ui.divider(self).pack(fill="x", pady=(12, 0))
         tools = ui.frame(self)
         tools.pack(fill="x", pady=(12, 0))
@@ -409,6 +433,27 @@ class EngineView(tk.Frame):
         folder = filedialog.askdirectory(parent=self.bar.root, title="Choose your ComfyUI folder", mustexist=True)
         if folder:
             self.folder.set(folder)
+
+    def _add_shared(self) -> None:
+        from tkinter import filedialog
+
+        from openfill import shared_models
+
+        folder = filedialog.askdirectory(
+            parent=self.bar.root, title="Choose the folder of another ComfyUI", mustexist=True
+        )
+        if folder:
+            self.shared.set(shared_models.join([*shared_models.parse(self.shared.get()), folder]))
+
+    def _find_shared(self) -> None:
+        from openfill import shared_models
+
+        found = self.bar.service.app.shared_suggestions()
+        if not found:
+            self.say("No other ComfyUI was found. Use Add to pick its folder.", DIM)
+            return
+        self.shared.set(shared_models.join([*shared_models.parse(self.shared.get()), *(str(c.path) for c in found)]))
+        self.say("Added " + ", ".join(f"{c.source} ({c.path})" for c in found) + ". Save to use its models.", OK)
 
     def check(self) -> None:
         bar = self.bar

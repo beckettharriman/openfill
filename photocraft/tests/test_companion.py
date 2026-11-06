@@ -1423,6 +1423,48 @@ class PageTests(unittest.TestCase):
             server.shutdown()
 
 
+class SharedModelsPageTests(unittest.TestCase):
+    """Engine settings: models of another ComfyUI, read only (issue #6)."""
+
+    def api(self):
+        from openfill_photocraft import web
+
+        from openfill.config import Settings
+        from openfill.shared_models import Candidate
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        app = mock.Mock()
+        app.settings = Settings()
+        app.paths.config = Path(tmp.name) / "config.json"
+        app.reload_settings = lambda: None
+        app.shared_suggestions.return_value = [Candidate(Path(tmp.name) / "krita" / "server", "Krita AI Diffusion")]
+        api = web.Api.__new__(web.Api)
+        api.service = mock.Mock(app=app)
+        return api, app, Path(tmp.name)
+
+    def test_setting_goes_through_the_app_only_when_it_changes(self):
+        api, app, _tmp = self.api()
+        self.assertIn("shared_models", api.settings())
+        api.post("/api/settings", {"steps": 30, "shared_models": ""})
+        app.set_shared_models.assert_not_called()
+        self.assertEqual(app.settings.steps, 30)
+        api.post("/api/settings", {"shared_models": "/k/server"})
+        app.set_shared_models.assert_called_once_with("/k/server")
+
+    def test_find_adds_what_is_found(self):
+        api, _app, tmp = self.api()
+        out = api.post("/api/shared/find", {"text": "/already"})
+        self.assertEqual(out["text"], os.pathsep.join(["/already", str(tmp / "krita" / "server")]))
+        self.assertEqual(out["found"], [f"Krita AI Diffusion ({tmp / 'krita' / 'server'})"])
+
+    def test_page_has_the_field_and_the_read_only_text(self):
+        page = (ROOT / "photocraft" / "openfill_photocraft" / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="s-shared_models"', page)
+        self.assertIn('id="shared-find"', page)
+        self.assertIn("never downloads, deletes or installs anything there", page)
+
+
 class LaunchTests(unittest.TestCase):
     """How the launcher starts PhotoCraft, which refuses unknown, repeated and conflicting options."""
 

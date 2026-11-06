@@ -111,9 +111,26 @@ CHECK_BACKEND_TIP = "Starts the backend if needed and checks that it answers."
 CHECK_BACKEND_IDLE = "Press Check backend to test the AI backend. The first start takes about a minute."
 CHECK_BACKEND_RUNNING = "Checking. The first start takes about a minute..."
 
+# Models of another ComfyUI install, read only (shared_models.py)
+SHARED_MODELS_HINT = "Reuses Krita AI Diffusion's or another ComfyUI's models. Read only: nothing is written there."
+SHARED_MODELS_SEP = "Separate several folders with {sep}"
+SHARED_ADD = "Add folder..."
+SHARED_ADD_TITLE = "Choose another ComfyUI folder (or Krita AI Diffusion's server folder)"
+SHARED_FIND = "Find Krita AI Diffusion"
+SHARED_FIND_TIP = "Looks for Krita AI Diffusion's ComfyUI and other ComfyUI folders on this computer."
+SHARED_FOUND = "Added {what}. Save to use its models."
+SHARED_NOTHING_FOUND = "No other ComfyUI was found. Use Add folder... to pick one."
+
+
+def shared_models_hint(sep: str) -> str:
+    """The hint under the field, with the system's list separator (``;`` on Windows)."""
+    return SHARED_MODELS_HINT + " " + SHARED_MODELS_SEP.format(sep=f'"{sep}".')
+
+
 # (key, label, one-line hint)
 GENERAL_FIELDS = (
     ("comfy_dir", "AI backend folder", "Where ComfyUI (portable build) is installed."),
+    ("shared_models", "Models from another ComfyUI", ""),  # hint: SHARED_MODELS_HINT (needs os.pathsep)
     ("autostart", "Start backend automatically", "Starts ComfyUI hidden when you generate."),
     (
         "idle_timeout_minutes",

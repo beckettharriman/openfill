@@ -179,6 +179,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <label class="check"><input type="checkbox" id="s-autostart"><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span>Start the AI engine with PhotoCraft</span></label>
       <div class="field"><span class="label">Stop after idle</span><div style="display:flex;gap:8px;align-items:center"><input id="s-idle_timeout_minutes" type="number" style="width:72px" aria-label="Stop after idle, minutes"><span class="small">minutes, 0 = never</span></div></div>
       <div class="field"><span class="label">Extra ComfyUI options</span><input id="s-extra_server_args" type="text" placeholder="for example --lowvram" aria-label="Extra ComfyUI options"></div>
+      <div class="field"><span class="label">Models from another ComfyUI</span><div style="display:flex;gap:8px"><input id="s-shared_models" type="text" placeholder="for example Krita AI Diffusion's server folder" aria-label="Models from another ComfyUI"><button class="btn" id="shared-find">Find Krita AI Diffusion</button></div><div class="small" id="shared-note">Use the models of another ComfyUI, such as Krita AI Diffusion's, without downloading them again. OpenFill only reads these folders: it never downloads, deletes or installs anything there. Separate several folders with ; on Windows or : on Mac and Linux.</div></div>
       <div class="divider"></div>
       <div class="stack"><div class="label">Engine</div><div style="display:flex;gap:8px"><button class="btn" id="check">Check</button><button class="btn" id="stop">Stop engine</button><button class="btn" id="logs">Logs</button></div><div class="note dim" id="check-out" hidden></div></div>
     </div>
@@ -366,6 +367,7 @@ $("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=
 $("check").onclick=async()=>{settingsNote("Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:"."),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};
 $("stop").onclick=async()=>{const r=await post("/api/backend/stop");settingsNote(r.message,"dim")};
 $("logs").onclick=()=>post("/api/logs");
+$("shared-find").onclick=async()=>{try{const r=await post("/api/shared/find",{text:$("s-shared_models").value});$("s-shared_models").value=r.text;settingsNote(r.found.length?`Added ${r.found.join(", ")}. Save to use its models.`:"No other ComfyUI was found. Type its folder in the field.",r.found.length?"ok":"dim")}catch(e){settingsNote(e.message,"bad")}};
 
 function openTab(){const h=location.hash.slice(1);const want={t2i:"txt2img",panel:"fill",models:"models",settings:"engine"}[h]||h;
   if(want==="models"||want==="engine"||want==="generation")showGear(want);else if(GO[want]){showTools();setMode(want)}}

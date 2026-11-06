@@ -30,6 +30,7 @@ EDITABLE = {
     "autostart": bool,
     "idle_timeout_minutes": int,
     "extra_server_args": str,
+    "shared_models": str,  # folders of another ComfyUI, read only (App.set_shared_models)
     "steps": int,
     "cfg": float,
     "grow_percent": float,
@@ -148,12 +149,21 @@ class Api:
             app.save_token(str(body.get("token", "")))
             return {"ok": True}
         if path == "/api/settings":
+            shared = str(body["shared_models"]) if "shared_models" in body else None
             for key, kind in EDITABLE.items():
-                if key in body:
+                if key in body and key != "shared_models":
                     setattr(app.settings, key, kind(body[key]))
             app.settings.save(app.paths.config)
             app.reload_settings()
+            if shared is not None and shared != app.settings.shared_models:
+                app.set_shared_models(shared)  # checks the folders, rescans, restarts the engine
             return self.settings()
+        if path == "/api/shared/find":
+            from openfill import shared_models
+
+            found = app.shared_suggestions()
+            text = shared_models.join([*shared_models.parse(str(body.get("text", ""))), *(str(c.path) for c in found)])
+            return {"text": text, "found": [f"{c.source} ({c.path})" for c in found]}
         if path == "/api/comfy/setup":
             return {"task": svc.setup_comfy()}
         if path == "/api/backend/check":

@@ -252,14 +252,15 @@ def _model_options(
     installed_rows, other_rows = [], []
     flux_ids: set[str] = set()
     try:
-        from openfill import local_models
+        from openfill import local_models, shared_models
 
         base = Paths.for_profile(Gimp.directory()).base
         catalog = cat.load_merged(plugin_dir=Path(__file__).resolve().parent, base=base)
         root = cat.default_models_root(settings.comfy_dir)
         nodes = cat.default_custom_nodes_dir(settings.comfy_dir)
         # the user's own model files, and models chosen from the hubs, are offered too
-        catalog = local_models.with_local(catalog, root, base) if settings.comfy_dir else catalog
+        shared = shared_models.roots_for(settings.shared_models, root) if settings.comfy_dir else []
+        catalog = local_models.with_local(catalog, root, base, shared) if settings.comfy_dir else catalog
         active_id = cat.effective_active(catalog, root, nodes, settings.active_model)
         active_name = active_id or "none installed"
         for entry in catalog:
@@ -847,6 +848,7 @@ def run_txt2img(
 SETTINGS_KEYS = [
     "backend",
     "comfy_dir",
+    "shared_models",
     "url",
     "a1111_url",
     "autostart",
@@ -956,6 +958,7 @@ def run_settings(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig, _data:
     if run_mode == Gimp.RunMode.INTERACTIVE and not _settings_dialog(procedure, config):
         return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, GLib.Error())
     settings = Settings.load(paths.config)  # the Models tab may have changed active_model / token meanwhile
+    shared_before = settings.shared_models
     for key in SETTINGS_KEYS:
         setattr(settings, key, config.get_property(key.replace("_", "-")))
     try:
@@ -964,6 +967,13 @@ def run_settings(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig, _data:
         text = ui_text.save_failed(str(paths.config), str(err))
         Gimp.message(text)
         return procedure.new_return_values(Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error(text))
+    if settings.shared_models != shared_before:
+        # ComfyUI reads its model folders when it starts: stop it, the next job starts it again
+        from openfill.server import ServerManager
+
+        manager = ServerManager(settings, paths)
+        if manager.read_state():
+            manager.request_stop()
     if config.get_property("check-backend"):
         from openfill.app import App
 
@@ -1238,6 +1248,13 @@ class OpenFill(Gimp.PlugIn):
         )
         p.add_string_argument(
             "extra-server-args", "Extra ComfyUI ar_guments", "For example --lowvram", s.extra_server_args, RW
+        )
+        p.add_string_argument(
+            "shared-models",
+            "Models from another ComfyUI",
+            "Folders of another ComfyUI whose models are used read only",
+            s.shared_models,
+            RW,
         )
         p.add_boolean_argument("debug", "_Verbose log", "", s.debug, RW)
         p.add_boolean_argument(
