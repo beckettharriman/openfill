@@ -743,6 +743,31 @@ class InstallTests(unittest.TestCase):
         "[Desktop Action new]\nName=New Window\nExec=photocraft --new-instance\n"
     )
 
+    def test_checksums_never_the_signature(self):
+        """PhotoCraft 0.20.2 added SHA256SUMS.txt.asc; whatever order GitHub lists the assets in,
+        the installer checks the tarball against the list, not the signature."""
+        from unittest import mock
+
+        from openfill_photocraft import install
+
+        base = "https://example.invalid/"
+        tar = "photocraft-0.20.2-linux-x86_64.tar.gz"
+        for names in (
+            ["SHA256SUMS.txt.asc", "SHA256SUMS.txt", tar],  # signature listed first (0.20.2 style)
+            [tar, "SHA256SUMS.txt", "SHA256SUMS.txt.asc"],
+            [tar, "SHA256SUMS.txt"],  # 0.12 to 0.20.1
+            ["SHA256SUMS.sig", "SHA256SUMS", tar],
+        ):
+            release = {"tag_name": "v0.20.2", "assets": [{"name": n, "browser_download_url": base + n} for n in names]}
+            with mock.patch.object(install.platform, "machine", return_value="x86_64"):
+                name, url, sums = install.linux_asset(release)
+            self.assertEqual((name, url), (tar, base + tar))
+            self.assertFalse(sums.endswith((".asc", ".sig")), names)
+            self.assertTrue(sums.startswith(base + "SHA256SUMS"), names)
+        self.assertEqual(install.checksums_url({"SHA256SUMS.txt.asc": "x"}), "")
+        with self.assertRaises(RuntimeError):
+            install.linux_asset({"tag_name": "v0.20.2", "assets": [{"name": tar, "browser_download_url": "u"}]})
+
     def test_entry_starts_openfill(self):
         from openfill_photocraft import install
 
