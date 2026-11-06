@@ -589,6 +589,14 @@ class GpuServer(ThreadingHTTPServer):
         self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         super().__init__(address, Handler)
 
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """One log line, not a traceback, for a client that went away (network drop, closed editor)."""
+        err = sys.exc_info()[1]
+        if isinstance(err, (ConnectionError, TimeoutError)):
+            self.log(f"connection from {client_address[0]} ended: {err}")
+            return
+        super().handle_error(request, client_address)
+
 
 class Handler(BaseHTTPRequestHandler):
     server: GpuServer
@@ -808,6 +816,13 @@ class Handler(BaseHTTPRequestHandler):
     def _own(self, path: str) -> None:
         srv = self.server
         if path == "/openfill/ping" and self.command == "GET":
+            if srv.comfy.managed and srv.comfy.status() == "down":
+                # ComfyUI stopped (crashed, or killed): start it again; OpenFill waits for "up".
+                srv.log("ComfyUI is not running; starting it again")
+                try:
+                    srv.comfy.start()
+                except SystemExit as err:
+                    srv.log(str(err))
             self._send_json(
                 200,
                 {

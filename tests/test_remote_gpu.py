@@ -329,6 +329,28 @@ class ProxyTests(GpuServerCase):
         self.assertEqual(json.loads(body)["comfy"], "down")
         self.comfy = FakeComfy(self.nodes)  # for tearDown
 
+    def test_ping_starts_a_managed_comfyui_that_stopped(self):
+        started = []
+        comfy = self.server.comfy
+        comfy.cmd = ["python", "main.py"]  # managed now
+        comfy.status = lambda: "starting" if started else "down"
+        comfy.start = lambda wait=False: started.append(1)
+        status, body = self.get("/openfill/ping")
+        self.assertEqual((status, json.loads(body)["comfy"]), (200, "starting"))
+        self.assertEqual(started, [1])
+        self.assertTrue(any("starting it again" in line for line in self.logged))
+
+    def test_a_client_that_goes_away_is_one_log_line(self):
+        sock = socket.create_connection(self.server.server_address, timeout=5)
+        sock.sendall(b"GET /system_stats HTTP/1.1\r\n")  # and never the rest
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+        sock.close()  # a reset, like a dropped network
+        try:
+            raise ConnectionResetError("reset by peer")
+        except ConnectionResetError:
+            self.server.handle_error(None, ("100.1.2.3", 1))
+        self.assertTrue(any("connection from 100.1.2.3 ended" in line for line in self.logged))
+
     def test_inventory_lists_node_folders_and_openfill_versions(self):
         (self.nodes / "openfill-nodes").mkdir()
         (self.nodes / "openfill-nodes" / "VERSION").write_text("1\n", encoding="utf-8")

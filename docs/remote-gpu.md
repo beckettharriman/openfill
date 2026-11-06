@@ -103,8 +103,9 @@ OpenFill never falls back to this computer's ComfyUI, or to a cloud service, whe
 
 | OpenFill says | What to do |
 |---|---|
-| The GPU computer does not answer. It may be asleep... | Wake it up, check Tailscale or your network, then press Check backend. |
+| The GPU computer does not answer. It may be asleep... | Wake it up, check Tailscale or your network, and check that the GPU server runs there. Over Tailscale, Windows doesn't answer at all for a port nobody listens on, so a stopped GPU server looks the same as a sleeping computer. |
 | ...the OpenFill GPU server is not running there | Start the GPU server on that computer. |
+| The SSH connection works, but nothing answers behind it | Start the GPU server (or ComfyUI) on that computer. |
 | ...did not accept the pairing code | Run `gpu_server.py pair` there and paste the new line. |
 | ...refused several wrong pairing codes and waits a minute | Check the code, then wait a minute. |
 | ...runs, but its ComfyUI does not | Look at the GPU server's window or `comfyui.log`. It starts ComfyUI again on the next request. |

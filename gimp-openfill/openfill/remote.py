@@ -175,7 +175,8 @@ def explain_ssh(stderr: str, target: str) -> str:
 def asleep_message(host: str) -> str:
     return (
         f"The GPU computer {host} does not answer. It may be asleep, switched off, or not connected to "
-        "Tailscale or your network. Wake it up, then press Check backend again."
+        "Tailscale or your network, or the OpenFill GPU server is not running there. Check it, then press "
+        "Check backend again."
     )
 
 
@@ -596,7 +597,8 @@ class RemoteLink:
     def explain(self, kind: str, info: dict | None = None) -> str:
         host = self.host
         detail = str((info or {}).get("error") or "")
-        if kind in ("asleep", "reset") and self.via_ssh and self.tunnel is not None:
+        if kind in ("asleep", "reset", "error") and self.via_ssh and self.tunnel is not None:
+            time.sleep(0.5)  # ssh prints why the forwarded connection failed a moment after it closes it
             stderr = self.tunnel.stderr_text().lower()
             if "connect failed" in stderr or "open failed" in stderr:
                 kind = "nothing-behind-tunnel"
