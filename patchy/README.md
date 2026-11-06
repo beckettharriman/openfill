@@ -79,4 +79,4 @@ Tests: `python -m unittest patchy/tests/test_companion.py` (no Patchy needed; a 
 
 ## Credits and license
 
-OpenFill for Patchy is Apache-2.0 (see `LICENSE`). It runs on the same ComfyUI, node packs and models as [OpenFill for PhotoCraft](../photocraft/README.md#credits-and-license), under their own licenses. Patchy is a separate project by Seth Robinson.
+OpenFill for Patchy is Apache-2.0 (see [LICENSE](../LICENSE)). It runs on the same ComfyUI, node packs and models as [OpenFill for PhotoCraft](../photocraft/README.md#credits-and-license), under their own licenses. Patchy is a separate project by Seth Robinson.
