@@ -228,7 +228,7 @@ const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0
 const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create"};
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
-let cloud=null, mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
+let cloud=null, loadedBackend="", mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
 
 function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
 $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
@@ -308,7 +308,7 @@ function fillSelect(){const s=$("model");let opts;
   s.value=want||"";$("go").disabled=busy||!opts.length}
 
 function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.statusText||"").startsWith("Downloading"))||models.find(r=>r.statusText==="Waiting");
-  if(cloud&&!cloud.key)html=`<div class="head">${svg("warn",C.warn)}<span class="t">The cloud service needs your key</span></div><div class="small">Paste your API key under Engine in the settings. Nothing is sent until you generate.</div><div style="display:flex"><button class="btn accent flex" id="setup-cloud">Open settings</button></div>`;
+  if(cloud&&!cloud.key)html=`<div class="head">${svg("warn",C.warn)}<span class="t">The cloud service needs your key</span></div><div class="small">${esc(cloud.keyProblem||"Paste your API key under Engine in the settings. Nothing is sent until you generate.")}</div><div style="display:flex"><button class="btn accent flex" id="setup-cloud">Open settings</button></div>`;
   else if(cloud)html="";
   else if(!s.comfyReady)html=`<div class="head">${svg("warn",C.warn)}<span class="t">AI engine not found</span></div><div class="small">OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it. No suitable graphics card? A paid cloud service can do the work instead (settings, Engine). Your images are then sent to it.</div><div style="display:flex;gap:8px"><button class="btn accent flex" id="setup-folder">Choose folder</button><button class="btn flex" id="setup-help">How to install</button></div>`;
   else if(dl){const pct=dl.statusText.startsWith("Downloading")?parseInt(dl.statusText.split(" ").pop()):0;html=`<div class="head">${svg("download",C.accent)}<span class="t">Downloading ${esc(short(dl.name))}</span><span class="r">${pct}%</span></div><div class="bar"><i style="width:${pct}%"></i></div><div class="small">You can keep working.</div>`}
@@ -345,7 +345,7 @@ async function tick(){
           fetch(`/api/thumb?i=${i}&key=${encodeURIComponent(KEY)}&t=${Date.now()}`,{headers:H}).then(r=>r.status===200?r.blob():null).then(bl=>{if(bl)x.querySelector("img").src=URL.createObjectURL(bl)})}}
       [...$("thumbs").children].forEach((x,i)=>x.classList.toggle("on",i===j.shown));void k}
     else thumbsFor=""}
-  const always=cloud?[mode==="txt2img"?cloud.promptNote:cloud.note]:[];
+  const always=cloud?[(mode==="txt2img"?cloud.promptNote:cloud.note)+" Up to 4 variations per run, each billed by the service."]:[];
   $("notices").innerHTML=always.concat(j.notices||[]).map(n=>`<div class="context" style="color:${C.warn}">${svg("warn",C.warn,14)}<span>${esc(n)}</span></div>`).join("");
 }
 
@@ -375,7 +375,8 @@ async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return
 $("save-token").onclick=async()=>{try{await post("/api/models/token",{token:$("token").value});$("token").value="";mnote("Hugging Face key saved.","ok")}catch(e){mnote(e.message,"bad")}};
 
 async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el)continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}
-  $("cloud-key").value="";$("cloud-key").placeholder=s.cloud_key_saved?"Saved. Paste a new key to replace it.":"Paste your API key";cloudFields()}
+  $("cloud-key").value="";$("cloud-key").placeholder=s.cloud_key_saved?"Saved. Paste a new key to replace it.":(s.cloud_key_elsewhere?"Paste the key for this service. The saved key is for another one.":"Paste your API key");
+  loadedBackend=s.backend;cloudFields()}
 // The cloud fields show only while the cloud is picked; the note says where pictures go.
 function cloudFields(){const on=$("s-backend").value==="cloud";$("cloud-fields").hidden=!on;
   const p=$("s-cloud_provider").value,u=$("s-cloud_url").value.trim();
@@ -387,6 +388,7 @@ function cloudFields(){const on=$("s-backend").value==="cloud";$("cloud-fields")
 ["s-backend","s-cloud_provider","s-cloud_url"].forEach(id=>$(id).addEventListener("input",cloudFields));
 function settingsNote(t,kind){const n=section==="generation"?$("gen-out"):$("check-out");n.hidden=!t;n.textContent=t;n.className="note "+(kind||"dim")}
 $("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.type==="checkbox"?el.checked:(el.type==="number"?+el.value:el.value)});
+  if(b.backend===loadedBackend)delete b.backend; // not switched here: never write back a value loaded earlier
   const key=$("cloud-key").value.trim();if(key)b.cloud_api_key=key;
   try{await post("/api/settings",b);await loadSettings();settingsNote("Settings saved.","ok")}catch(e){settingsNote(e.message,"bad")}};
 $("check").onclick=async()=>{settingsNote("Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:"."),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};

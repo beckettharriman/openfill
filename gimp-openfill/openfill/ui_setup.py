@@ -285,7 +285,7 @@ def ensure_comfy(app: App, message: str = "", parent: Gtk.Window | None = None) 
 def setup_cloud(app: App, parent: Gtk.Window | None = None) -> bool:
     """Ask for the cloud service's settings and make it the backend; True when saved.
     Nothing is sent anywhere here: the first picture goes out when the user generates."""
-    from .dialogs import CloudForm, cloud_values
+    from .dialogs import CloudForm
 
     s = app.settings
     dialog = Gtk.Dialog(title=ui_text.CLOUD_TITLE, transient_for=parent, modal=True)
@@ -302,6 +302,7 @@ def setup_cloud(app: App, parent: Gtk.Window | None = None) -> bool:
             "cloud_url": s.cloud_url,
             "cloud_model": s.cloud_model,
             "has_key": bool(s.cloud_api_key),
+            "key_for": s.cloud_key_for,
         }
     )
     box.pack_start(form, False, False, 0)
@@ -311,12 +312,18 @@ def setup_cloud(app: App, parent: Gtk.Window | None = None) -> bool:
     dialog.show_all()
     try:
         while dialog.run() == Gtk.ResponseType.OK:
-            values = cloud_values(form.collect(), {"cloud_api_key": s.cloud_api_key})
-            if not values["cloud_api_key"]:
-                gi_message(dialog, "Paste your API key first. You make one on the service's website.")
+            from dataclasses import replace
+
+            v = form.collect()
+            trial = replace(s)  # checked on a copy: Cancel leaves the settings as they were
+            trial.set_cloud(v["cloud_provider"], v["cloud_url"], v["cloud_model"], v["cloud_api_key"])
+            if not trial.cloud_key_usable:
+                gi_message(
+                    dialog,
+                    trial.cloud_key_problem() or "Paste your API key first. You make one on the service's website.",
+                )
                 continue
-            for key, value in values.items():
-                setattr(s, key, value)
+            s.set_cloud(v["cloud_provider"], v["cloud_url"], v["cloud_model"], v["cloud_api_key"])
             s.backend = "cloud"
             try:
                 app._save_settings()

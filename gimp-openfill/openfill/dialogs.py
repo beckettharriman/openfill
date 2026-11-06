@@ -950,7 +950,7 @@ class CloudForm(Gtk.Box):
         self.key = Gtk.Entry()
         self.key.set_visibility(False)
         self.key.set_input_purpose(Gtk.InputPurpose.PASSWORD)
-        self.key.set_placeholder_text(ui_text.CLOUD_KEY_SAVED if values.get("has_key") else ui_text.CLOUD_KEY_EMPTY)
+        self._has_key, self._key_for = bool(values.get("has_key")), str(values.get("key_for") or "")
         self.key.set_hexpand(True)
         self.model = Gtk.Entry()
         self.model.set_text(str(values.get("cloud_model") or ""))
@@ -983,23 +983,19 @@ class CloudForm(Gtk.Box):
         info = self._provider_info(self.provider.get_active_id() or "openrouter")
         self.model.set_placeholder_text(info.default_model or "the model name your service uses")
         self.url.set_placeholder_text(info.base_url)
-        self.note.set_text(cloud_note(info.id, self.url.get_text().strip()))
+        url = self.url.get_text().strip()
+        self.key.set_placeholder_text(ui_text.cloud_key_placeholder(self._key_for, info.id, url, self._has_key))
+        self.note.set_text(cloud_note(info.id, url))
 
     def collect(self) -> dict:
-        """The values on screen; ``cloud_api_key`` is "" unless a new key was typed."""
+        """The values on screen; ``cloud_api_key`` is "" unless a new key was typed (apply them
+        with ``Settings.set_cloud``, which never moves a saved key to another service)."""
         return {
             "cloud_provider": self.provider.get_active_id() or "openrouter",
             "cloud_url": self.url.get_text().strip(),
             "cloud_model": self.model.get_text().strip(),
             "cloud_api_key": self.key.get_text().strip(),
         }
-
-
-def cloud_values(values: dict, saved: dict) -> dict:
-    """Settings to save from ``CloudForm.collect`` (the saved key stays when none was typed)."""
-    out = {k: v for k, v in values.items() if k != "cloud_api_key"}
-    out["cloud_api_key"] = values.get("cloud_api_key") or saved.get("cloud_api_key", "")
-    return out
 
 
 class SettingsDialog(Gtk.Dialog):

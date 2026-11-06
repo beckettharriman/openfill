@@ -368,7 +368,11 @@ def _generation_dialog(
         test_dump=hooks.get("dialog_dump"),
         test_out=str(hooks.get("dialog_out") or ""),
         thumbnail=thumbnail,
-        cloud_note=settings.cloud_note("prompt" if kind == "txt2img" else "image"),
+        cloud_note=(
+            f"{settings.cloud_note('prompt' if kind == 'txt2img' else 'image')} {ui_text.CLOUD_VARIATIONS}"
+            if settings.uses_cloud
+            else ""
+        ),
     )
     if result is None:
         return False
@@ -891,10 +895,9 @@ def _settings_test_backend(app: App, values: dict, report: Callable[[str], None]
         if key != "_cloud":
             setattr(app.settings, key, value)
     if cloud:  # the cloud fields on screen, not yet saved; a key typed now is tried, else the saved one
-        from openfill.dialogs import cloud_values
-
-        for key, value in cloud_values(cloud, {"cloud_api_key": app.settings.cloud_api_key}).items():
-            setattr(app.settings, key, value)
+        app.settings.set_cloud(
+            cloud["cloud_provider"], cloud["cloud_url"], cloud["cloud_model"], cloud["cloud_api_key"]
+        )
     if app.uses_cloud:
         health = app.check_backend()  # checks the key only: no picture is sent
         return ui_text.cloud_health_text(health.ok, health.detail)
@@ -944,6 +947,7 @@ def _settings_dialog(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig) ->
         "cloud_url": saved.cloud_url,
         "cloud_model": saved.cloud_model,
         "has_key": bool(saved.cloud_api_key),  # the key itself never goes into the dialog
+        "key_for": saved.cloud_key_for,
     }
     result = dialogs.run_settings_dialog(
         values,
@@ -968,12 +972,14 @@ def _settings_dialog(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig) ->
         # keep in its own plug-in settings file.
         paths = Paths.for_profile(Gimp.directory()).ensure()
         fresh = Settings.load(paths.config)
-        for key, value in dialogs.cloud_values(cloud_result, {"cloud_api_key": fresh.cloud_api_key}).items():
-            setattr(fresh, key, value)
+        c = cloud_result
+        fresh.set_cloud(c["cloud_provider"], c["cloud_url"], c["cloud_model"], c["cloud_api_key"])
         try:
             fresh.save(paths.config)
         except OSError as err:
             Gimp.message(ui_text.save_failed(str(paths.config), str(err)))
+        if result.get("backend") == "cloud" and fresh.cloud_key_problem():
+            Gimp.message(fresh.cloud_key_problem())  # saved, but the old key is not sent to the new address
     for key, value in result.items():
         config.set_property(key.replace("_", "-"), value)
     config.set_property("check-backend", False)  # the dialog has its own Check backend button

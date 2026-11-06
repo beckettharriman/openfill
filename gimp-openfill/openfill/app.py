@@ -159,13 +159,14 @@ class App:
         s = self.settings
         return CloudBackend(
             s.cloud_provider,
-            s.cloud_api_key,
+            s.cloud_api_key if s.cloud_key_usable else "",  # never sent to a service it was not entered for
             s.cloud_model,
             s.cloud_url,
             s.cloud_api,
             float(s.request_timeout or 0),
             self.log,
             decode=getattr(self.io, "decode_image", None),
+            key_problem=s.cloud_key_problem(),
         )
 
     def backend(self, progress=None, cancel=None) -> Backend:
@@ -921,14 +922,16 @@ class App:
             self.server.touch()
             self._after_generation(result)
             self._debug_dump("fill", request, result, ctx)
+            # A cloud result is a layer that is transparent outside the selection with its own soft
+            # edge inside it; its layer mask is the selection itself, never grown past it.
             layers = self.io.insert_results(
                 image,
                 result.images,
                 ctx,
                 name,
-                float(mp.feather_image),
+                0.0 if self.uses_cloud else float(mp.feather_image),
                 self.paths.temp,
-                grow=layer_grow,
+                grow=0 if self.uses_cloud else layer_grow,
             )
         except BaseException as err:
             runner.fail(err)
@@ -1237,7 +1240,7 @@ class App:
                 result.images,
                 plan.context,
                 _layer_name("Generative Expand", prompt),
-                float(mp.feather_image),
+                0.0 if self.uses_cloud else float(mp.feather_image),
                 self.paths.temp,
                 mask_pixels=mask_pixels,
             )

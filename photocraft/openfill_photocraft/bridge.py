@@ -329,8 +329,19 @@ class PhotoCraftBridge:
         return png.encode(rect.width, rect.height, pixels, 1)
 
     def decode_image(self, data: bytes) -> tuple[int, int, bytes]:
-        """A JPEG or WebP picture from the cloud service as (width, height, RGBA bytes)."""
-        with Image.open(_io.BytesIO(data)) as im:
+        """A JPEG or WebP picture from the cloud service as (width, height, RGBA bytes).
+
+        Only those two formats, recognised by their first bytes and opened with only Pillow's
+        reader for that format: an answer is never handed to any other reader (Ghostscript for
+        EPS, ...). Its size is checked before the pixels are decoded."""
+        from openfill import imaging
+
+        kind = imaging.sniff(data)
+        if kind not in ("jpeg", "webp"):
+            raise ValueError("not a JPEG or WebP picture")
+        with Image.open(_io.BytesIO(data), formats=["JPEG" if kind == "jpeg" else "WEBP"]) as im:
+            if im.width * im.height > imaging.MAX_RESULT_PIXELS:
+                raise ValueError(f"{im.width} x {im.height} pixels is larger than OpenFill accepts")
             rgba = im.convert("RGBA")
             return rgba.width, rgba.height, rgba.tobytes()
 
@@ -357,7 +368,7 @@ class PhotoCraftBridge:
         layers: list[PCLayer] = []
         for index, data in enumerate(images):
             name = base_name if len(images) == 1 else f"{base_name} ({index + 1})"
-            with Image.open(_io.BytesIO(data)) as im:
+            with Image.open(_io.BytesIO(data), formats=["PNG"]) as im:  # results are always PNGs OpenFill made
                 rgba = im.convert("RGBA")
             if scale_to_origin and rgba.size != (origin.width, origin.height):
                 rgba = rgba.resize((origin.width, origin.height), Image.LANCZOS)

@@ -316,7 +316,8 @@ class Refresher:
         out = dict(facts)
         out.update(
             cloud=True,
-            cloud_key=bool(app.settings.cloud_api_key),
+            cloud_key=app.settings.cloud_key_usable,
+            cloud_key_problem=app.settings.cloud_key_problem(),
             models={cap: [("cloud", name)] for cap in ("fill", "remove", "expand", "txt2img")},
             active="cloud",
             active_name=name,
@@ -1398,7 +1399,10 @@ class Bar:
         return "AI engine: " + engine[:60]
 
     def _update_cloud_line(self) -> None:
+        from openfill import ui_text
+
         note = self.service.app.settings.cloud_note("prompt" if self.tab.get() == "txt2img" else "image")
+        note = f"{note} {ui_text.CLOUD_VARIATIONS}" if note else ""
         if self._shown.get("cloud_note") != note:
             self._shown["cloud_note"] = note
             self.cloud_line.configure(text=note)
@@ -1450,7 +1454,8 @@ class Bar:
                     "warn",
                     WARN,
                     "The cloud service needs your key",
-                    "Paste your API key under Engine in the settings. Nothing is sent until you generate.",
+                    facts.get("cloud_key_problem")
+                    or "Paste your API key under Engine in the settings. Nothing is sent until you generate.",
                     (("Open settings", "accent", lambda: self.select_view("settings")),),
                 )
         elif facts and not facts.get("comfy_ok", True) and setup and "error" not in setup:

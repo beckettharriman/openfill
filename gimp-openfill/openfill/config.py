@@ -141,6 +141,9 @@ class Settings:
     cloud_model: str = ""  # "" = the provider's default (OpenRouter: google/gemini-2.5-flash-image)
     cloud_api: str = "images"  # OpenRouter only: "images" (/images) or "chat" (/chat/completions)
     cloud_api_key: str = field(default="", repr=False)  # secret, stored only in this file
+    # The service and address (scheme, host, port) the key was entered for (backends.cloud.key_scope).
+    # The key is only ever sent where this still matches: changing either needs the key again.
+    cloud_key_for: str = ""
     # Not persisted: why the last :meth:`load` fell back to defaults (None when it did not).
     load_problem: str | None = field(default=None, repr=False, compare=False, metadata={"persist": False})
     # Not persisted: a damaged settings file that could not be moved aside; :meth:`save` refuses to overwrite it.
@@ -259,6 +262,35 @@ class Settings:
     def uses_cloud(self) -> bool:
         """The cloud service is the backend: pictures leave this computer."""
         return self.backend == "cloud"
+
+    def set_cloud(self, provider: str, url: str, model: str, key: str = "") -> None:
+        """Apply the cloud fields of a settings screen. A new ``key`` is bound to this service
+        and address; an empty one leaves the saved key as it is, bound where it was entered."""
+        from .backends.cloud import key_scope
+
+        self.cloud_provider, self.cloud_url, self.cloud_model = provider, url.strip(), model.strip()
+        if key.strip():
+            self.cloud_api_key = key.strip()
+            self.cloud_key_for = key_scope(provider, url)
+
+    @property
+    def cloud_key_usable(self) -> bool:
+        """A key is saved for exactly the service and address now set."""
+        from .backends.cloud import key_scope
+
+        return bool(self.cloud_api_key) and self.cloud_key_for == key_scope(self.cloud_provider, self.cloud_url)
+
+    def cloud_key_problem(self) -> str:
+        """Why the saved key is not used ("" when it is, or when none is saved)."""
+        if not self.cloud_api_key or self.cloud_key_usable:
+            return ""
+        from .backends.cloud import destination
+
+        return (
+            f"The saved API key was entered for another service or address, so it is not sent to "
+            f"{destination(self.cloud_provider, self.cloud_url)}. Paste the API key for this service in the "
+            "cloud settings, then try again."
+        )
 
     def cloud_note(self, what: str = "image") -> str:
         """The "Cloud: your image is sent to ..." line; "" when the backend is not the cloud."""

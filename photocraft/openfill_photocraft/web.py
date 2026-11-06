@@ -121,7 +121,10 @@ class Api:
     def settings(self) -> dict[str, Any]:
         s = self.service.app.settings
         out = {k: getattr(s, k) for k in EDITABLE}
-        out["cloud_key_saved"] = bool(s.cloud_api_key)  # the key itself never leaves the settings file
+        # the key itself never leaves the settings file: only whether one is saved, and for what
+        out["cloud_key_saved"] = s.cloud_key_usable
+        out["cloud_key_elsewhere"] = bool(s.cloud_api_key) and not s.cloud_key_usable
+        out["cloud_key_for"] = s.cloud_key_for
         return out
 
     # POST -----------------------------------------------------------------------------
@@ -165,15 +168,20 @@ class Api:
                 if key in body and str(body[key]) not in allowed():
                     raise ValueError(f"'{body[key]}' is not a choice for {key}.")
             was_cloud = app.uses_cloud
-            if body.get("backend") == "cloud" and not (
-                str(body.get("cloud_api_key") or "").strip() or app.settings.cloud_api_key
-            ):
-                raise ValueError("Paste your API key for the cloud service first.")
+            from dataclasses import replace
+
+            # checked on a copy first: a refused save changes nothing
+            trial = replace(app.settings)
             for key, kind in EDITABLE.items():
                 if key in body:
-                    setattr(app.settings, key, kind(body[key]))
-            if str(body.get("cloud_api_key") or "").strip():  # an empty field keeps the saved key
-                app.settings.cloud_api_key = str(body["cloud_api_key"]).strip()
+                    setattr(trial, key, kind(body[key]))
+            # a new key is bound to this service and address; an empty field never moves the saved one
+            trial.set_cloud(
+                trial.cloud_provider, trial.cloud_url, trial.cloud_model, str(body.get("cloud_api_key") or "")
+            )
+            if trial.uses_cloud and not trial.cloud_key_usable:
+                raise ValueError(trial.cloud_key_problem() or "Paste your API key for the cloud service first.")
+            app.settings.__dict__.update(trial.__dict__)
             app.settings.save(app.paths.config)
             app.reload_settings()
             if was_cloud and not app.uses_cloud:
@@ -204,7 +212,8 @@ def _cloud_state(app) -> dict[str, Any] | None:
         "note": s.cloud_note(),
         "promptNote": s.cloud_note("prompt"),
         "model": app.cloud_model_name(),
-        "key": bool(s.cloud_api_key),
+        "key": s.cloud_key_usable,
+        "keyProblem": s.cloud_key_problem(),
     }
 
 

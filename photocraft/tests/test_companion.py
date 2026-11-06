@@ -1501,7 +1501,7 @@ class CloudCompanionTests(unittest.TestCase):
         from openfill_photocraft.ui import WARN
 
         self.app.settings.backend = "cloud"
-        self.app.settings.cloud_api_key = self.KEY
+        self.app.settings.set_cloud("openrouter", "", "", self.KEY)
         refresher = Refresher.__new__(Refresher)  # no lookup thread
         refresher.service = SimpleNamespace(app=self.app)
         refresher._vendor = "none"
@@ -1521,6 +1521,53 @@ class CloudCompanionTests(unittest.TestCase):
         width, height, rgba = PhotoCraftBridge.decode_image(None, buf.getvalue())
         self.assertEqual((width, height, len(rgba)), (6, 4, 6 * 4 * 4))
         self.assertEqual(rgba[3], 255)
+
+    def test_switching_service_does_not_send_the_old_key_elsewhere(self):
+        if str(ROOT) not in sys.path:
+            sys.path.append(str(ROOT))  # the fake service of the engine's tests
+        from tests.test_cloud import FakeService
+
+        fake = FakeService()
+        self.addCleanup(fake.close)
+        fake.json_route("/v1/models", {"data": [{"id": "m"}]})
+        api, _warmed = self.api()
+        api.post("/api/settings", {"backend": "cloud", "cloud_api_key": self.KEY})  # an OpenRouter key
+        # later: OpenAI-compatible at a LiteLLM address, key field left empty
+        change = {"backend": "cloud", "cloud_provider": "openai", "cloud_url": fake.url + "/v1", "cloud_model": "m"}
+        with self.assertRaises(ValueError) as caught:
+            api.post("/api/settings", change)
+        self.assertIn("another service or address", str(caught.exception))
+        self.assertEqual(self.app.settings.cloud_provider, "openrouter")  # a refused save changes nothing
+        # even if the settings say so (edited by hand), the key is not sent there
+        self.app.settings.cloud_provider, self.app.settings.cloud_url = "openai", fake.url + "/v1"
+        self.app.settings.cloud_model = "m"
+        health = self.app.check_backend()
+        self.assertFalse(health.ok)
+        self.assertEqual(fake.requests, [])
+        state = api.state()
+        self.assertIn("another service or address", state["cloud"]["keyProblem"])
+        self.assertFalse(state["cloud"]["key"])
+        self.assertNotIn(self.KEY, json.dumps(state) + json.dumps(api.settings()))
+        self.assertTrue(api.settings()["cloud_key_elsewhere"])
+        api.post("/api/settings", {**change, "cloud_api_key": "sk-litellm-0123456789abcdef"})  # a key for it
+        self.assertTrue(self.app.check_backend().ok)
+        self.assertEqual(fake.requests[-1]["headers"]["Authorization"], "Bearer sk-litellm-0123456789abcdef")
+
+    def test_service_answer_never_reaches_ghostscript(self):
+        from PIL import EpsImagePlugin
+
+        eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 4 4\nnewpath 0 0 moveto 4 4 lineto stroke\nshowpage\n"
+        calls = []
+
+        def fake_gs(*a, **k):
+            calls.append(True)
+            raise OSError("ghostscript blocked by the test")
+
+        with mock.patch.object(EpsImagePlugin, "Ghostscript", fake_gs):
+            for data in (eps, b"\xff\xd8\xff" + eps, b"RIFF\0\0\0\0WEBP" + eps):  # EPS behind JPEG/WebP magic too
+                with self.assertRaises(Exception):  # noqa: B017 - refused in any way, never run
+                    PhotoCraftBridge.decode_image(None, data)
+        self.assertEqual(calls, [])
 
     def test_no_comfyui_warm_up_while_the_cloud_is_picked(self):
         from openfill_photocraft.service import Service
@@ -1544,11 +1591,13 @@ class CloudCompanionTests(unittest.TestCase):
         from openfill_photocraft.panels import EngineView
 
         try:
-            bar = SimpleNamespace(root=root, service=SimpleNamespace(app=self.app), call_soon=lambda fn, *a: fn(*a))
+            bar = SimpleNamespace(
+                root=root, host="PhotoCraft", service=SimpleNamespace(app=self.app), call_soon=lambda fn, *a: fn(*a)
+            )
             view = EngineView(bar, root)
             view.pack()
             self.app.settings.backend = "cloud"
-            self.app.settings.cloud_api_key = self.KEY
+            self.app.settings.set_cloud("openrouter", "", "", self.KEY)
             view.load_backend(self.app.settings)
             root.update()
             self.assertTrue(view.cloud.winfo_ismapped())

@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import traceback
+import tracemalloc
 import unittest
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -41,7 +42,7 @@ from openfill.backend import (
     Txt2ImgRequest,
     describe_error,
 )
-from openfill.backends.cloud import CloudBackend, cloud_note, destination, url_problem
+from openfill.backends.cloud import CloudBackend, cloud_note, destination, key_scope, url_problem
 from openfill.config import BACKENDS, Settings
 from openfill.geometry import Rect
 from openfill.log import RedactingFilter, redact
@@ -351,15 +352,22 @@ class CompositeTests(CloudTestCase):
         request, rgba, mask = inpaint_request()
         out = imaging.decode_png(self.backend().inpaint(request).images[0])
         self.assertEqual((out.width, out.height), (300, 200))
-        changed_outside = sum(
-            1 for i in range(300 * 200) if mask[i] < 128 and out.data[i * 4 : i * 4 + 4] != rgba[i * 4 : i * 4 + 4]
-        )
-        self.assertEqual(changed_outside, 0)
+        # the result is a layer: fully transparent wherever the selection is not
+        opaque_outside = sum(1 for i in range(300 * 200) if mask[i] < 128 and out.data[i * 4 + 3])
+        self.assertEqual(opaque_outside, 0)
         centre = (100 * 300 + 160) * 4
         self.assertEqual(out.data[centre : centre + 4], b"\xff\x00\x00\xff")
-        edge = (100 * 300 + 100) * 4  # first selected column: blended, not hard
-        self.assertNotEqual(out.data[edge : edge + 4], b"\xff\x00\x00\xff")
-        self.assertNotEqual(out.data[edge : edge + 4], rgba[edge : edge + 4])
+        edge = (100 * 300 + 100) * 4  # first selected column: fades in, not a hard line
+        self.assertTrue(0 < out.data[edge + 3] < 255)
+        # placed over the original it reproduces the blended result, and the original outside
+        merged = imaging.composite(
+            imaging.Rgba(300, 200, rgba),
+            imaging.decode_png(solid_png(96, 64, (255, 0, 0, 255))),
+            mask,
+            (0, 0, 96, 64),
+            4,
+        )
+        self.assertEqual(merged.data[:4], rgba[:4])
 
     def test_padding_is_cut_away_before_compositing(self):
         # 250 x 200 is padded to 250 x 200 (5:4); 260 x 200 to 267 x 200 (4:3), 3 px left
@@ -391,15 +399,19 @@ class CompositeTests(CloudTestCase):
 
     def test_expand_fills_only_the_new_area(self):
         self.fake.json_route("/api/v1/images", {"data": [{"b64_json": b64(solid_png(30, 20, (0, 200, 0, 255)))}]})
-        request, rgba, _mask = inpaint_request(mode="expand", prompt="", box=(0, 0, 60, 200))
+        request, _rgba, _mask = inpaint_request(mode="expand", prompt="", box=(0, 0, 60, 200))
         out = imaging.decode_png(self.backend().outpaint(request).images[0])
         body = json.loads(self.fake.requests[0]["body"])
         self.assertIn("new, empty canvas", body["prompt"])
-        self.assertEqual(out.data[(100 * 300 + 200) * 4 :][:4], rgba[(100 * 300 + 200) * 4 :][:4])
+        self.assertEqual(out.data[(100 * 300 + 200) * 4 + 3], 0)  # the old picture: untouched (transparent)
         self.assertEqual(out.data[(100 * 300 + 20) * 4 :][:4], b"\x00\xc8\x00\xff")
+        # the new area reaches the canvas edge: solid there, not fading out
+        self.assertEqual(out.data[(100 * 300 + 0) * 4 :][:4], b"\x00\xc8\x00\xff")
+        self.assertEqual(out.data[(0 * 300 + 30) * 4 :][:4], b"\x00\xc8\x00\xff")
 
     def test_jpeg_needs_the_editors_reader(self):
-        jpeg = b"\xff\xd8\xff\xe0" + b"0" * 64
+        # a JPEG header (APP0, then a baseline frame of 4 x 4) is enough: the reader is a stand-in
+        jpeg = b"\xff\xd8\xff\xe0\x00\x04ab\xff\xc0\x00\x11\x08\x00\x04\x00\x04\x03" + b"\x00" * 64
         self.fake.json_route("/api/v1/images", {"data": [{"b64_json": b64(jpeg)}]})
         request, _rgba, _mask = inpaint_request()
         with self.assertRaises(CloudRefused) as caught:
@@ -548,9 +560,34 @@ class ErrorTests(CloudTestCase):
         self.assertEqual(url_problem("http://127.0.0.1:4000/v1"), "")
         self.assertEqual(url_problem("http://localhost:4000"), "")
         self.assertEqual(url_problem("http://192.168.1.20:4000/v1"), "")
-        self.assertEqual(url_problem("http://litellm:4000/v1"), "")
+        self.assertEqual(url_problem("http://[::1]:4000/v1"), "")
+        self.assertEqual(url_problem("http://localhost:4000/v1", resolve=True), "")
+        # names are trusted only when every address they resolve to is local, checked at request time
+        from unittest import mock
+
+        from openfill.backends import cloud
+
+        def lookup(addresses):
+            def fake(host, port):
+                if addresses is None:
+                    raise OSError("no such name")
+                return [(2, 1, 6, "", (a, 0)) for a in addresses]
+
+            return mock.patch.object(cloud.socket, "getaddrinfo", fake)
+
+        for url in ("http://litellm:4000/v1", "http://proxy.lan/v1", "http://api.internal/v1"):
+            self.assertIn("unencrypted", url_problem(url))  # a name alone is never enough
+            with lookup(None):
+                self.assertIn("unencrypted", url_problem(url, resolve=True))
+            with lookup(["10.0.0.5", "8.8.8.8"]):  # one public address is enough to refuse
+                self.assertIn("unencrypted", url_problem(url, resolve=True))
+            with lookup(["10.0.0.5", "fd00::5"]):
+                self.assertEqual(url_problem(url, resolve=True), "")
         self.assertIn("unencrypted", url_problem("http://example.com/v1"))
+        self.assertIn("unencrypted", url_problem("http://8.8.8.8/v1"))
         self.assertIn("not a web address", url_problem("openrouter.ai"))
+        self.assertIn("user name or password", url_problem("https://user:hunter2@litellm.example.com/v1"))
+        self.assertNotIn("hunter2", url_problem("http://user:hunter2@example.com/v1"))
         request, _rgba, _mask = inpaint_request()
         with self.assertRaises(CloudRefused):
             CloudBackend("openai", KEY, "m", "http://example.com/v1").inpaint(request)
@@ -803,6 +840,7 @@ class AppNoFallbackTests(unittest.TestCase):
             "url": self.comfy.url,
             "cloud_url": self.cloud.url + "/api/v1",
             "cloud_api_key": KEY,
+            "cloud_key_for": key_scope("openrouter", self.cloud.url + "/api/v1"),
             "seam_correction": False,
             "grain_match": False,
             "rank_variations": False,
@@ -896,6 +934,284 @@ class AppNoFallbackTests(unittest.TestCase):
         health = app.check_backend()
         self.assertTrue(health.ok, health.detail)
         self.assertEqual([r["path"] for r in self.cloud.requests], ["/api/v1/key"])
+
+
+# ------------------------------------------------- review findings (2026-11-06) ----
+
+
+def _chunk(kind, body):
+    return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+
+
+def bomb_png(inflated=200_000_000):
+    """A 1x1 RGBA PNG whose data inflates to ``inflated`` bytes (about 200 KB on the wire)."""
+    comp = zlib.compressobj(9)
+    block = b"\0" * 10_000_000
+    data = b"".join(comp.compress(block) for _ in range(inflated // len(block))) + comp.flush()
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", data) + _chunk(b"IEND", b"")
+
+
+class CostTests(CloudTestCase):
+    def chat_route(self, delay):
+        url = "data:image/png;base64," + b64(solid_png(30, 20, (0, 255, 0, 255)))
+        answer = json.dumps({"choices": [{"message": {"images": [{"image_url": {"url": url}}]}}]}).encode()
+
+        def slow(_h, _b):
+            time.sleep(delay)
+            return 200, {"Content-Type": "application/json"}, answer
+
+        self.fake.routes["/api/v1/chat/completions"] = slow
+
+    def test_cancel_in_chat_mode_sends_no_further_paid_requests(self):
+        self.chat_route(0.5)
+        request, _rgba, _mask = inpaint_request(batch=4)
+        started = time.monotonic()
+        with self.assertRaises(GenerationCancelled):
+            self.backend(api="chat").inpaint(request, cancel=lambda: time.monotonic() - started > 0.2)
+        time.sleep(1.5)  # long enough for a worker that went on to send the next three
+        self.assertEqual(len(self.fake.requests), 1, "paid requests sent after Cancel")
+
+    def test_pictures_already_paid_for_are_kept_when_a_later_one_fails(self):
+        url = "data:image/png;base64," + b64(solid_png(30, 20, (0, 255, 0, 255)))
+        ok = json.dumps({"choices": [{"message": {"images": [{"image_url": {"url": url}}]}}]}).encode()
+        calls = []
+
+        def route(_h, _b):
+            calls.append(1)
+            if len(calls) == 1:
+                return 200, {}, ok
+            return 502, {}, b'{"error": {"code": 502, "message": "down"}}'
+
+        self.fake.routes["/api/v1/chat/completions"] = route
+        request, _rgba, _mask = inpaint_request(batch=3)
+        self.assertEqual(len(self.backend(api="chat").inpaint(request).images), 1)
+
+    def test_one_deadline_for_the_whole_job(self):
+        def drip(handler, _b):  # answers a byte at a time, each within the per-read timeout
+            handler.send_response(200)
+            handler.send_header("Content-Length", "100")
+            handler.end_headers()
+            try:
+                for _ in range(100):
+                    handler.wfile.write(b" ")
+                    handler.wfile.flush()
+                    time.sleep(0.1)
+            except OSError:
+                pass  # the client gave up, as it should
+            handler.close_connection = True
+            return 200, {}, b""
+
+        self.fake.routes["/api/v1/images"] = drip
+        request, _rgba, _mask = inpaint_request()
+        started = time.monotonic()
+        with self.assertRaises(CloudTimeout):
+            self.backend(request_timeout=1.0).inpaint(request)
+        self.assertLess(time.monotonic() - started, 4.0)
+
+
+class ResponseTests(CloudTestCase):
+    def test_png_inflating_past_its_header_is_refused(self):
+        data = bomb_png()
+        tracemalloc.start()
+        try:
+            with self.assertRaises(png.PngError):
+                imaging.decode_png(data)
+            _now, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 50_000_000, f"decode_png peaked at {peak / 1e6:.0f} MB for a 1x1 picture")
+
+    def test_png_bomb_from_the_service_is_not_accepted(self):
+        self.fake.json_route("/api/v1/images", {"data": [{"b64_json": b64(bomb_png(50_000_000))}]})
+        request, _rgba, _mask = inpaint_request()
+        with self.assertRaises(CloudRefused):
+            self.backend().inpaint(request)
+
+    def test_huge_picture_sizes_are_refused_before_decoding(self):
+        ihdr = struct.pack(">IIBBBBB", 20000, 20000, 8, 6, 0, 0, 0)
+        big = b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", zlib.compress(b"")) + _chunk(b"IEND", b"")
+        self.fake.json_route("/api/v1/images", {"data": [{"b64_json": b64(big)}]})
+        request, _rgba, _mask = inpaint_request()
+        with self.assertRaises(CloudRefused) as caught:
+            self.backend().inpaint(request)
+        self.assertIn("larger than OpenFill accepts", str(caught.exception))
+
+    def test_answers_over_the_size_limit_are_refused(self):
+        from openfill.backends import cloud
+
+        old, cloud.MAX_ANSWER_BYTES = cloud.MAX_ANSWER_BYTES, 1000
+        self.addCleanup(setattr, cloud, "MAX_ANSWER_BYTES", old)
+        rng = random.Random(5)
+        noise = bytes(rng.randrange(256) for _ in range(64 * 64 * 4))
+        self.fake.json_route("/api/v1/images", {"data": [{"b64_json": b64(png.encode(64, 64, noise, 4))}]})
+        request, _rgba, _mask = inpaint_request()
+        with self.assertRaises(CloudRefused) as caught:
+            self.backend().inpaint(request)
+        self.assertIn("more than OpenFill accepts", str(caught.exception))
+
+    def test_error_with_a_string_code_inside_a_200_is_a_plain_cloud_error(self):
+        self.fake.json_route("/api/v1/images", {"error": {"code": "content_policy_violation", "message": "no"}})
+        request, _rgba, _mask = inpaint_request()
+        with self.assertRaises(CloudRefused) as caught:
+            self.backend().inpaint(request)
+        self.assertIn("refused", str(caught.exception))
+
+    def test_odd_answers_are_plain_cloud_errors(self):
+        for payload in (
+            {"data": ["not-an-object"]},
+            {"data": [{"b64_json": "@@@not base64"}]},
+            {"data": {"x": 1}},
+            [1, 2, 3],
+            {"data": [{"b64_json": b64(b"GIF89a....")}]},
+        ):
+            with self.subTest(payload=payload):
+                self.fake.json_route("/api/v1/images", payload)
+                request, _rgba, _mask = inpaint_request()
+                with self.assertRaises(CloudError):
+                    self.backend().inpaint(request)
+
+    def test_unknown_content_never_reaches_the_editors_reader(self):
+        seen = []
+        eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 4 4\nshowpage\n"
+        for data in (eps, b"RIFF\x00\x00\x00\x00WAVEfmt ", b"BM" + b"\0" * 60):
+            with self.subTest(data=data[:8]):
+                self.fake.json_route("/api/v1/images", {"data": [{"b64_json": b64(data)}]})
+                request, _rgba, _mask = inpaint_request()
+                with self.assertRaises(CloudRefused):
+                    self.backend(decode=lambda d: seen.append(d)).inpaint(request)
+        self.assertEqual(seen, [])
+
+    def test_create_results_are_always_written_again_as_png(self):
+        self.fake.json_route("/api/v1/images", {"data": [{"b64_json": b64(bomb_png(20_000_000))}]})
+        with self.assertRaises(CloudRefused):
+            self.backend().txt2img(Txt2ImgRequest(512, 512, "x", "", ModelSpec(), Sampling()))
+
+    def test_picture_sizes_from_headers(self):
+        jpeg = b"\xff\xd8\xff\xe0\x00\x04ab\xff\xc0\x00\x11\x08\x01\x00\x02\x00\x03" + b"\0" * 20
+        self.assertEqual(imaging.picture_size(jpeg, "jpeg"), (512, 256))
+        lossy = b"RIFF\0\0\0\0WEBPVP8 \0\0\0\0\0\0\0\x9d\x01\x2a" + struct.pack("<HH", 640, 480) + b"\0" * 8
+        self.assertEqual(imaging.picture_size(lossy, "webp"), (640, 480))
+        extended = b"RIFF\0\0\0\0WEBPVP8X\0\0\0\0\0\0\0\0" + (99).to_bytes(3, "little") + (49).to_bytes(3, "little")
+        self.assertEqual(imaging.picture_size(extended, "webp"), (100, 50))
+        with self.assertRaises(png.PngError):
+            imaging.picture_size(b"\xff\xd8\xff", "jpeg")
+
+
+class NoteAndAddressTests(unittest.TestCase):
+    def test_note_names_the_real_host_not_a_lookalike(self):
+        self.assertIn("evilopenrouter.ai", cloud_note("openrouter", "https://evilopenrouter.ai/api/v1"))
+        self.assertIn("openrouter.ai.example.com", cloud_note("openrouter", "https://openrouter.ai.example.com/v1"))
+        self.assertEqual(
+            cloud_note("openrouter", "https://eu.openrouter.ai/api/v1"), "Cloud: your image is sent to OpenRouter."
+        )
+        self.assertEqual(destination("openai", "http://localhost:4000/v1"), "localhost:4000")
+        self.assertEqual(destination("openai", "https://LLM.Example.org:443/v1"), "llm.example.org")
+
+    def test_note_never_shows_credentials_in_the_address(self):
+        note = cloud_note("openai", "https://user:hunter2@litellm.example.com/v1")
+        self.assertNotIn("hunter2", note)
+        self.assertNotIn("user", note)
+
+    def test_credentials_in_the_address_never_reach_an_error(self):
+        backend = CloudBackend("openai", KEY, "m", "https://user:hunter2@127.0.0.1:9/v1")
+        request, _rgba, _mask = inpaint_request()
+        with self.assertRaises(CloudRefused) as caught:
+            backend.inpaint(request)
+        self.assertNotIn("hunter2", str(caught.exception))
+
+
+class KeyDestinationTests(CloudTestCase):
+    def test_saved_key_is_not_sent_to_a_new_address(self):
+        from openfill.config import Settings
+
+        s = Settings(backend="cloud")
+        s.set_cloud("openrouter", "", "", KEY)
+        self.assertTrue(s.cloud_key_usable)
+        # later: OpenAI-compatible for a LiteLLM proxy, key field left empty
+        s.set_cloud("openai", self.fake.url + "/v1", "m", "")
+        self.assertEqual(s.cloud_api_key, KEY)  # still saved, for OpenRouter only
+        self.assertFalse(s.cloud_key_usable)
+        self.assertIn("another service or address", s.cloud_key_problem())
+        self.fake.json_route("/v1/models", {"data": [{"id": "m"}]})
+        backend = CloudBackend(
+            s.cloud_provider,
+            s.cloud_api_key if s.cloud_key_usable else "",
+            s.cloud_model,
+            s.cloud_url,
+            logger=self.logger,
+            key_problem=s.cloud_key_problem(),
+        )
+        health = backend.health()
+        self.assertFalse(health.ok)
+        self.assertIn("Paste the API key for this service", health.detail)
+        self.assertEqual(self.fake.requests, [])  # nothing at all was sent there
+        s.set_cloud("openai", self.fake.url + "/v1", "m", "sk-litellm-0123456789abcdef")
+        self.assertTrue(s.cloud_key_usable)
+
+    def test_scope_is_service_scheme_host_and_port(self):
+        self.assertEqual(key_scope("openrouter"), "openrouter|https://openrouter.ai:443")
+        self.assertEqual(key_scope("openrouter", "https://OpenRouter.ai/api/v1/"), key_scope("openrouter"))
+        self.assertNotEqual(
+            key_scope("openai", "http://localhost:4000/v1"), key_scope("openai", "http://localhost:4001/v1")
+        )
+        self.assertNotEqual(
+            key_scope("openai", "https://x.example/v1"), key_scope("openrouter", "https://x.example/v1")
+        )
+        self.assertNotEqual(key_scope("openai", "http://x.example/v1"), key_scope("openai", "https://x.example/v1"))
+
+
+class OutsideSelectionTests(AppNoFallbackTests):
+    """A cloud result inserted in GIMP or PhotoCraft can only change the selection, also where
+    the image is transparent (the export is flattened over the mean colour)."""
+
+    test_cloud_fill_end_to_end_without_comfyui = None
+    test_cloud_failure_never_falls_back_to_comfyui = None
+    test_comfyui_failure_never_falls_back_to_the_cloud = None
+    test_check_backend_for_the_cloud_sends_no_picture = None
+
+    def test_transparent_pixels_near_the_selection_stay_transparent(self):
+        from openfill import geometry
+
+        self.cloud.json_route("/api/v1/images", {"data": [{"b64_json": b64(solid_png(64, 64, (255, 0, 0, 255)))}]})
+        app = self.app(backend="cloud")
+        app.server.ensure_running = lambda *a, **k: self.fail("no ComfyUI")
+        w, h = 300, 200
+        rgba = bytearray(b"\x00\x00\x00\x00" * (w * h))
+        for y in range(h):
+            for x in range(w):
+                if x < 60 or y < 20:
+                    rgba[(y * w + x) * 4 : (y * w + x + 1) * 4] = bytes((10, 200, 30, 255))
+        rgba = bytes(rgba)
+        mask = bytearray(w * h)
+        for y in range(50, 150):
+            mask[y * w + 100 : y * w + 220] = b"\xff" * 120
+        mask = bytes(mask)
+        masks = []
+
+        def export(_i, r, transparent_outside=False):
+            _png, raw = self._crop(rgba, r, 4)
+            flat = geometry.flatten_over_mean(raw)  # what gimp_io.export_region does
+            return png.encode(r.width, r.height, flat, 4), flat
+
+        def insert(image, images, rect, name, feather, temp, **kw):
+            self.inserted.append((images, rect, name))
+            masks.append((feather, kw.get("grow", 0)))
+            return []
+
+        app.io.export_region = export
+        app.io.export_selection_mask = lambda _i, r: self._crop(mask, r, 1)
+        app.io.insert_results = insert
+        app.generative_fill(FakeImage(w, h), "a red ball", "", 1, 1.0, -1, "active")
+        images, rect, _name = self.inserted[0]
+        layer = imaging.decode_png(images[0])
+        self.assertEqual(masks[0], (0.0, 0))  # the layer mask is the selection itself, not grown or feathered
+        for x, y in ((99, 100), (221, 100), (160, 49), (160, 150), (30, 100)):  # outside, transparent or not
+            lx, ly = x - rect.x, y - rect.y
+            if 0 <= lx < layer.width and 0 <= ly < layer.height:
+                self.assertEqual(layer.data[(ly * layer.width + lx) * 4 + 3], 0, (x, y))
+        lx, ly = 160 - rect.x, 100 - rect.y
+        self.assertEqual(layer.data[(ly * layer.width + lx) * 4 : (ly * layer.width + lx) * 4 + 4], b"\xff\x00\x00\xff")
 
 
 if __name__ == "__main__":

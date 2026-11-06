@@ -122,10 +122,17 @@ class GearView(tk.Frame):
         except ValueError as err:
             self.say(str(err), BAD)
             return
+        from dataclasses import replace
+
         folder = self.engine.folder.get().strip()
         backend, cloud = self.engine.backend_values()
-        if backend == "cloud" and not (cloud["cloud_api_key"] or app.settings.cloud_api_key):
-            self.say("Paste your API key for the cloud service first.", BAD)
+        if backend == self.engine.loaded_backend:
+            # not switched here: keep what is set now (the browser page may have changed it since)
+            backend = app.settings.backend
+        trial = replace(app.settings)
+        trial.set_cloud(cloud["cloud_provider"], cloud["cloud_url"], cloud["cloud_model"], cloud["cloud_api_key"])
+        if backend == "cloud" and not trial.cloud_key_usable:
+            self.say(trial.cloud_key_problem() or "Paste your API key for the cloud service first.", BAD)
             return
         try:
             if folder and folder != (app.settings.comfy_dir or ""):
@@ -134,9 +141,10 @@ class GearView(tk.Frame):
                 self.bar.service.warm_up()
             for key, value in values.items():
                 setattr(app.settings, key, value)
-            for key, value in cloud.items():
-                if key != "cloud_api_key" or value:  # an empty key field keeps the saved key
-                    setattr(app.settings, key, value)
+            # a new key is bound to this service and address; an empty field never moves the saved one
+            app.settings.set_cloud(
+                cloud["cloud_provider"], cloud["cloud_url"], cloud["cloud_model"], cloud["cloud_api_key"]
+            )
             was_cloud, app.settings.backend = app.settings.uses_cloud, backend
             app.settings.save(app.paths.config)
             app.reload_settings()
@@ -376,6 +384,7 @@ class EngineView(tk.Frame):
     def __init__(self, bar: Bar, parent: tk.Misc) -> None:
         super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
         self.bar = bar
+        self.loaded_backend = ""  # what the switch showed when the settings were loaded
         from openfill.config import BACKENDS
 
         choices = [(b.id, b.short or b.label) for b in BACKENDS if b.photocraft]
@@ -437,7 +446,15 @@ class EngineView(tk.Frame):
             entry.placeholder = text
             if not entry.get():  # only an empty field is redrawn: typing is never disturbed
                 entry.set("")
-        self.note.configure(text=cloud_note(info.id, self.url.get().strip()))
+        from openfill import ui_text
+
+        url = self.url.get().strip()
+        self.key.placeholder = ui_text.cloud_key_placeholder(
+            getattr(self, "_key_for", ""), info.id, url, getattr(self, "_has_key", False)
+        )
+        if not self.key.get():
+            self.key.set("")
+        self.note.configure(text=cloud_note(info.id, url))
 
     def _backend_picked(self, key: str) -> None:
         with ui.frozen(self.bar.root):
@@ -450,17 +467,16 @@ class EngineView(tk.Frame):
         shown.pack(fill="x", after=self.backend.master)  # under the switch, above the tools
 
     def load_backend(self, settings) -> None:
-        from openfill import ui_text
-
         backend = settings.backend if settings.backend in ("comfyui", "cloud") else "comfyui"
         self.provider.set(
             settings.cloud_provider if settings.cloud_provider in ("openrouter", "openai") else "openrouter"
         )
         self.model.set(settings.cloud_model or "")
         self.url.set(settings.cloud_url or "")
-        self.key.placeholder = ui_text.CLOUD_KEY_SAVED if settings.cloud_api_key else ui_text.CLOUD_KEY_EMPTY
+        self._has_key, self._key_for = bool(settings.cloud_api_key), settings.cloud_key_for
         self.key.set("")  # the saved key is never put on screen
         self._cloud_changed()
+        self.loaded_backend = backend
         self._show_backend(backend)
 
     def backend_values(self) -> tuple[str, dict[str, str]]:

@@ -27,10 +27,12 @@ put in an error text, and requests are never redirected to another address.
 from __future__ import annotations
 
 import base64
+import binascii
 import ipaddress
 import json
 import logging
 import math
+import socket
 import threading
 import time
 import uuid
@@ -70,6 +72,8 @@ from ..png import PngError
 MAX_SEND_SIDE = 1536
 DEFAULT_TIMEOUT = 240.0  # seconds; image models take 10 to 120 s, slower when busy
 EXPECTED_SECONDS = 30.0  # for the progress bar only
+MAX_ANSWER_BYTES = 64 * 1024 * 1024  # an answer (JSON with base64 pictures, or a picture) larger than this is refused
+MAX_VARIATIONS = 4  # each one is a separate paid picture
 PROJECT_URL = "https://github.com/beckettharriman/openfill"
 
 
@@ -116,13 +120,43 @@ def base_url(provider_id: str, url: str = "") -> str:
     return (url or provider(provider_id).base_url).strip().rstrip("/")
 
 
+def _host_port(url: str) -> tuple[str, str, int]:
+    """(scheme, host name, port) of ``url``, lowercased, without any user name or password."""
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+    try:
+        port = parsed.port or (443 if scheme == "https" else 80)
+    except ValueError:
+        port = 0
+    return scheme, host, port
+
+
+def _is_openrouter(host: str) -> bool:
+    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+
+
 def destination(provider_id: str, url: str = "") -> str:
-    """Who receives the image, in words: "OpenRouter", or the address's host."""
+    """Who receives the image, in words: "OpenRouter" (only for openrouter.ai itself), or the
+    address's host and port. Never shows a user name or password written into the address."""
     p = provider(provider_id)
     if p.name and not url:
         return p.name
-    host = urlparse(base_url(provider_id, url)).netloc or base_url(provider_id, url)
-    return p.name if p.name and host.endswith("openrouter.ai") else host
+    scheme, host, port = _host_port(base_url(provider_id, url))
+    if not host:
+        return "an address that is not valid"
+    if p.name and _is_openrouter(host):
+        return p.name
+    shown = f"[{host}]" if ":" in host else host
+    default = 443 if scheme == "https" else 80
+    return shown if port == default else f"{shown}:{port}"
+
+
+def key_scope(provider_id: str, url: str = "") -> str:
+    """What a saved API key belongs to: the service and the address it was entered for
+    (scheme, host and port). A key is only ever sent where its scope matches."""
+    scheme, host, port = _host_port(base_url(provider_id, url))
+    return f"{provider(provider_id).id}|{scheme}://{host}:{port}"
 
 
 def cloud_note(provider_id: str, url: str = "", what: str = "image") -> str:
@@ -130,26 +164,67 @@ def cloud_note(provider_id: str, url: str = "", what: str = "image") -> str:
     return f"Cloud: your {what} is sent to {destination(provider_id, url)}."
 
 
-def url_problem(url: str) -> str:
-    """Why ``url`` cannot carry an API key ("" when it can): https, or plain http only
-    to this computer or the local network."""
+def _local_ip(text: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(text.split("%", 1)[0])
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
+def _resolves_only_locally(host: str) -> bool:
+    """Every address ``host`` resolves to is on this computer or a private network."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (OSError, UnicodeError):
+        return False
+    return bool(infos) and all(_local_ip(info[4][0]) for info in infos)
+
+
+def url_problem(url: str, resolve: bool = False) -> str:
+    """Why ``url`` cannot carry an API key ("" when it can).
+
+    https, or plain http only to this computer or a private network: a literal loopback or
+    private address, ``localhost``, or (with ``resolve``, done right before a request) a name
+    whose every address is one of those. A user name or password in the address is refused.
+    """
     parsed = urlparse(url)
+    try:
+        parsed.port  # noqa: B018 - raises on a port that is not a number
+    except ValueError:
+        return "The address has a port that is not a number. It should look like https://openrouter.ai/api/v1."
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return f"'{url}' is not a web address. It should look like https://openrouter.ai/api/v1."
+        return "This is not a web address. It should look like https://openrouter.ai/api/v1."
+    if parsed.username is not None or parsed.password is not None or "@" in parsed.netloc:
+        return (
+            "The address holds a user name or password. Remove it (the part before @): OpenFill sends only "
+            "the API key, in its own header."
+        )
     if parsed.scheme == "https":
         return ""
-    host = parsed.hostname
-    try:
-        ip = ipaddress.ip_address(host)
-        local = ip.is_loopback or ip.is_private or ip.is_link_local
-    except ValueError:
-        local = host == "localhost" or "." not in host or host.endswith((".local", ".lan", ".internal", ".home.arpa"))
-    if local:
+    host = parsed.hostname.lower()
+    if host == "localhost" or _local_ip(host) or (resolve and _resolves_only_locally(host)):
         return ""
     return (
-        f"'{url}' uses plain http, which would send your API key unencrypted. Use an https address "
-        "(plain http works only for an address on this computer or your own network)."
+        f"The address {destination('openai', url)} uses plain http, which would send your API key unencrypted, "
+        "and it is not an address on this computer or your own network. Use an https address."
     )
+
+
+def _read_capped(resp: Any, where: str) -> bytes:
+    """The answer's body, refused when it is larger than ``MAX_ANSWER_BYTES``."""
+    try:
+        length = int(resp.headers.get("Content-Length") or 0)
+    except (TypeError, ValueError, AttributeError):
+        length = 0
+    if length > MAX_ANSWER_BYTES:
+        raise CloudRefused(f"{where} sent an answer of {length // (1024 * 1024)} MB, more than OpenFill accepts.")
+    raw = resp.read(MAX_ANSWER_BYTES + 1)
+    if len(raw) > MAX_ANSWER_BYTES:
+        raise CloudRefused(
+            f"{where} sent an answer larger than {MAX_ANSWER_BYTES // (1024 * 1024)} MB, more than OpenFill accepts."
+        )
+    return raw
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -163,10 +238,20 @@ def _data_url(png: bytes) -> str:
     return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
 
+def _b64(text: Any) -> bytes:
+    """Base64 from an answer; anything malformed is a ValueError."""
+    if not isinstance(text, str):
+        raise ValueError("the picture is not text")
+    try:
+        return base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("the picture's base64 is damaged") from None
+
+
 def _from_data_url(url: str) -> bytes:
-    if not url.startswith("data:"):
+    if not url.startswith("data:") or "," not in url:
         raise ValueError("not a data URL")
-    return base64.b64decode(url.split(",", 1)[1])
+    return _b64(url.split(",", 1)[1])
 
 
 def _short(text: str, limit: int = 200) -> str:
@@ -190,6 +275,7 @@ class CloudBackend(Backend):
         logger: logging.Logger | None = None,
         decode: Callable[[bytes], tuple[int, int, bytes]] | None = None,
         opener: Any = None,
+        key_problem: str = "",
     ) -> None:
         self.provider = provider(provider_id)
         self._key = api_key.strip()
@@ -203,6 +289,8 @@ class CloudBackend(Backend):
         self.where = destination(provider_id, url)
         self._progress = Progress()
         self._cancelled = threading.Event()
+        self._deadline = 0.0  # monotonic time the whole job must end by (0 = none)
+        self.key_problem = key_problem  # why the saved key is not used here (another service or address)
 
     def __repr__(self) -> str:  # the key never appears, even in a traceback's locals
         return f"CloudBackend({self.provider.id!r}, model={self.model!r}, url={self.url!r})"
@@ -220,12 +308,13 @@ class CloudBackend(Backend):
             self.log.info("cloud: " + fmt, *(self._clean(a) if isinstance(a, str) else a for a in args))
 
     def _check_ready(self) -> None:
-        problem = url_problem(self.url)
+        problem = url_problem(self.url, resolve=True)
         if problem:
             raise CloudRefused(problem + " Fix the address in the cloud settings.")
         if not self._key:
             raise CloudAuthError(
-                f"No API key is set for {self.where}. Paste your key in the cloud settings, then try again."
+                self.key_problem
+                or f"No API key is set for {self.where}. Paste your key in the cloud settings, then try again."
             )
         if not self.model:
             raise CloudRefused(
@@ -249,11 +338,15 @@ class CloudBackend(Backend):
         return headers
 
     def _send(self, method: str, path: str, body: bytes | None, content_type: str, timeout: float) -> Any:
+        if self._cancelled.is_set():  # never start a paid request after Cancel or the time limit
+            raise GenerationCancelled("cancelled before the request was sent")
+        if self._deadline:
+            timeout = min(timeout, max(0.1, self._deadline - time.monotonic()))
         req = Request(self.url + path, data=body, method=method, headers=self._headers(content_type))
         started = time.monotonic()
         try:
             with self.opener.open(req, timeout=timeout) as resp:
-                raw = resp.read()
+                raw = _read_capped(resp, self.where)
                 status = resp.status
         except HTTPError as err:
             try:
@@ -289,8 +382,15 @@ class CloudBackend(Backend):
                 f"{self.where} sent an answer OpenFill cannot read. Check the address in the cloud settings "
                 "(it should end in /v1 or /api/v1)."
             ) from None
-        if isinstance(data, dict) and isinstance(data.get("error"), dict):  # an error inside a 200 answer
-            raise self._http_error(int(data["error"].get("code") or 502), json.dumps(data), {})
+        if isinstance(data, dict) and isinstance(data.get("error"), (dict, str)):  # an error inside a 200 answer
+            code = data["error"].get("code") if isinstance(data["error"], dict) else None
+            try:
+                status = int(code)
+            except (TypeError, ValueError):
+                status = 403 if "policy" in str(code) or "moderation" in str(code) else 400
+            raise self._http_error(status, json.dumps(data), {})
+        if not isinstance(data, dict):
+            raise CloudRefused(f"{self.where} sent an answer OpenFill cannot read (not a JSON object).")
         return data
 
     def _timeout_error(self, timeout: float) -> CloudTimeout:
@@ -309,7 +409,7 @@ class CloudBackend(Backend):
                 reasons = (
                     (error.get("metadata") or {}).get("reasons") if isinstance(error.get("metadata"), dict) else None
                 )
-                if reasons:
+                if isinstance(reasons, list) and reasons:
                     message += f" ({', '.join(map(str, reasons))})"
             elif isinstance(error, str):
                 message = error
@@ -373,9 +473,15 @@ class CloudBackend(Backend):
         call: Callable[[], list[bytes]],
         progress: ProgressCallback | None,
         cancel: CancelCallback | None,
+        requests: int = 1,
     ) -> list[bytes]:
-        """``call`` in a worker thread; progress by elapsed time, Cancel stops waiting at once."""
+        """``call`` in a worker thread; progress by elapsed time. Cancel stops waiting at once and
+        stops the worker before its next request; the whole job has one deadline (the time limit
+        per request times the requests it makes), so a server that answers slowly byte by byte
+        cannot keep it waiting."""
         self._cancelled.clear()
+        limit = self.request_timeout * max(1, requests)
+        self._deadline = time.monotonic() + limit
         result: list[list[bytes]] = []
         error: list[BaseException] = []
 
@@ -391,61 +497,105 @@ class CloudBackend(Backend):
         while thread.is_alive():
             thread.join(0.25)
             if self._cancelled.is_set() or (cancel and cancel()):
+                self._cancelled.set()  # the worker sends nothing more
                 self._progress = Progress(0.0, "cancelled", False)
                 raise GenerationCancelled(
                     f"cancelled; {self.where} may still finish (and charge for) the request it already received"
                 )
             elapsed = time.monotonic() - started
+            if elapsed > limit + 1.0:
+                self._cancelled.set()
+                self._progress = Progress(0.0, "timed out", False)
+                raise self._timeout_error(limit)
             fraction = 0.05 + 0.85 * (1.0 - math.exp(-elapsed / EXPECTED_SECONDS))
             text = f"{label} {self.where} ({elapsed:.0f} s)..."
             self._progress = Progress(fraction, text, True)
             if progress:
                 progress(fraction, text)
         self._progress = Progress(1.0, "done", False)
+        self._deadline = 0.0
         if error:
             raise error[0]
         return result[0]
 
     def _image(self, data: bytes) -> imaging.Rgba:
+        """A picture from the service. Only PNG, JPEG and WebP (by their first bytes) are read,
+        and only up to ``imaging.MAX_RESULT_PIXELS``: PNG by OpenFill itself, JPEG and WebP by the
+        editor's reader limited to that one format. Anything else is refused unread."""
         kind = imaging.sniff(data)
-        if kind == "png":
-            try:
-                return imaging.decode_png(data)
-            except PngError as err:
-                if self.decode is None:
-                    raise CloudRefused(f"{self.where} sent a picture OpenFill cannot read ({err}).") from None
-        elif self.decode is None:
+        if kind not in ("png", "jpeg", "webp"):
             raise CloudRefused(
-                f"{self.where} sent a {kind.upper() or 'picture'} file, which OpenFill cannot read here. Pick a model "
-                "that returns PNG in the cloud settings."
+                f"{self.where} sent something that is not a PNG, JPEG or WebP picture. OpenFill did not open it; "
+                "pick another model in the cloud settings."
             )
         try:
-            width, height, rgba = self.decode(data)
-            return imaging.Rgba(width, height, rgba)
+            width, height = imaging.picture_size(data, kind)
+            if width * height > imaging.MAX_RESULT_PIXELS:
+                raise PngError(f"{width} x {height} pixels is larger than OpenFill accepts")
+            if kind == "png":
+                return imaging.decode_png(data, imaging.MAX_RESULT_PIXELS)
+        except PngError as err:
+            raise CloudRefused(f"{self.where} sent a picture OpenFill cannot read ({err}).") from None
+        if self.decode is None:
+            raise CloudRefused(
+                f"{self.where} sent a {kind.upper()} picture, which OpenFill cannot read here. Pick a model that "
+                "returns PNG in the cloud settings."
+            )
+        try:
+            got_w, got_h, rgba = self.decode(data)
         except Exception as err:  # noqa: BLE001 - said in plain words
             raise CloudRefused(f"{self.where} sent a picture OpenFill cannot read ({self._clean(err)}).") from None
+        if (got_w, got_h) != (width, height) or len(rgba) != width * height * 4:
+            raise CloudRefused(f"{self.where} sent a picture OpenFill cannot read (its size does not add up).")
+        return imaging.Rgba(width, height, rgba)
 
     # provider calls ----------------------------------------------------------------
 
+    def _malformed(self, why: str) -> CloudRefused:
+        return CloudRefused(
+            f"{self.where} sent an answer OpenFill cannot read ({why}). Nothing was changed in your image; try "
+            "again or pick another model in the cloud settings."
+        )
+
     def _collect(self, data: Any) -> list[bytes]:
         """Image bytes from an images API answer (``data[].b64_json`` or ``data[].url``)."""
+        items = data.get("data") if isinstance(data, dict) else None
+        if items is None:
+            return []
+        if not isinstance(items, list):
+            raise self._malformed("its data is not a list")
         out = []
-        for item in (data or {}).get("data") or []:
-            if item.get("b64_json"):
-                out.append(base64.b64decode(item["b64_json"]))
-            elif str(item.get("url", "")).startswith("data:"):
-                out.append(_from_data_url(item["url"]))
-            elif item.get("url"):
-                out.append(self._download(str(item["url"])))
+        for item in items:
+            if not isinstance(item, dict):
+                raise self._malformed("a picture entry is not an object")
+            try:
+                if item.get("b64_json"):
+                    out.append(_b64(item["b64_json"]))
+                elif str(item.get("url", "")).startswith("data:"):
+                    out.append(_from_data_url(str(item["url"])))
+                elif item.get("url"):
+                    out.append(self._download(str(item["url"])))
+            except ValueError as err:
+                raise self._malformed(str(err)) from None
         return out
 
     def _download(self, url: str) -> bytes:
-        """A result the service left at a URL (never sent the key: it is another address)."""
-        if urlparse(url).scheme != "https":
+        """A result the service left at a URL: https only, never redirected, at most
+        ``MAX_ANSWER_BYTES``, and never sent the key (it is another address)."""
+        if urlparse(url).scheme != "https" or url_problem(url):
             raise CloudRefused(f"{self.where} returned the picture at an address OpenFill does not trust.")
+        if self._cancelled.is_set():
+            raise GenerationCancelled("cancelled before the download")
+        timeout = 60.0 if not self._deadline else min(60.0, max(0.1, self._deadline - time.monotonic()))
         try:
-            with build_opener().open(Request(url, headers={"User-Agent": f"OpenFill/{__version__}"}), timeout=60) as r:
-                return r.read()
+            request = Request(url, headers={"User-Agent": f"OpenFill/{__version__}"})
+            with build_opener(_NoRedirect).open(request, timeout=timeout) as r:
+                return _read_capped(r, self.where)
+        except HTTPError as err:
+            err.close()
+            raise CloudUnreachable(
+                f"The picture from {self.where} could not be downloaded (HTTP {err.code}). Try again."
+            ) from None
         except (OSError, URLError) as err:
             raise CloudUnreachable(
                 f"The picture from {self.where} could not be downloaded ({self._clean(err)})."
@@ -455,29 +605,52 @@ class CloudBackend(Backend):
         refs = [{"type": "image_url", "image_url": {"url": _data_url(png)}} for png in inputs]
         if self.api == "chat":
             images: list[bytes] = []
-            for _ in range(count):
+            for index in range(count):
+                if self._cancelled.is_set():  # Cancel or the time limit: no further paid request
+                    break
                 body = {
                     "model": self.model,
                     "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}, *refs]}],
                     "modalities": ["image", "text"],
                     "image_config": {"aspect_ratio": ratio},
                 }
-                data = self._send(
-                    "POST", "/chat/completions", json.dumps(body).encode(), "application/json", self.request_timeout
-                )
-                for choice in data.get("choices") or []:
-                    for img in (choice.get("message") or {}).get("images") or []:
-                        url = str((img.get("image_url") or {}).get("url", ""))
-                        if url.startswith("data:"):
-                            images.append(_from_data_url(url))
-                        elif url:
-                            images.append(self._download(url))
+                try:
+                    data = self._send(
+                        "POST", "/chat/completions", json.dumps(body).encode(), "application/json", self.request_timeout
+                    )
+                    images += self._chat_images(data)
+                except CloudError as err:
+                    if not images:
+                        raise
+                    # the pictures already received are paid for: keep them
+                    self._info("variation %d of %d failed, keeping %d: %s", index + 1, count, len(images), str(err))
+                    break
             return images
         body: dict[str, Any] = {"model": self.model, "prompt": prompt, "n": count, "aspect_ratio": ratio}
         if refs:
             body["input_references"] = refs
         data = self._send("POST", "/images", json.dumps(body).encode(), "application/json", self.request_timeout)
         return self._collect(data)
+
+    def _chat_images(self, data: dict) -> list[bytes]:
+        out = []
+        choices = data.get("choices") or []
+        if not isinstance(choices, list):
+            raise self._malformed("its choices are not a list")
+        for choice in choices:
+            message = choice.get("message") if isinstance(choice, dict) else None
+            images = message.get("images") if isinstance(message, dict) else None
+            for img in images if isinstance(images, list) else []:
+                ref = img.get("image_url") if isinstance(img, dict) else None
+                url = str(ref.get("url", "")) if isinstance(ref, dict) else ""
+                try:
+                    if url.startswith("data:"):
+                        out.append(_from_data_url(url))
+                    elif url:
+                        out.append(self._download(url))
+                except ValueError as err:
+                    raise self._malformed(str(err)) from None
+        return out
 
     def _openai_edit(self, prompt: str, image: bytes, mask: bytes, ratio: str, count: int) -> list[bytes]:
         boundary = "openfill-" + uuid.uuid4().hex
@@ -543,14 +716,15 @@ class CloudBackend(Backend):
             self._check_ready()
             if self.provider.id == "openrouter":
                 data = self._send("GET", "/key", None, "", 20)
-                info = data.get("data") or {}
+                info = data.get("data") if isinstance(data.get("data"), dict) else {}
                 left = info.get("limit_remaining")
                 credit = f", {left:.2f} credits left on this key" if isinstance(left, (int, float)) else ""
                 return HealthStatus(
                     True, f"{self.where} accepted the key{credit}. Model: {self.model}", device_kind="cloud"
                 )
             data = self._send("GET", "/models", None, "", 20)
-            ids = [str(m.get("id")) for m in (data.get("data") or []) if isinstance(m, dict)]
+            listed = data.get("data") if isinstance(data.get("data"), list) else []
+            ids = [str(m.get("id")) for m in listed if isinstance(m, dict)]
             known = "" if not ids or self.model in ids else f" (it does not list {self.model}; check the model name)"
             return HealthStatus(True, f"{self.where} accepted the key{known}. Model: {self.model}", device_kind="cloud")
         except CloudError as err:
@@ -587,7 +761,7 @@ class CloudBackend(Backend):
         true_mask = self.provider.id == "openai"
         mode = request.mode if request.mode in ("remove", "expand") else "fill"
         prompt = self.instruction(mode, request.prompt, request.negative, true_mask)
-        count = max(1, min(4, int(request.sampling.batch)))
+        count = max(1, min(MAX_VARIATIONS, int(request.sampling.batch)))
         self._info(
             "%s via %s %s, model %s: context %dx%d sent as %dx%d (ratio %s, 1/%d), %d variation(s)",
             mode,
@@ -611,7 +785,7 @@ class CloudBackend(Backend):
             call = lambda: self._openrouter(prompt, [image_png, mask_png], pad.ratio, count)  # noqa: E731
         if progress:
             progress(0.02, f"Sending the picture to {self.where}...")
-        raw = self._run("Waiting for", call, progress, cancel)
+        raw = self._run("Waiting for", call, progress, cancel, count if self.api == "chat" and not true_mask else 1)
         if not raw:
             raise CloudRefused(
                 f"{self.where} answered without a picture. The model may not make images, or it declined this one; "
@@ -623,7 +797,7 @@ class CloudBackend(Backend):
             generated = self._image(data)
             sx, sy = generated.width / pad.width, generated.height / pad.height
             source = (pad.left * sx, pad.top * sy, w / factor * sx, h / factor * sy)
-            images.append(imaging.composite(original, generated, mask, source, feather).png())
+            images.append(imaging.overlay(generated, mask, w, h, source, feather).png())
         if progress:
             progress(1.0, "Done")
         return GenerationResult(
@@ -640,7 +814,7 @@ class CloudBackend(Backend):
         """Create: the prompt only; the picture comes back at the service's size for the nearest ratio."""
         self._check_ready()
         ratio = imaging.nearest_ratio(max(1, request.width), max(1, request.height), self.provider.ratios)
-        count = max(1, min(4, int(request.sampling.batch)))
+        count = max(1, min(MAX_VARIATIONS, int(request.sampling.batch)))
         prompt = request.prompt.strip() + (f" Avoid: {request.negative.strip()}." if request.negative.strip() else "")
         self._info("create via %s, model %s: ratio %s, %d variation(s)", self.provider.id, self.model, ratio, count)
         if self.provider.id == "openai":
@@ -649,10 +823,13 @@ class CloudBackend(Backend):
             call = lambda: self._openrouter(prompt, [], ratio, count)  # noqa: E731
         if progress:
             progress(0.02, f"Sending the prompt to {self.where}...")
-        raw = self._run("Waiting for", call, progress, cancel)
+        raw = self._run(
+            "Waiting for", call, progress, cancel, count if self.api == "chat" and self.provider.id != "openai" else 1
+        )
         if not raw:
             raise CloudRefused(f"{self.where} answered without a picture. Try another prompt or model.")
-        images = [data if imaging.sniff(data) == "png" else self._image(data).png() for data in raw]
+        # always read and written again here: the editor only ever gets a PNG OpenFill made itself
+        images = [self._image(data).png() for data in raw]
         return GenerationResult(
             images, seed_or_random(-1), {"backend": self.name, "provider": self.provider.id, "model": self.model}
         )

@@ -16,9 +16,13 @@ import struct
 import zlib
 from dataclasses import dataclass
 
-from .png import PngError, encode
+from .png import PngError, encode, read_header
 
 _SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# Largest picture accepted from a cloud service (they return about 1 to 4 megapixels).
+MAX_RESULT_PIXELS = 25_000_000
+# Largest picture decoded at all (OpenFill's own context crops can be big).
+MAX_PIXELS = 100_000_000
 
 
 @dataclass(frozen=True)
@@ -99,8 +103,11 @@ def _unpack_bits(row: bytes, depth: int, count: int) -> list[int]:
     return values[:count]
 
 
-def decode_png(data: bytes) -> Rgba:
-    """Decode a non-interlaced PNG of any colour type to 8-bit RGBA."""
+def decode_png(data: bytes, max_pixels: int = MAX_PIXELS) -> Rgba:
+    """Decode a non-interlaced PNG of any colour type to 8-bit RGBA.
+
+    At most ``max_pixels`` pixels, and the compressed data may not inflate to more than its
+    header says: a small file that would unpack to gigabytes is refused before that happens."""
     if not data.startswith(_SIGNATURE):
         raise PngError("not a PNG file")
     pos = len(_SIGNATURE)
@@ -130,14 +137,19 @@ def decode_png(data: bytes) -> Rgba:
     channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(color)
     if channels is None or depth not in (1, 2, 4, 8, 16):
         raise PngError(f"unsupported PNG type (colour {color}, depth {depth})")
-    if width <= 0 or height <= 0 or width * height > 100_000_000:
+    if width <= 0 or height <= 0 or width * height > max_pixels:
         raise PngError(f"unsupported PNG size {width}x{height}")
     bits = channels * depth
     stride = (width * bits + 7) // 8
+    expected = (stride + 1) * height
+    inflater = zlib.decompressobj()
     try:
-        raw = zlib.decompress(b"".join(idat))
+        raw = inflater.decompress(b"".join(idat), expected + 1)
+        more = inflater.unconsumed_tail and inflater.decompress(inflater.unconsumed_tail, 1)
     except zlib.error as err:
-        raise PngError(f"damaged PNG data: {err}") from err
+        raise PngError(f"damaged PNG data: {err}") from None
+    if len(raw) > expected or more:
+        raise PngError("PNG data is larger than its size says")
     pixels = _unfilter(raw, stride, height, max(1, bits // 8))
     if depth == 16:  # keep the high byte of each sample
         pixels = pixels[0::2]
@@ -186,6 +198,44 @@ def decode_png(data: bytes) -> Rgba:
         return Rgba(width, height, b"".join(table[v] for v in values))
     except IndexError:
         raise PngError("palette index out of range") from None
+
+
+def picture_size(data: bytes, kind: str) -> tuple[int, int]:
+    """(width, height) from the header of a PNG, JPEG or WebP, read without decoding it."""
+    try:
+        if kind == "png":
+            width, height, _depth, _color = read_header(data)
+            return width, height
+        if kind == "jpeg":
+            i = 2
+            while i + 9 < len(data):
+                if data[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = data[i + 1]
+                if marker in (0xFF, 0x01) or 0xD0 <= marker <= 0xD7:
+                    i += 1 if marker == 0xFF else 2
+                    continue
+                length = struct.unpack(">H", data[i + 2 : i + 4])[0]
+                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                    height, width = struct.unpack(">HH", data[i + 5 : i + 9])
+                    if width and height:
+                        return width, height
+                    break
+                i += 2 + length
+        elif kind == "webp":
+            chunk = data[12:16]
+            if chunk == b"VP8 " and data[23:26] == b"\x9d\x01\x2a":
+                width, height = struct.unpack("<HH", data[26:30])
+                return width & 0x3FFF, height & 0x3FFF
+            if chunk == b"VP8L" and data[20] == 0x2F:
+                b0, b1, b2, b3 = data[21:25]
+                return 1 + (b0 | (b1 & 0x3F) << 8), 1 + (b1 >> 6 | b2 << 2 | (b3 & 0x0F) << 10)
+            if chunk == b"VP8X":
+                return 1 + int.from_bytes(data[24:27], "little"), 1 + int.from_bytes(data[27:30], "little")
+    except (struct.error, IndexError, ValueError, PngError):
+        pass
+    raise PngError(f"the {kind.upper()} picture's size cannot be read")
 
 
 def to_rgba(width: int, height: int, data: bytes, channels: int) -> Rgba:
@@ -315,11 +365,18 @@ def edit_mask_png(mask: bytes, width: int, height: int) -> bytes:
 
 def _inside_distance(mask: bytes, width: int, height: int, box: tuple[int, int, int, int], cap: int) -> list[int]:
     """Chessboard distance (at most ``cap``) from each pixel of ``box`` to the nearest
-    unselected pixel; 0 for unselected pixels. Every pixel outside ``box`` is unselected."""
+    unselected pixel; 0 for unselected pixels. Every pixel outside ``box`` but inside the
+    picture is unselected. Past the picture's own edge nothing is unselected: a selection
+    that reaches the edge (or Expand's new canvas) stays solid there instead of fading out."""
     x0, y0, x1, y1 = box
-    gw = x1 - x0 + 2  # one unselected pixel of border all round
+    gw = x1 - x0 + 2  # one pixel of border all round
     gh = y1 - y0 + 2
     d = [0] * (gw * gh)
+    for gy in range(gh):
+        for gx in range(gw) if gy in (0, gh - 1) else (0, gw - 1):
+            px, py = x0 - 1 + gx, y0 - 1 + gy
+            if not (0 <= px < width and 0 <= py < height):
+                d[gy * gw + gx] = cap
     for y in range(y0, y1):
         row = y * width
         base = (y - y0 + 1) * gw + 1
@@ -352,6 +409,24 @@ def mask_box(mask: bytes, width: int, height: int) -> tuple[int, int, int, int] 
     return x0, ys[0], x1, ys[-1] + 1
 
 
+def overlay(
+    generated: Rgba,
+    mask: bytes,
+    width: int,
+    height: int,
+    source: tuple[float, float, float, float],
+    feather: int = 4,
+) -> Rgba:
+    """A layer of ``width`` x ``height`` that holds ``generated`` inside the selection only.
+
+    Every pixel the mask does not select (below 128) is fully transparent, so the layer can
+    change nothing outside the selection, whatever lies under it (transparency, 16-bit or
+    float pixels). Within ``feather`` pixels of the selection's edge the layer fades in, so
+    the edge does not show as a hard line. ``source`` is as in :func:`composite`.
+    """
+    return _paint(None, generated, mask, width, height, source, feather)
+
+
 def composite(
     original: Rgba,
     generated: Rgba,
@@ -359,19 +434,28 @@ def composite(
     source: tuple[float, float, float, float],
     feather: int = 4,
 ) -> Rgba:
-    """``original`` with the selected pixels taken from ``generated``.
+    """``original`` with the selected pixels taken from ``generated`` (the same blend as
+    :func:`overlay` placed over ``original``); every unselected pixel is copied unchanged.
 
-    ``mask`` has one byte per pixel of ``original``; only pixels at 128 or more are
-    selected, and every other pixel is copied unchanged. ``source`` is the rectangle
-    (x, y, width, height) of ``generated`` that shows ``original``: the result is
-    sampled from it with bilinear filtering, whatever size the service returned.
-    Within ``feather`` pixels of the selection's edge the two are blended, inside
-    the selection, so the edge does not show as a hard line.
+    ``source`` is the rectangle (x, y, width, height) of ``generated`` that shows the
+    picture: the result is sampled from it with bilinear filtering, whatever size the
+    service returned.
     """
-    w, h = original.width, original.height
+    return _paint(original, generated, mask, original.width, original.height, source, feather)
+
+
+def _paint(
+    original: Rgba | None,
+    generated: Rgba,
+    mask: bytes,
+    w: int,
+    h: int,
+    source: tuple[float, float, float, float],
+    feather: int,
+) -> Rgba:
     if len(mask) != w * h:
         raise PngError(f"mask has {len(mask)} bytes, expected {w * h}")
-    out = bytearray(original.data)
+    out = bytearray(original.data) if original is not None else bytearray(w * h * 4)
     box = mask_box(mask, w, h)
     if box is None:
         return Rgba(w, h, bytes(out))
@@ -415,6 +499,12 @@ def composite(
                 out[i + 3] = 255
                 continue
             alpha = d / feather
+            if original is None:  # a layer: the colour as generated, fading in by its alpha
+                out[i] = int(row[a] + (row[b] - row[a]) * tx + 0.5)
+                out[i + 1] = int(row[a + 1] + (row[b + 1] - row[a + 1]) * tx + 0.5)
+                out[i + 2] = int(row[a + 2] + (row[b + 2] - row[a + 2]) * tx + 0.5)
+                out[i + 3] = int(255 * alpha + 0.5)
+                continue
             for k in range(3):
                 value = row[a + k] + (row[b + k] - row[a + k]) * tx
                 out[i + k] = int(out[i + k] + (value - out[i + k]) * alpha + 0.5)
