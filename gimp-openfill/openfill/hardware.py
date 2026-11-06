@@ -602,6 +602,26 @@ def amd_build_support(name: str | None) -> str:
     return "unknown"
 
 
+# -------------------------------------------------------------- Intel ----
+# PyTorch's builds for Intel graphics (XPU, which ComfyUI's Windows build for Intel uses)
+# list Arc discrete cards (A and B series) and Core Ultra chips with Arc graphics. Their
+# names all say "Arc". Older built-in graphics (UHD, Iris Xe, HD) are not on that list.
+_INTEL_BUILD_YES = re.compile(r"\barc\b")
+_INTEL_BUILD_NO = re.compile(r"\buhd\b|\biris\b|\bhd\s*graphics\b|\bhd\s*\d{3,4}\b")
+
+
+def intel_build_support(name: str | None) -> str:
+    """Whether PyTorch's build for Intel graphics lists the Intel chip called ``name``:
+    ``yes`` (Arc A and B series, Core Ultra with Arc graphics), ``no`` (UHD, Iris Xe, HD
+    graphics) or ``unknown`` (a name that does not say, such as "Intel(R) Graphics")."""
+    low = (name or "").lower()
+    if _INTEL_BUILD_YES.search(low):
+        return "yes"
+    if _INTEL_BUILD_NO.search(low):
+        return "no"
+    return "unknown"
+
+
 KFD_NODES = Path("/sys/class/kfd/kfd/topology/nodes")
 
 
@@ -626,14 +646,45 @@ def amd_gfx_targets(root: Path = KFD_NODES) -> list[int]:
     return out
 
 
+def gfx_name(target: int) -> str:
+    """``gfx1031`` for the ``gfx_target_version`` 100301 (major, minor, then the stepping in hex)."""
+    return f"gfx{target // 10000}{(target // 100) % 100}{target % 100:x}"
+
+
+_DEVICE_WHEEL = re.compile(r"^amd_torch_device_(gfx[0-9a-f]+)-", re.IGNORECASE)
+
+
+def rocm_native_kernels(python: str | Path | None) -> set[str]:
+    """The AMD cards (``gfx1031``...) whose own kernels are installed in the venv of the
+    ComfyUI ``python`` (Linux): AMD's multi-architecture PyTorch puts each card's kernels in
+    an ``amd_torch_device_gfx*`` package. Empty for PyTorch from pytorch.org or when unknown."""
+    if not python:
+        return set()
+    venv = Path(python).parent.parent  # venv/bin/python; not resolved, the venv's python is a link
+    found = set()
+    try:
+        for info in venv.glob("lib/python3*/site-packages/amd_torch_device_gfx*.dist-info"):
+            m = _DEVICE_WHEEL.match(info.name)
+            if m:
+                found.add(m.group(1).lower())
+    except OSError:
+        return set()
+    return found
+
+
 def rocm_env(
-    targets: list[int] | None = None, environ: dict[str, str] | None = None, platform_name: str = sys.platform
+    targets: list[int] | None = None,
+    environ: dict[str, str] | None = None,
+    platform_name: str = sys.platform,
+    native: set[str] | None = None,
 ) -> dict[str, str]:
     """Environment ComfyUI needs on Linux for an AMD card that PyTorch's ROCm build has no
     code for, as ComfyUI's README says: ``HSA_OVERRIDE_GFX_VERSION=10.3.0`` for the RDNA 2
     cards other than the RX 6800 and 6900 (gfx1031 to gfx1036, such as the RX 6700 and 6600),
     ``11.0.0`` for the Radeon 780M and 760M (gfx1103). Empty when it is not needed, when the
-    user set it already, or when the cards would need different values."""
+    user set it already, when the cards would need different values, or when ``native``
+    (:func:`rocm_native_kernels`) shows the venv has the card's own kernels: then the
+    override would point PyTorch at kernels that may not be installed."""
     if not platform_name.startswith("linux"):
         return {}
     environ = os.environ if environ is None else environ
@@ -641,6 +692,8 @@ def rocm_env(
         return {}
     targets = amd_gfx_targets() if targets is None else targets
     if not targets:
+        return {}
+    if native and all(gfx_name(t) in native for t in targets):
         return {}
     families = {t // 100 for t in targets}  # 1003 (gfx103x), 1100 (gfx110x)...
     if len(families) != 1:

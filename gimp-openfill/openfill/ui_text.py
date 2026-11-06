@@ -562,8 +562,9 @@ def cpu_backend_message(flags: str) -> str:
         "supported graphics card"
         if flags
         else "because its PyTorch cannot use your graphics card (an AMD card needs PyTorch for ROCm: on Windows "
-        "Download ComfyUI gets ComfyUI's version for AMD cards for a Radeon RX 7000 or newer; an Intel card or an "
-        "older Radeon needs ComfyUI's own instructions for that card)"
+        "Download ComfyUI gets ComfyUI's version for AMD cards for a Radeon RX 7000 or newer, and its version for "
+        "Intel for Intel Arc graphics; on Linux Intel Arc needs PyTorch for Intel (XPU); an older Radeon needs "
+        "ComfyUI's own instructions for that card)"
     )
     return (
         f"ComfyUI is running on the processor, not the graphics card, {why}. Every generation will be many "

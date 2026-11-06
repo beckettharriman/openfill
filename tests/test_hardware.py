@@ -323,6 +323,26 @@ class AdapterTests(unittest.TestCase):
         self.assertIsNone(hwmod.pick_adapter([hwmod.Adapter("", "Mystery", 4 * GB, "dxgi")]))
         self.assertIsNone(hwmod.pick_adapter(None))
 
+    def test_intel_build_support(self):
+        # Names as Windows (DXGI) and Linux (pci.ids) give them.
+        for name in (
+            "Intel(R) Arc(TM) A770 Graphics",
+            "Intel(R) Arc(TM) B580 Graphics",
+            "Intel(R) Arc(TM) Graphics",  # Core Ultra (Meteor Lake)
+            "Intel(R) Arc(TM) 140V GPU (16GB)",  # Lunar Lake
+            "Intel(R) Arc(TM) B390 GPU",  # Panther Lake
+            "DG2 [Arc A770]",
+            "Battlemage G21 [Arc B580]",
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(hwmod.intel_build_support(name), "yes")
+        for name in ("Intel(R) UHD Graphics 770", "Intel(R) Iris(R) Xe Graphics", "Intel(R) HD Graphics 620"):
+            with self.subTest(name=name):
+                self.assertEqual(hwmod.intel_build_support(name), "no")
+        for name in ("Intel(R) Graphics", "", None, "Research Graphics"):
+            with self.subTest(name=name):
+                self.assertEqual(hwmod.intel_build_support(name), "unknown")
+
     def test_registry_uses_the_64_bit_memory_size(self):
         keys = [
             {
@@ -538,6 +558,43 @@ class RocmEnvTests(unittest.TestCase):
         self.assertEqual(hwmod.rocm_env([100301], {"HSA_OVERRIDE_GFX_VERSION": "10.3.1"}, "linux"), {})
         self.assertEqual(hwmod.rocm_env([100301, 110000], {}, "linux"), {})  # two kinds of card: leave it
         self.assertEqual(hwmod.rocm_env([100301], {}, "win32"), {})
+
+    def test_gfx_name(self):
+        self.assertEqual(hwmod.gfx_name(100301), "gfx1031")
+        self.assertEqual(hwmod.gfx_name(100302), "gfx1032")
+        self.assertEqual(hwmod.gfx_name(110003), "gfx1103")
+        self.assertEqual(hwmod.gfx_name(120001), "gfx1201")
+        self.assertEqual(hwmod.gfx_name(90010), "gfx90a")
+
+    def test_no_override_when_amds_own_kernels_for_the_card_are_installed(self):
+        # AMD's multi-architecture PyTorch (torch[device-gfx1031]) runs an RX 6700 XT natively; forcing
+        # 10.3.0 would ask for gfx1030 kernels that a device-gfx1031-only install does not have.
+        self.assertEqual(hwmod.rocm_env([100301], {}, "linux", native={"gfx1031"}), {})
+        self.assertEqual(hwmod.rocm_env([100302], {}, "linux", native={"gfx1030", "gfx1031", "gfx1032"}), {})
+        # Kernels for another card do not count: the override still applies.
+        self.assertEqual(
+            hwmod.rocm_env([100302], {}, "linux", native={"gfx1031"}), {"HSA_OVERRIDE_GFX_VERSION": "10.3.0"}
+        )
+        self.assertEqual(hwmod.rocm_env([100301], {}, "linux", native=set()), {"HSA_OVERRIDE_GFX_VERSION": "10.3.0"})
+
+    def test_rocm_native_kernels_reads_the_venv(self):
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as d:
+            venv = Path(d) / "venv"
+            site = venv / "lib" / "python3.13" / "site-packages"
+            site.mkdir(parents=True)
+            (venv / "bin").mkdir()
+            (site / "amd_torch_device_gfx1031-2.14.0+rocm10.1.0.dist-info").mkdir()
+            (site / "amd_torch_device_gfx1100-2.14.0+rocm10.1.0.dist-info").mkdir()
+            (site / "torch-2.14.0+rocm10.1.0.dist-info").mkdir()
+            self.assertEqual(hwmod.rocm_native_kernels(venv / "bin" / "python"), {"gfx1031", "gfx1100"})
+            plain = Path(d) / "plain"
+            (plain / "lib" / "python3.12" / "site-packages" / "torch-2.10.0+rocm7.2.dist-info").mkdir(parents=True)
+            self.assertEqual(hwmod.rocm_native_kernels(plain / "bin" / "python"), set())
+        self.assertEqual(hwmod.rocm_native_kernels(""), set())
+        self.assertEqual(hwmod.rocm_native_kernels(None), set())
+        self.assertEqual(hwmod.rocm_native_kernels("/nonexistent/venv/bin/python"), set())
 
     def test_reads_the_kfd_topology(self):
         from pathlib import Path

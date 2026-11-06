@@ -86,6 +86,8 @@ def download_button_label(manifest: comfy_setup.SetupManifest, pre: comfy_setup.
         return f"Download ComfyUI anyway ({size}, very slow without an NVIDIA card)"
     if pre.amd_build:
         return f"Download ComfyUI for AMD ({size})"
+    if pre.intel_build:
+        return f"Download ComfyUI for Intel ({size})"
     return f"Download ComfyUI ({size})"
 
 
@@ -169,11 +171,13 @@ class _Notice(Gtk.Dialog):
             self.refresh()
 
 
-def _download_with_progress(app: App, install_dir: Path, cpu: bool, older_gpu: bool = False, amd: bool = False) -> bool:
+def _download_with_progress(
+    app: App, install_dir: Path, cpu: bool, older_gpu: bool = False, amd: bool = False, intel: bool = False
+) -> bool:
     """Queue the setup task and show its progress until it ends. True when ComfyUI is ready."""
     from .progress_window import ProgressWindow
 
-    task_id = app.queue_comfy_setup(install_dir, cpu, older_gpu, amd)
+    task_id = app.queue_comfy_setup(install_dir, cpu, older_gpu, amd, intel)
     win = ProgressWindow(
         "Setting up ComfyUI",
         "",
@@ -247,10 +251,11 @@ def ensure_comfy(app: App, message: str = "", parent: Gtk.Window | None = None) 
         install_dir, cpu = dialog.install_dir, bool(dialog.pre and dialog.pre.needs_cpu_choice)
         older_gpu = bool(dialog.pre and dialog.pre.older_gpu)
         amd = bool(dialog.pre and dialog.pre.amd_build)
+        intel = bool(dialog.pre and dialog.pre.intel_build)
         found = dialog.found
         dialog.destroy()
         if answer == RESP_DOWNLOAD:
-            return _download_with_progress(app, install_dir, cpu, older_gpu, amd)
+            return _download_with_progress(app, install_dir, cpu, older_gpu, amd, intel)
         if answer == RESP_USE_FOUND and found:
             try:
                 app.use_comfy_dir(str(found[0].path))

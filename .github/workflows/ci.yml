@@ -44,7 +44,7 @@ jobs:
           python -m unittest photocraft/tests/test_companion.py -v
 
   comfy-archives:
-    # Every ComfyUI archive Download ComfyUI can fetch (NVIDIA, older NVIDIA cards, AMD)
+    # Every ComfyUI archive Download ComfyUI can fetch (NVIDIA, older NVIDIA cards, AMD, Intel)
     # still answers at its pinned URL with its pinned size. HEAD requests only.
     runs-on: ubuntu-latest
     steps:

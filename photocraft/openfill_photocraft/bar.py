@@ -28,7 +28,7 @@ from PIL import Image, ImageDraw
 
 from . import ui
 from .menu import Watcher
-from .modelinfo import choose_card_line, download_card_line, hardware_line, needed_by
+from .modelinfo import choose_card_line, comfy_help_url, download_card_line, hardware_line, needed_by
 from .service import Service
 from .ui import ACCENT, BAD, BG, CW, DIM, LABEL_W, LINE, OK, PAD, PANEL, TEXT, WARN, W, photo
 
@@ -1226,9 +1226,8 @@ class Bar:
         threading.Thread(target=work, name="openfill-setup", daemon=True).start()
 
     def _comfy_help(self) -> None:
-        amd = (self.refresher.get() or {}).get("gpu_vendor") == "amd"
-        anchor = "amd-graphics-cards" if amd else "openfill-for-photocraft"
-        webbrowser.open(f"https://github.com/beckettharriman/openfill/blob/main/docs/install.md#{anchor}")
+        vendor = (self.refresher.get() or {}).get("gpu_vendor")
+        webbrowser.open(comfy_help_url(vendor))
 
     # updates ----------------------------------------------------------------------
 
@@ -1403,7 +1402,9 @@ class Bar:
                 ),
             )
         elif facts and not facts.get("comfy_ok", True):
-            line = choose_card_line(facts.get("gpu_vendor") == "amd" and sys.platform != "win32")
+            linux = sys.platform != "win32"
+            vendor = facts.get("gpu_vendor")
+            line = choose_card_line(vendor == "amd" and linux, vendor == "intel" and linux)
             if pre.get("blocked") and pre.get("text"):
                 line = pre["text"] + " " + line
             key = (
