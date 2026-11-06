@@ -35,6 +35,16 @@
         "sha256": "19be1e3c8690c4f9eeefb0f2ee8f835a98e2fbf33cd9b80d0ca309f4c86d37c1"
       }
     },
+    "intel": {
+      "note": "ComfyUI's build for Intel graphics from the same release (Python 3.13.14, PyTorch 2.14.0+xpu, started by run_intel_gpu.bat with the same main.py line as the NVIDIA build). PyTorch XPU lists Intel Arc A and B series cards and Core Ultra chips with Arc graphics. Size and unpacked size checked on the downloaded archive on 2026-11-06.",
+      "unpacked_bytes": 5313461686,
+      "asset": {
+        "name": "ComfyUI_windows_portable_intel.7z",
+        "url": "https://github.com/comfyanonymous/ComfyUI/releases/download/v0.39.0/ComfyUI_windows_portable_intel.7z",
+        "size": 1436509991,
+        "sha256": "50f629c3743b1fb64509d8e582ae30b06105d9614587a514e79ac9f3c3f62939"
+      }
+    },
     "amd_instructions": "https://github.com/comfyanonymous/ComfyUI#amd-gpus-windows-rocm-100"
   },
   "nodes": [

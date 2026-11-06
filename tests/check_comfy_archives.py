@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Network check (not a unit test): every ComfyUI archive Download ComfyUI can fetch
-(the NVIDIA build, the one for older NVIDIA cards and the one for AMD cards) answers
-at its pinned URL with its pinned size.
+(the NVIDIA build, the one for older NVIDIA cards, and the ones for AMD cards and Intel
+graphics) answers at its pinned URL with its pinned size.
 
     python tests/check_comfy_archives.py
 """
@@ -31,7 +31,12 @@ def head(url: str) -> tuple[int | None, int | None]:
 def main() -> int:
     m = load_manifest(Path(__file__).resolve().parent.parent / "models" / "comfy_setup.json")
     bad = 0
-    for label, chosen in (("nvidia", m), ("older nvidia", m.for_older_gpus()), ("amd", m.for_amd())):
+    for label, chosen in (
+        ("nvidia", m),
+        ("older nvidia", m.for_older_gpus()),
+        ("amd", m.for_amd()),
+        ("intel", m.for_intel()),
+    ):
         status, size = head(chosen.archive_url)
         ok = status == 200 and size == chosen.archive_size
         bad += not ok

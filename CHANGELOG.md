@@ -15,6 +15,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Document downloads, model sizes, existing-engine limits and tested Mac setup.
 - Reuse the FLUX text encoders and VAE already in ComfyUI for your own FLUX.1 Fill file, under other names, formats or the `text_encoders` folder, instead of downloading them again (#8).
 - When the ComfyUI OpenFill started crashes or closes during a job, report it right away instead of after 90 seconds.
+- Intel Arc graphics, untested: I don't have an Intel card. On Windows,
+  Download ComfyUI gets ComfyUI's own version for Intel
+  (`ComfyUI_windows_portable_intel.7z`, PyTorch 2.14 for Intel XPU) for an
+  Arc A or B series card or a Core Ultra chip with Arc graphics, including
+  Panther Lake. It comes from the same ComfyUI release and is checked
+  against its size and SHA-256. Only chips whose name says Arc get it;
+  older Intel graphics (UHD, Iris Xe) and ones named just "Intel(R)
+  Graphics" keep the slow processor route, which is known to work. On
+  Linux the setup message gives the PyTorch line for Intel Arc.
+- An Arc card next to a Ryzen's Radeon graphics is now the card OpenFill
+  goes by. A card with memory of its own comes before a chip built into
+  the processor.
+- OpenFill's LaMa node splits big photos to fit the free graphics memory
+  on Intel (XPU) too, as it already did on NVIDIA and AMD.
+- On Linux the setup message for an AMD card gives the PyTorch for ROCm
+  line from ComfyUI's README.
+- On Linux, OpenFill no longer sets `HSA_OVERRIDE_GFX_VERSION` for an RX
+  6700 or 6600 when ComfyUI's venv has AMD's own PyTorch (its card package
+  matches the installed torch version); the override would point it at
+  kernels that may not be there. With PyTorch from pytorch.org it goes by
+  the card with the most memory, not a Ryzen's built-in graphics.
+- New docs/gpus.md: which cards work how, and what is tested and what is not.
 
 ## [2.0.0-beta.6] - 2026-10-25
 

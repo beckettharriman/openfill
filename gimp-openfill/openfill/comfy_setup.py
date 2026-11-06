@@ -81,6 +81,9 @@ class SetupManifest:
     # The same release made for AMD cards (ROCm): (archive name, url, size, sha256), or None.
     amd_asset: tuple[str, str, int, str] | None = None
     amd_unpacked_bytes: int = 0
+    # The same release made for Intel Arc graphics (PyTorch XPU): (archive name, url, size, sha256), or None.
+    intel_asset: tuple[str, str, int, str] | None = None
+    intel_unpacked_bytes: int = 0
 
     def needs_older_build(self, compute_capability: float | None) -> bool:
         """True when the card's compute capability is below what the main build's PyTorch supports."""
@@ -107,10 +110,26 @@ class SetupManifest:
             unpacked_bytes=self.amd_unpacked_bytes or self.unpacked_bytes,
         )
 
-    def chosen(self, older_gpu: bool = False, amd: bool = False) -> SetupManifest:
+    def for_intel(self) -> SetupManifest:
+        """This manifest with the archive for Intel Arc graphics (same folder, nodes and packages)."""
+        if not self.intel_asset:
+            return self
+        name, url, size, sha = self.intel_asset
+        return replace(
+            self,
+            archive_name=name,
+            archive_url=url,
+            archive_size=size,
+            archive_sha256=sha,
+            unpacked_bytes=self.intel_unpacked_bytes or self.unpacked_bytes,
+        )
+
+    def chosen(self, older_gpu: bool = False, amd: bool = False, intel: bool = False) -> SetupManifest:
         """The manifest of the archive a :class:`Preflight` picked."""
         if amd:
             return self.for_amd()
+        if intel:
+            return self.for_intel()
         return self.for_older_gpus() if older_gpu else self
 
     @property
@@ -143,9 +162,20 @@ def parse_manifest(raw: Mapping[str, Any]) -> SetupManifest:
             aa = amd["asset"]
             amd_asset = (str(aa["name"]), str(aa["url"]), int(aa["size"]), str(aa["sha256"]).lower())
         amd_unpacked = int(amd.get("unpacked_bytes") or 0)
+        intel = c.get("intel") or {}
+        intel_asset = None
+        if intel:
+            ia = intel["asset"]
+            intel_asset = (str(ia["name"]), str(ia["url"]), int(ia["size"]), str(ia["sha256"]).lower())
+        intel_unpacked = int(intel.get("unpacked_bytes") or 0)
     except (KeyError, TypeError, ValueError) as err:
         raise SetupError(f"comfy_setup.json is incomplete: {err!r}") from err
-    for u in (url, older_asset[1] if older_asset else url, amd_asset[1] if amd_asset else url):
+    for u in (
+        url,
+        older_asset[1] if older_asset else url,
+        amd_asset[1] if amd_asset else url,
+        intel_asset[1] if intel_asset else url,
+    ):
         if not u.startswith("https://github.com/comfyanonymous/ComfyUI/releases/download/"):
             raise SetupError(f"the ComfyUI archive must come from the official GitHub releases: {u}")
     if older_asset and (
@@ -154,6 +184,10 @@ def parse_manifest(raw: Mapping[str, Any]) -> SetupManifest:
         raise SetupError("comfy_setup.json: the archive for older cards needs a safe name, its size and a SHA-256")
     if amd_asset and (not downloads.is_safe_name(amd_asset[0]) or not _SHA_RE.match(amd_asset[3]) or amd_asset[2] <= 0):
         raise SetupError("comfy_setup.json: the archive for AMD cards needs a safe name, its size and a SHA-256")
+    if intel_asset and (
+        not downloads.is_safe_name(intel_asset[0]) or not _SHA_RE.match(intel_asset[3]) or intel_asset[2] <= 0
+    ):
+        raise SetupError("comfy_setup.json: the archive for Intel graphics needs a safe name, its size and a SHA-256")
     if not downloads.is_safe_name(name) or not downloads.is_safe_name(folder):
         raise SetupError("comfy_setup.json holds an unsafe file or folder name")
     if not _SHA_RE.match(sha) or size <= 0:
@@ -182,6 +216,8 @@ def parse_manifest(raw: Mapping[str, Any]) -> SetupManifest:
         older_below_compute=older_below,
         amd_asset=amd_asset,
         amd_unpacked_bytes=amd_unpacked,
+        intel_asset=intel_asset,
+        intel_unpacked_bytes=intel_unpacked,
     )
 
 
@@ -334,8 +370,29 @@ def detect_comfy(
 MANUAL_INSTALL_MAC = "https://github.com/comfyanonymous/ComfyUI#apple-mac-silicon"
 MANUAL_INSTALL_LINUX = "https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux"
 MANUAL_INSTALL_LINUX_AMD = "https://github.com/comfyanonymous/ComfyUI#amd-gpus-linux"
+MANUAL_INSTALL_INTEL = "https://github.com/comfyanonymous/ComfyUI#intel-gpus-windows-and-linux"
+# PyTorch for each kind of graphics card, as ComfyUI's README installs it on Linux.
+TORCH_INDEX = {
+    "nvidia": "https://download.pytorch.org/whl/cu130",
+    "amd": "https://download.pytorch.org/whl/rocm7.2",
+    "intel": "https://download.pytorch.org/whl/xpu",
+}
+# OpenFill's guide to which cards work how, and what has been tested.
+GPU_GUIDE = "https://github.com/beckettharriman/openfill/blob/main/docs/gpus.md"
 # Which cards ComfyUI's build for AMD cards runs on, in plain words.
 AMD_BUILD_CARDS = "Radeon RX 7000 and RX 9000 cards and Ryzen AI 300 and Ryzen AI Max chips"
+# Which chips ComfyUI's build for Intel graphics runs on, in plain words.
+INTEL_BUILD_CARDS = "Intel Arc A and B series cards and Core Ultra chips with Arc graphics"
+
+
+def torch_install_command(vendor: str) -> str:
+    """The pip line ComfyUI's README gives to install PyTorch for ``vendor`` (nvidia, amd or
+    intel) in a ComfyUI venv on Linux, or ``""`` for any other vendor."""
+    index = TORCH_INDEX.get(vendor)
+    if not index:
+        return ""
+    option = "--extra-index-url" if vendor == "nvidia" else "--index-url"
+    return f"pip install torch torchvision torchaudio {option} {index}"
 
 
 @dataclass(frozen=True)
@@ -356,6 +413,7 @@ class Preflight:
     gpu_name: str = ""
     older_gpu: bool = False  # an NVIDIA card the main build's PyTorch cannot run: use the build for older cards
     amd_build: bool = False  # an AMD card: download ComfyUI's build for AMD cards (ROCm)
+    intel_build: bool = False  # Intel Arc graphics: download ComfyUI's build for Intel (PyTorch XPU)
 
     @property
     def blocked(self) -> bool:
@@ -365,11 +423,11 @@ class Preflight:
     @property
     def needs_cpu_choice(self) -> bool:
         """No card the download can use: it only makes sense as the very slow CPU route."""
-        return self.gpu != "nvidia" and not self.amd_build
+        return self.gpu != "nvidia" and not self.amd_build and not self.intel_build
 
     def manifest(self, manifest: SetupManifest) -> SetupManifest:
-        """The manifest of the archive these checks picked (AMD, older NVIDIA cards or the main one)."""
-        return manifest.chosen(self.older_gpu, self.amd_build)
+        """The manifest of the archive these checks picked (AMD, Intel, older NVIDIA cards or the main one)."""
+        return manifest.chosen(self.older_gpu, self.amd_build, self.intel_build)
 
     def text(self) -> str:
         """All messages, one per line."""
@@ -383,10 +441,13 @@ def gpu_kind(names: list[str] | None, nvidia_found: bool, vendor: str = "") -> s
     ``names`` decide when it found nothing."""
     if nvidia_found or vendor == "nvidia" or any("nvidia" in n.lower() for n in names or []):
         return "nvidia"
-    if vendor == "amd" or any(("amd" in n.lower() or "radeon" in n.lower()) for n in names or []):
+    # The card detection picked comes first: an Arc card next to a Ryzen's Radeon graphics is Intel.
+    if vendor == "amd":
         return "amd"
     if vendor == "intel":
         return "other"
+    if any(("amd" in n.lower() or "radeon" in n.lower()) for n in names or []):
+        return "amd"
     if names is None:
         return "none" if vendor == "none" else "unknown"
     for n in names:
@@ -421,6 +482,24 @@ def video_controller_names(runner: Callable[..., Any] = subprocess.run) -> list[
     return [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
 
 
+def linux_torch_hint(vendor: str, gpu_name: str | None = None) -> str:
+    """What to add to the Linux install for an AMD card or Intel Arc graphics (with a leading
+    space), else ``""``. Older Intel graphics (UHD, Iris Xe) get nothing: PyTorch for Intel
+    does not run on them."""
+    if vendor == "amd":
+        return (
+            f" For an AMD card, install PyTorch for ROCm as ComfyUI's instructions say ({MANUAL_INSTALL_LINUX_AMD}): "
+            f"{torch_install_command('amd')}."
+        )
+    if vendor == "intel" and hardware.intel_build_support(gpu_name) == "yes":
+        return (
+            " For Intel Arc graphics, install PyTorch for Intel (XPU) as ComfyUI's instructions say "
+            f"({MANUAL_INSTALL_INTEL}): {torch_install_command('intel')}. OpenFill has not been tested on "
+            f"Intel graphics yet ({GPU_GUIDE})."
+        )
+    return ""
+
+
 def preflight(
     manifest: SetupManifest,
     hw: Any,
@@ -437,6 +516,7 @@ def preflight(
         # The pinned download is the Windows portable build (python_embeded\python.exe).
         system = "macOS" if platform == "darwin" else "Linux"
         manual = MANUAL_INSTALL_MAC if platform == "darwin" else MANUAL_INSTALL_LINUX
+        vendor = getattr(hw, "gpu_vendor", "")
         return Preflight(
             (
                 Check(
@@ -444,15 +524,10 @@ def preflight(
                     "block",
                     f"Download ComfyUI only sets up the Windows build, which does not run on {system}. Install "
                     f"ComfyUI yourself ({manual}) in a folder with a venv, then choose 'I already have ComfyUI'."
-                    + (
-                        f" For an AMD card, install PyTorch for ROCm as ComfyUI's instructions say "
-                        f"({MANUAL_INSTALL_LINUX_AMD})."
-                        if system == "Linux" and getattr(hw, "gpu_vendor", "") == "amd"
-                        else ""
-                    ),
+                    + (linux_torch_hint(vendor, getattr(hw, "gpu_name", None)) if system == "Linux" else ""),
                 ),
             ),
-            "amd" if getattr(hw, "gpu_vendor", "") == "amd" else "unknown",
+            {"amd": "amd", "intel": "other"}.get(vendor, "unknown"),
         )
     checks: list[Check] = []
     path_problem = windows_path_problem(comfy_dir_for(target, manifest) / "python_embeded" / "python.exe", platform)
@@ -467,7 +542,13 @@ def preflight(
     vram = getattr(hw, "vram_gb", None)
     if kind == "amd" and not name:
         name = next((n for n in adapters or [] if "amd" in n.lower() or "radeon" in n.lower()), "")
+    if kind == "other" and not name:
+        intel_names = [n for n in adapters or [] if "intel" in n.lower()]
+        # An Arc card next to the processor's own UHD graphics: name the Arc
+        name = next((n for n in intel_names if hardware.intel_build_support(n) == "yes"), "")
+        name = name or next(iter(intel_names), "")
     amd_build = False
+    intel_build = False
     if kind == "nvidia":
         if vram is not None and vram < MIN_VRAM_GB:
             checks.append(
@@ -544,14 +625,50 @@ def preflight(
                 )
             )
     elif kind == "other":
-        checks.append(
-            Check(
-                "gpu",
-                "warn",
-                "This PC has an Intel graphics card. The download below is the NVIDIA build and would run on the "
-                "processor only, which is very slow.",
+        card = name or "This PC's Intel graphics"
+        # Only a name that says Arc gets the Intel build. Plain "Intel(R) Graphics", UHD, Iris
+        # Xe and HD keep the processor route, which is known to work on them.
+        if hardware.intel_build_support(name) != "yes" or not manifest.intel_asset:
+            checks.append(
+                Check(
+                    "gpu",
+                    "warn",
+                    f"{card} is not one of the chips ComfyUI's build for Intel graphics runs on "
+                    f"({INTEL_BUILD_CARDS}). The download below would run on the processor only, which is very slow.",
+                )
             )
-        )
+        else:
+            intel_build = True
+            if vram is not None and vram < 1:
+                mem = " (built-in graphics, it shares the computer's memory)"
+            else:
+                mem = f" ({vram:.0f} GB graphics memory)" if vram else ""
+            if vram is not None and 1 <= vram < MIN_VRAM_GB:
+                checks.append(
+                    Check(
+                        "gpu",
+                        "warn",
+                        f"{card} has {vram:.0f} GB of graphics memory. That is below the {MIN_VRAM_GB:.0f} GB the "
+                        "smallest model needs, so fills will be slow or fail. OpenFill downloads ComfyUI's build "
+                        "for Intel graphics.",
+                    )
+                )
+            else:
+                checks.append(
+                    Check(
+                        "gpu",
+                        "ok",
+                        f"Graphics: {card}{mem}. OpenFill downloads ComfyUI's build for Intel graphics (PyTorch XPU).",
+                    )
+                )
+            checks.append(
+                Check(
+                    "gpu_build",
+                    "ok",
+                    "Intel support in OpenFill is new and untested: I have no Intel Arc to try it on. Keep the "
+                    "Intel graphics driver up to date. If something does not work, please tell me on the Issues page.",
+                )
+            )
     elif kind == "none":
         checks.append(
             Check(
@@ -598,7 +715,7 @@ def preflight(
     else:
         checks.append(Check("port", "ok", f"Port {port} is free."))
     older = kind == "nvidia" and manifest.needs_older_build(getattr(hw, "compute_capability", None))
-    return Preflight(tuple(checks), kind, name, older, amd_build)
+    return Preflight(tuple(checks), kind, name, older, amd_build, intel_build)
 
 
 # -------------------------------------------------------------------- setup ----

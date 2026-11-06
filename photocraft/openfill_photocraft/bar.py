@@ -28,7 +28,7 @@ from PIL import Image, ImageDraw
 
 from . import ui
 from .menu import Watcher
-from .modelinfo import choose_card_line, download_card_line, hardware_line, needed_by
+from .modelinfo import choose_card_line, comfy_help_url, download_card_line, hardware_line, needed_by
 from .service import ENGINE_RESTARTING, ENGINE_STOPPED, Service, photocraft_text
 from .ui import ACCENT, BAD, BG, CW, DIM, LABEL_W, LINE, OK, PAD, PANEL, TEXT, WARN, W, photo
 
@@ -150,7 +150,7 @@ def expand_margins(width: int, height: int, preset: tuple[int, int] | None) -> t
 class Refresher:
     """Slow facts for the panel, looked up off the UI thread every few seconds."""
 
-    CACHED = ("comfy_ok", "models", "active", "active_name", "rows", "hardware", "gpu_vendor")
+    CACHED = ("comfy_ok", "models", "active", "active_name", "rows", "hardware", "gpu_vendor", "intel_arc")
 
     def __init__(self, service: Service, cache: Path | None = None) -> None:
         self.service = service
@@ -158,6 +158,7 @@ class Refresher:
         self.facts: dict[str, Any] = self._load_cache()
         self._hardware: str | None = self.facts.get("hardware") or None
         self._vendor: str | None = self.facts.get("gpu_vendor") or None  # nvidia, amd, intel, apple, none
+        self._arc = bool(self.facts.get("intel_arc"))  # Intel graphics that say Arc (PyTorch XPU runs them)
         self._saved = ""
         self._preflight: dict[str, Any] | None = None  # what a ComfyUI download would be (Windows)
         self.lock = threading.Lock()
@@ -233,6 +234,7 @@ class Refresher:
                 except Exception as err:  # noqa: BLE001 - the card offers the folder choice anyway
                     facts["setup"] = {"error": str(err)}
             facts["gpu_vendor"] = self._gpu_vendor()
+            facts["intel_arc"] = self._arc
             return facts
         self.service.check_engine()  # the status line must not say Ready after ComfyUI stopped
         rows = app.model_rows(None)
@@ -285,11 +287,12 @@ class Refresher:
                 from openfill import hardware
 
                 hw = hardware.detect(app.models_root, app.server.url())
-                self._hardware, self._vendor = hardware_line(hw), hw.gpu_vendor
+                self._hardware, self._vendor, self._arc = hardware_line(hw), hw.gpu_vendor, hw.is_intel_arc
             except Exception:  # noqa: BLE001 - only shown in the Models view
                 self._hardware, self._vendor = "", ""
         facts["hardware"] = self._hardware
         facts["gpu_vendor"] = self._vendor
+        facts["intel_arc"] = self._arc
         if self._vendor == "amd":
             cat.add_amd_notes(rows, app.catalog)  # what may not work on an AMD card
         return facts
@@ -300,7 +303,8 @@ class Refresher:
             try:
                 from openfill import hardware
 
-                self._vendor = hardware.detect(None, None).gpu_vendor
+                hw = hardware.detect(None, None)
+                self._vendor, self._arc = hw.gpu_vendor, hw.is_intel_arc
             except Exception:  # noqa: BLE001 - only changes a few words of the setup card
                 self._vendor = ""
         return self._vendor
@@ -1244,9 +1248,11 @@ class Bar:
         threading.Thread(target=work, name="openfill-setup", daemon=True).start()
 
     def _comfy_help(self) -> None:
-        amd = (self.refresher.get() or {}).get("gpu_vendor") == "amd"
-        anchor = "amd-graphics-cards" if amd else "openfill-for-photocraft"
-        webbrowser.open(f"https://github.com/beckettharriman/openfill/blob/main/docs/install.md#{anchor}")
+        facts = self.refresher.get() or {}
+        vendor = facts.get("gpu_vendor")
+        if vendor == "intel" and not facts.get("intel_arc"):
+            vendor = ""  # UHD or Iris Xe: the general steps, not the Intel Arc ones
+        webbrowser.open(comfy_help_url(vendor))
 
     # updates ----------------------------------------------------------------------
 
@@ -1423,7 +1429,9 @@ class Bar:
                 ),
             )
         elif facts and not facts.get("comfy_ok", True):
-            line = choose_card_line(facts.get("gpu_vendor") == "amd" and sys.platform != "win32")
+            linux = sys.platform != "win32"
+            vendor = facts.get("gpu_vendor")
+            line = choose_card_line(vendor == "amd" and linux, bool(facts.get("intel_arc")) and linux)
             if pre.get("blocked") and pre.get("text"):
                 line = pre["text"] + " " + line
             key = (

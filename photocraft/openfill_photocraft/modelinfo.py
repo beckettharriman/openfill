@@ -62,6 +62,12 @@ def download_card_line(pre: dict[str, Any]) -> str:
             f"{pre['folder']}), or choose the folder of one you have. AMD support is new and not tested on an "
             "AMD card yet."
         )
+    if pre.get("intel"):
+        return (
+            f"OpenFill runs on ComfyUI. Download ComfyUI's version for Intel graphics ({pre['size']}, into "
+            f"{pre['folder']}), or choose the folder of one you have. Intel support is new and not tested on "
+            "Intel graphics yet."
+        )
     line = (
         f"OpenFill runs on ComfyUI. Download it ({pre['size']}, into {pre['folder']}), "
         "or choose the folder of one you have."
@@ -72,16 +78,40 @@ def download_card_line(pre: dict[str, Any]) -> str:
             "the processor, which is very slow. For an older Radeon, follow the AMD steps in the install guide, "
             "then choose its folder."
         )
+    elif pre.get("cpu") and pre.get("gpu") == "other":
+        line += (
+            " ComfyUI's download for Intel graphics needs an Intel Arc card or a Core Ultra chip with Arc "
+            "graphics, so on this PC it would run on the processor, which is very slow."
+        )
     elif pre.get("cpu"):
         line += " No NVIDIA graphics card was found: it would run on the processor, which is very slow."
     return line
 
 
-def choose_card_line(amd: bool = False) -> str:
-    """The setup card's text where ComfyUI cannot be downloaded (Linux); ``amd``: the card is AMD."""
+def choose_card_line(amd: bool = False, intel: bool = False) -> str:
+    """The setup card's text where ComfyUI cannot be downloaded (Linux); ``amd``: the card is AMD,
+    ``intel``: the graphics are Intel Arc (not UHD or Iris Xe, which PyTorch for Intel does not run)."""
     if amd:
         return (
             "OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it with "
             "PyTorch for ROCm, which your AMD card needs (How to install)."
         )
+    if intel:
+        return (
+            "OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it with "
+            "PyTorch for Intel (XPU), which Intel Arc graphics need (How to install). Not tested on Intel yet."
+        )
     return "OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it."
+
+
+DOCS = "https://github.com/beckettharriman/openfill/blob/main/docs"
+
+
+def comfy_help_url(vendor: str | None) -> str:
+    """Where the setup card's help link goes for a graphics card made by ``vendor``: the AMD
+    steps, the guide to Intel and other graphics, or the PhotoCraft install steps."""
+    if vendor == "amd":
+        return f"{DOCS}/install.md#amd-graphics-cards"
+    if vendor == "intel":
+        return f"{DOCS}/gpus.md#intel-arc-and-core-ultra"
+    return f"{DOCS}/install.md#openfill-for-photocraft"

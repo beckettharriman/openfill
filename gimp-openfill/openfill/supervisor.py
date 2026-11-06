@@ -714,6 +714,9 @@ class TaskWorker:
         if task.get("amd"):
             manifest = manifest.for_amd()  # ROCm PyTorch: runs Radeon RX 7000 and RX 9000 cards
             self.log(f"AMD card: using {manifest.archive_name}")
+        elif task.get("intel"):
+            manifest = manifest.for_intel()  # PyTorch XPU: runs Intel Arc graphics
+            self.log(f"Intel graphics: using {manifest.archive_name}")
         elif task.get("older_gpu"):
             manifest = manifest.for_older_gpus()  # CUDA 12.6 PyTorch: runs GTX 10 and older NVIDIA cards
             self.log(f"older NVIDIA card: using {manifest.archive_name}")
@@ -968,7 +971,8 @@ def _run_backend(
     # OpenFill's own node pack (native-resolution LaMa) is copied in before ComfyUI loads its nodes.
     downloads.ensure_bundled_nodes(Path(args.main).resolve().parent / "custom_nodes", log)
     try:
-        extra_env = hardware.rocm_env()  # Linux, an AMD card PyTorch's ROCm build has no code for
+        # Linux, an AMD card PyTorch's ROCm build has no code for (unless AMD's own kernels for it are installed)
+        extra_env = hardware.rocm_env(native=hardware.rocm_native_kernels(args.python))
     except Exception as err:  # noqa: BLE001 - ComfyUI starts without it
         log(f"could not check the AMD card: {err}", "WARN")
         extra_env = {}

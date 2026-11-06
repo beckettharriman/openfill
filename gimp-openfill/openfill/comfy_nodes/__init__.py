@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import time
 
-VERSION = "1"
+VERSION = "2"
 
 # Graphics memory per working pixel of big-lama in fp32: about 650 bytes measured on an
 # RTX 2070 Max-Q (peak allocated minus the weights, 1.8 to 4.8 MP passes), with a margin.
@@ -29,6 +29,33 @@ VERSION = "1"
 # also marks LaMa as not supporting it).
 BYTES_PER_PX = 700
 RESERVE = 512 * 1024**2
+CPU_BUDGET = 64 * 1024**2  # processor: memory is rarely the limit
+
+
+def _accelerator(torch, device):
+    """PyTorch's module for the graphics card ``device`` is on: ``torch.cuda`` for NVIDIA and
+    for AMD (PyTorch for ROCm calls its devices cuda), ``torch.xpu`` for Intel. None for
+    the processor and anything else."""
+    kind = getattr(device, "type", "")
+    if kind in ("cuda", "xpu"):
+        return getattr(torch, kind, None)
+    return None
+
+
+def _memory_budget(free_bytes):
+    """Working pixels that fit ``free_bytes`` of graphics memory."""
+    return max(0, int(free_bytes) - RESERVE) // BYTES_PER_PX
+
+
+def _stat(acc, name, device):
+    """``acc.<name>(device)``, or 0 when this PyTorch has no such call (older XPU builds)."""
+    fn = getattr(acc, name, None) if acc is not None else None
+    if fn is None:
+        return 0
+    try:
+        return fn(device) or 0
+    except (RuntimeError, AttributeError):
+        return 0
 
 
 def _plan_module():
@@ -86,12 +113,12 @@ class OpenFillLamaNative:
 
         mm.free_memory(mm.module_size(model) + 2 * 1024**3, device)
         inpaint_model.to(device)
-        if device.type == "cuda":
-            torch.cuda.reset_peak_memory_stats(device)
-            free = mm.get_free_memory(device)
-            budget = max(0, int(free) - RESERVE) // BYTES_PER_PX
+        acc = _accelerator(torch, device)
+        if acc is not None:  # NVIDIA, AMD (ROCm) or Intel (XPU): tile to the free graphics memory
+            _stat(acc, "reset_peak_memory_stats", device)
+            budget = _memory_budget(mm.get_free_memory(device))
         else:
-            budget = 64 * 1024**2  # processor: memory is rarely the limit
+            budget = CPU_BUDGET
         if max_megapixels > 0:
             budget = min(budget, int(max_megapixels * 1e6))
         env = os.environ.get("OPENFILL_LAMA_MAX_MP")
@@ -105,7 +132,7 @@ class OpenFillLamaNative:
                 out.append(self._one(img[i : i + 1], msk[i : i + 1], model, device, dtype, budget, overlap, plan, mm))
         finally:
             inpaint_model.cpu()
-        peak = torch.cuda.max_memory_allocated(device) if device.type == "cuda" else 0
+        peak = _stat(acc, "max_memory_allocated", device)
         print(
             f"[OpenFill] LaMa native {width}x{height} budget {budget / 1e6:.1f} MP "
             f"peak {peak / 1024**2:.0f} MiB in {time.monotonic() - started:.1f} s",

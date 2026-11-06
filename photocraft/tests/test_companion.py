@@ -1147,6 +1147,55 @@ class ModelInfoTests(unittest.TestCase):
         self.assertIn("ROCm", choose_card_line(True))
         self.assertNotIn("ROCm", choose_card_line(False))
 
+    def test_setup_card_lines_for_intel(self):
+        from openfill_photocraft.modelinfo import choose_card_line, download_card_line
+
+        base = {"size": "about 1.4 GB", "folder": r"C:\Users\a\AppData\Local\OpenFill\ComfyUI"}
+        intel = download_card_line({**base, "intel": True, "gpu": "other"})
+        self.assertIn("version for Intel graphics (about 1.4 GB", intel)
+        self.assertIn("not tested on Intel", intel)
+        self.assertNotIn("very slow", intel)
+        old = download_card_line({**base, "cpu": True, "gpu": "other"})
+        self.assertIn("Intel Arc", old)
+        self.assertIn("very slow", old)
+        self.assertNotIn("No NVIDIA", old)
+        linux = choose_card_line(False, True)
+        self.assertIn("XPU", linux)
+        self.assertIn("Not tested on Intel", linux)
+        self.assertNotIn("ROCm", linux)
+        self.assertNotIn("XPU", choose_card_line(False, False))
+
+    def test_comfy_help_url_per_vendor(self):
+        from openfill_photocraft.modelinfo import comfy_help_url
+
+        self.assertTrue(comfy_help_url("amd").endswith("/docs/install.md#amd-graphics-cards"))
+        self.assertTrue(comfy_help_url("intel").endswith("/docs/gpus.md#intel-arc-and-core-ultra"))
+        for vendor in ("nvidia", "apple", "none", "", None):
+            self.assertTrue(comfy_help_url(vendor).endswith("/docs/install.md#openfill-for-photocraft"))
+
+    def test_preflight_carries_the_intel_build(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.service import Service
+
+        from openfill import comfy_setup
+        from openfill.hardware import Hardware
+
+        manifest = comfy_setup.load_manifest()
+        hw = Hardware(gpu_name="Intel(R) Arc(TM) B580 Graphics", vram_bytes=12 * 1024**3, gpu_vendor="intel")
+        pre = comfy_setup.preflight(manifest, hw, None, 50 * 1024**3, Path("C:/x"), 8188, False, platform="win32")
+        fake = SimpleNamespace(app=SimpleNamespace(setup_preflight=lambda d: (manifest, pre)))
+        out = Service.comfy_preflight(fake)
+        self.assertTrue(out["intel"])
+        self.assertFalse(out["amd"])
+        self.assertFalse(out["cpu"])
+        self.assertTrue(out["url"].endswith("/ComfyUI_windows_portable_intel.7z"))
+        queued = []
+        fake.comfy_preflight = lambda: out
+        fake.app.queue_comfy_setup = lambda *a: queued.append(a) or "task"
+        Service.setup_comfy(fake)
+        self.assertEqual(queued[0][1:], (False, False, False, True))
+
     def test_model_detail_and_needed_by(self):
         from types import SimpleNamespace
 

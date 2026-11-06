@@ -78,6 +78,11 @@ class Hardware:
         return self.gpu_vendor == "amd"
 
     @property
+    def is_intel_arc(self) -> bool:
+        """Intel Arc graphics do the work, which ComfyUI's build for Intel (PyTorch XPU) runs on."""
+        return self.gpu_vendor == "intel" and intel_build_support(self.gpu_name) == "yes"
+
+    @property
     def vram_gb(self) -> float | None:
         """Graphics memory in GiB, or None."""
         return None if self.vram_bytes is None else self.vram_bytes / GB
@@ -268,13 +273,22 @@ class Adapter:
     source: str  # dxgi, registry or sysfs
 
 
+# Below this much memory of its own an adapter is a chip built into the processor (a
+# Radeon or Intel iGPU gets a slice of 128 MB to 1 GB), not a card that would do the work.
+DEDICATED_MIN_BYTES = 2 * GB
+
+
 def pick_adapter(adapters: list[Adapter] | None) -> Adapter | None:
-    """The card that would do the work: the most graphics memory, AMD and NVIDIA before Intel
-    (a laptop's Intel chip next to a Radeon). Adapters of unknown vendor are skipped."""
+    """The card that would do the work. A real card (2 GB or more of its own memory) comes
+    before a chip built into the processor, so an Arc card wins over a Ryzen's Radeon
+    graphics and a Radeon or NVIDIA card over a laptop's Intel chip; then AMD and NVIDIA
+    before Intel, then the most memory. Adapters of unknown vendor are skipped."""
     known = [a for a in adapters or [] if a.vendor in ("nvidia", "amd", "intel")]
     if not known:
         return None
-    return max(known, key=lambda a: (a.vendor != "intel", a.vram_bytes or 0))
+    return max(
+        known, key=lambda a: ((a.vram_bytes or 0) >= DEDICATED_MIN_BYTES, a.vendor != "intel", a.vram_bytes or 0)
+    )
 
 
 # Windows: DXGI lists the active adapters with their own memory as a 64-bit number.
@@ -602,46 +616,128 @@ def amd_build_support(name: str | None) -> str:
     return "unknown"
 
 
+# -------------------------------------------------------------- Intel ----
+# PyTorch's builds for Intel graphics (XPU, which ComfyUI's Windows build for Intel uses)
+# list Arc discrete cards (A and B series) and Core Ultra chips with Arc graphics. Their
+# names all say "Arc". Older built-in graphics (UHD, Iris Xe, HD) are not on that list.
+_INTEL_BUILD_YES = re.compile(r"\barc\b")
+_INTEL_BUILD_NO = re.compile(r"\buhd\b|\biris\b|\bhd\s*graphics\b|\bhd\s*\d{3,4}\b")
+
+
+def intel_build_support(name: str | None) -> str:
+    """Whether PyTorch's build for Intel graphics lists the Intel chip called ``name``:
+    ``yes`` (Arc A and B series, Core Ultra with Arc graphics), ``no`` (UHD, Iris Xe, HD
+    graphics) or ``unknown`` (a name that does not say, such as "Intel(R) Graphics")."""
+    low = (name or "").lower()
+    if _INTEL_BUILD_YES.search(low):
+        return "yes"
+    if _INTEL_BUILD_NO.search(low):
+        return "no"
+    return "unknown"
+
+
 KFD_NODES = Path("/sys/class/kfd/kfd/topology/nodes")
 
 
-def amd_gfx_targets(root: Path = KFD_NODES) -> list[int]:
-    """The ``gfx_target_version`` of each AMD GPU the ROCm kernel driver lists (Linux),
-    such as 110000 for gfx1100 or 100301 for gfx1031. The processor's node (0) is left out."""
+def amd_gpu_nodes(root: Path = KFD_NODES) -> list[tuple[int, int]]:
+    """``(gfx_target_version, local_mem_size)`` of each AMD GPU the ROCm kernel driver lists
+    (Linux), such as ``(100301, 12 GB)`` for an RX 6700 XT; a chip built into the processor
+    has little or no memory of its own. The processor's node (0) is left out."""
     out = []
     try:
         nodes = sorted(root.iterdir())
     except OSError:
         return []
     for node in nodes:
+        props = {}
         for line in _read(node / "properties").splitlines():
             key, _, value = line.partition(" ")
-            if key == "gfx_target_version":
-                try:
-                    target = int(value.strip())
-                except ValueError:
-                    continue
-                if target > 0:
-                    out.append(target)
+            props[key] = value.strip()
+        try:
+            target = int(props.get("gfx_target_version", "0"))
+            mem = int(props.get("local_mem_size", "0"))
+        except ValueError:
+            continue
+        if target > 0:
+            out.append((target, mem))
     return out
 
 
+def amd_gfx_targets(root: Path = KFD_NODES) -> list[int]:
+    """The ``gfx_target_version`` of each AMD GPU the ROCm kernel driver lists (Linux),
+    such as 110000 for gfx1100 or 100301 for gfx1031. The processor's node (0) is left out."""
+    return [target for target, _mem in amd_gpu_nodes(root)]
+
+
+def gfx_name(target: int) -> str:
+    """``gfx1031`` for the ``gfx_target_version`` 100301 (major, minor, then the stepping in hex)."""
+    return f"gfx{target // 10000}{(target // 100) % 100}{target % 100:x}"
+
+
+_DEVICE_WHEEL = re.compile(r"^amd_torch_device_(gfx[0-9a-f]+)-(.+)\.dist-info$", re.IGNORECASE)
+_TORCH_WHEEL = re.compile(r"^torch-(.+)\.dist-info$", re.IGNORECASE)
+
+
+def rocm_native_kernels(python: str | Path | None) -> set[str]:
+    """The AMD cards (``gfx1031``...) whose own kernels are installed in the venv of the
+    ComfyUI ``python`` (Linux): AMD's multi-architecture PyTorch puts each card's kernels in
+    an ``amd_torch_device_gfx*`` package of the same version as its torch. A package whose
+    version is not the installed torch's is left over from an earlier install (pip keeps it
+    when torch is replaced from pytorch.org) and does not count. Empty for PyTorch from
+    pytorch.org or when unknown."""
+    if not python:
+        return set()
+    venv = Path(python).parent.parent  # venv/bin/python; not resolved, the venv's python is a link
+    found = set()
+    try:
+        for site in venv.glob("lib/python3*/site-packages"):
+            torch_versions, devices = set(), []
+            for info in site.glob("*.dist-info"):
+                t = _TORCH_WHEEL.match(info.name)
+                if t:
+                    torch_versions.add(t.group(1).lower())
+                d = _DEVICE_WHEEL.match(info.name)
+                if d:
+                    devices.append((d.group(1).lower(), d.group(2).lower()))
+            found |= {gfx for gfx, version in devices if version in torch_versions}
+    except OSError:
+        return set()
+    return found
+
+
 def rocm_env(
-    targets: list[int] | None = None, environ: dict[str, str] | None = None, platform_name: str = sys.platform
+    targets: list[int] | None = None,
+    environ: dict[str, str] | None = None,
+    platform_name: str = sys.platform,
+    native: set[str] | None = None,
+    local_mem: list[int] | None = None,
 ) -> dict[str, str]:
     """Environment ComfyUI needs on Linux for an AMD card that PyTorch's ROCm build has no
     code for, as ComfyUI's README says: ``HSA_OVERRIDE_GFX_VERSION=10.3.0`` for the RDNA 2
     cards other than the RX 6800 and 6900 (gfx1031 to gfx1036, such as the RX 6700 and 6600),
     ``11.0.0`` for the Radeon 780M and 760M (gfx1103). Empty when it is not needed, when the
-    user set it already, or when the cards would need different values."""
+    user set it already, or when the cards ComfyUI would use need different values.
+
+    The card that decides is the one with the most memory of its own (``local_mem``, one
+    value per target; read from the driver when ``targets`` is not given): an RX 6700 XT,
+    not the Ryzen's Radeon graphics next to it. When ``native`` (:func:`rocm_native_kernels`)
+    names any card, the venv has AMD's own PyTorch, which carries each card's own kernels:
+    then no override is set, since it would point PyTorch at kernels that may not be installed."""
     if not platform_name.startswith("linux"):
         return {}
     environ = os.environ if environ is None else environ
     if environ.get("HSA_OVERRIDE_GFX_VERSION"):
         return {}
-    targets = amd_gfx_targets() if targets is None else targets
+    if targets is None:
+        nodes = amd_gpu_nodes()
+        targets, local_mem = [t for t, _m in nodes], [m for _t, m in nodes]
     if not targets:
         return {}
+    if native:
+        return {}  # AMD's own PyTorch: no override, see above
+    if local_mem and len(local_mem) == len(targets) and max(local_mem) > 0:
+        most = max(local_mem)
+        targets = [t for t, m in zip(targets, local_mem, strict=False) if m == most]  # the card ComfyUI uses
     families = {t // 100 for t in targets}  # 1003 (gfx103x), 1100 (gfx110x)...
     if len(families) != 1:
         return {}

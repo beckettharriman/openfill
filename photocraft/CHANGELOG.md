@@ -18,6 +18,8 @@ Each entry from now on says which PhotoCraft versions it works with.
 - The status line says "Stopped: Generate restarts it" after ComfyUI stops, instead of "Ready".
 - Error messages point to OpenFill's settings in PhotoCraft, not to GIMP's menus and profile folder.
 - Mac model menu: a menu closed while it is open is removed only after macOS has dismissed it.
+- Intel Arc graphics, untested: on Windows the Download ComfyUI card gets ComfyUI's version for Intel for an Arc card or a Core Ultra chip with Arc graphics, and says it is untested. On Linux the card points to the PyTorch for Intel steps.
+- The setup card's help link goes to the Intel steps on Intel graphics.
 
 ## [0.2.4] - 2026-10-26
 

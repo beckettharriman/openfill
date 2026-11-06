@@ -315,11 +315,123 @@ class PreflightTests(unittest.TestCase):
         self.assertTrue(pf.needs_cpu_choice)
         self.assertEqual(m.for_amd(), m)
 
-    def test_intel_is_the_cpu_route(self):
-        pf = self.run_pf(["Intel(R) Arc(TM) A770 Graphics"])
-        self.assertEqual(pf.gpu, "other")
+    def intel(self, name="Intel(R) Arc(TM) A770 Graphics", vram=16.0):
+        return Hardware(
+            gpu_name=name, vram_bytes=int(vram * GB) if vram else None, gpu_source="dxgi", gpu_vendor="intel"
+        )
+
+    def test_intel_arc_gets_the_intel_build(self):
+        pf = self.run_pf(["Intel(R) Arc(TM) A770 Graphics"], self.intel())
+        self.assertEqual((pf.gpu, pf.intel_build, pf.amd_build), ("other", True, False))
+        self.assertFalse(pf.needs_cpu_choice)
+        self.assertFalse(pf.blocked)
+        self.assertIn("A770 Graphics (16 GB graphics memory)", pf.text())
+        self.assertIn("build for Intel graphics", pf.text())
+        self.assertIn("untested", pf.text())
+        self.assertNotIn("very slow", pf.text())
+        self.assertEqual(pf.manifest(self.m).archive_name, "ComfyUI_windows_portable_intel.7z")
+
+    def test_intel_arc_from_adapter_name_alone(self):
+        pf = self.run_pf(["Intel(R) Arc(TM) B580 Graphics"])  # detection found nothing, the adapter list names it
+        self.assertEqual((pf.gpu, pf.gpu_name, pf.intel_build), ("other", "Intel(R) Arc(TM) B580 Graphics", True))
+
+    def test_arc_card_next_to_uhd_graphics_from_adapter_names(self):
+        pf = self.run_pf(["Intel(R) UHD Graphics 770", "Intel(R) Arc(TM) A750 Graphics"])
+        self.assertEqual((pf.gpu, pf.gpu_name, pf.intel_build), ("other", "Intel(R) Arc(TM) A750 Graphics", True))
+
+    def test_core_ultra_arc_igpu_says_it_shares_memory(self):
+        # DXGI gives a built-in chip only a sliver of its own memory (Meteor Lake, Lunar Lake, Panther Lake).
+        pf = self.run_pf(["Intel(R) Arc(TM) Graphics"], self.intel("Intel(R) Arc(TM) Graphics", 0.125))
+        self.assertTrue(pf.intel_build)
+        self.assertEqual(pf.checks[0].level, "ok")
+        self.assertIn("shares the computer's memory", pf.text())
+        self.assertNotIn(" GB", pf.checks[0].message)
+
+    def test_lunar_and_panther_lake_names_get_the_intel_build(self):
+        for name in (
+            "Intel(R) Arc(TM) 140V GPU (16GB)",
+            "Intel(R) Arc(TM) 130V GPU (8GB)",
+            "Intel(R) Arc(TM) B390 GPU",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(self.run_pf([name], self.intel(name, 0.125)).intel_build)
+
+    def test_old_intel_graphics_is_the_cpu_route(self):
+        # Plain "Intel(R) Graphics" too: only names that say Arc get the Intel build.
+        for name in (
+            "Intel(R) UHD Graphics 770",
+            "Intel(R) Iris(R) Xe Graphics",
+            "Intel(R) HD Graphics 620",
+            "Intel(R) Graphics",
+        ):
+            with self.subTest(name=name):
+                pf = self.run_pf([name], self.intel(name, 0.125))
+                self.assertEqual(pf.gpu, "other")
+                self.assertFalse(pf.intel_build)
+                self.assertTrue(pf.needs_cpu_choice)
+                self.assertIn("very slow", pf.text())
+                self.assertEqual(pf.manifest(self.m).archive_name, self.m.archive_name)
+
+    def test_intel_without_a_pinned_build_is_the_cpu_route(self):
+        raw = json.loads(json.dumps(RAW))
+        del raw["comfyui"]["intel"]
+        m = comfy_setup.parse_manifest(raw)
+        pf = comfy_setup.preflight(m, self.intel(), None, 50 * GB, Path("C:/x"), 8188, False, platform="win32")
+        self.assertFalse(pf.intel_build)
         self.assertTrue(pf.needs_cpu_choice)
-        self.assertIn("Intel", pf.text())
+        self.assertEqual(m.for_intel(), m)
+
+    def test_nvidia_next_to_intel_igpu_stays_nvidia(self):
+        hw = self.nvidia()
+        pf = self.run_pf(["Intel(R) UHD Graphics", "NVIDIA GeForce RTX 4070"], hw)
+        self.assertEqual((pf.gpu, pf.intel_build, pf.amd_build), ("nvidia", False, False))
+        self.assertEqual(pf.manifest(self.m).archive_name, self.m.archive_name)
+
+    def test_linux_intel_points_at_xpu(self):
+        pf = comfy_setup.preflight(self.m, self.intel(), None, 50 * GB, Path("/x"), 8188, False, platform="linux")
+        self.assertTrue(pf.blocked)
+        self.assertEqual(pf.gpu, "other")
+        self.assertIn("--index-url https://download.pytorch.org/whl/xpu", pf.text())
+        self.assertIn(comfy_setup.MANUAL_INSTALL_INTEL, pf.text())
+        self.assertIn("not been tested", pf.text())
+        self.assertNotIn("ROCm", pf.text())
+
+    def test_linux_old_intel_graphics_get_no_xpu_line(self):
+        for name in ("Intel(R) UHD Graphics 770", "Intel(R) Iris(R) Xe Graphics", "Intel(R) Graphics", None):
+            with self.subTest(name=name):
+                hw = Hardware(gpu_name=name, gpu_vendor="intel")
+                pf = comfy_setup.preflight(self.m, hw, None, 50 * GB, Path("/x"), 8188, False, platform="linux")
+                self.assertNotIn("xpu", pf.text().lower())
+
+    def test_gpu_kind_trusts_the_picked_card(self):
+        names = ["AMD Radeon(TM) Graphics", "Intel(R) Arc(TM) B580 Graphics"]
+        self.assertEqual(comfy_setup.gpu_kind(names, False, "intel"), "other")
+        self.assertEqual(comfy_setup.gpu_kind(names, False, ""), "amd")  # nothing picked: the names decide
+        self.assertEqual(comfy_setup.gpu_kind(["Intel(R) UHD Graphics", "AMD Radeon RX 6600"], False, "amd"), "amd")
+        self.assertEqual(
+            comfy_setup.gpu_kind(["Intel(R) UHD Graphics", "NVIDIA GeForce RTX 4070"], False, "intel"), "nvidia"
+        )
+
+    def test_mac_gets_no_linux_pytorch_hint(self):
+        pf = comfy_setup.preflight(self.m, self.intel(), None, 50 * GB, Path("/x"), 8188, False, platform="darwin")
+        self.assertNotIn("xpu", pf.text())
+
+    def test_torch_install_command_per_vendor(self):
+        # The lines in ComfyUI's README (Manual Install), checked on 2026-11-06 at v0.44.0.
+        self.assertEqual(
+            comfy_setup.torch_install_command("nvidia"),
+            "pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu130",
+        )
+        self.assertEqual(
+            comfy_setup.torch_install_command("amd"),
+            "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm7.2",
+        )
+        self.assertEqual(
+            comfy_setup.torch_install_command("intel"),
+            "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu",
+        )
+        self.assertEqual(comfy_setup.torch_install_command("apple"), "")
+        self.assertEqual(comfy_setup.torch_install_command(""), "")
 
     def test_linux_amd_points_at_rocm(self):
         pf = comfy_setup.preflight(self.m, self.amd(), None, 50 * GB, Path("/x"), 8188, False, platform="linux")
@@ -327,6 +439,7 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(pf.gpu, "amd")
         self.assertIn(comfy_setup.MANUAL_INSTALL_LINUX_AMD, pf.text())
         self.assertIn("ROCm", pf.text())
+        self.assertIn("--index-url https://download.pytorch.org/whl/rocm7.2", pf.text())
         plain = comfy_setup.preflight(self.m, Hardware(), None, 50 * GB, Path("/x"), 8188, False, platform="linux")
         self.assertNotIn("ROCm", plain.text())
 
@@ -730,6 +843,64 @@ class AmdBuildTests(unittest.TestCase):
                     {"id": "t1", "type": "setup_comfy", "install_dir": str(Path(tmp) / "ComfyUI"), "amd": True}
                 )
             self.assertEqual(used, ["ComfyUI_windows_portable_amd.7z"])
+            self.assertNotIn("--cpu", Settings.load(cfg, backup=False).extra_server_args)
+
+
+class IntelBuildTests(unittest.TestCase):
+    """Item 15: ComfyUI's own build for Intel graphics (PyTorch XPU), pinned like the others."""
+
+    m = comfy_setup.parse_manifest(RAW)
+
+    def test_manifest_has_the_pinned_intel_build(self):
+        intel = self.m.for_intel()
+        self.assertEqual(intel.archive_name, "ComfyUI_windows_portable_intel.7z")
+        self.assertEqual(intel.archive_size, 1436509991)
+        self.assertEqual(intel.archive_sha256, "50f629c3743b1fb64509d8e582ae30b06105d9614587a514e79ac9f3c3f62939")
+        self.assertTrue(intel.archive_url.endswith(f"/{self.m.version}/ComfyUI_windows_portable_intel.7z"))
+        self.assertEqual(intel.folder, self.m.folder)
+        self.assertEqual((intel.nodes, intel.pip), (self.m.nodes, self.m.pip))
+        self.assertEqual(intel.unpacked_bytes, 5313461686)
+
+    def test_chosen(self):
+        self.assertEqual(self.m.chosen(intel=True).archive_name, "ComfyUI_windows_portable_intel.7z")
+        self.assertEqual(self.m.chosen().archive_name, self.m.archive_name)  # NVIDIA stays the default
+        self.assertEqual(self.m.chosen(older_gpu=True).archive_name, "ComfyUI_windows_portable_nvidia_cu126.7z")
+        self.assertEqual(self.m.chosen(amd=True).archive_name, "ComfyUI_windows_portable_amd.7z")
+
+    def test_unofficial_or_unpinned_intel_build_is_refused(self):
+        for key, value in (
+            ("url", "https://example.com/ComfyUI_windows_portable_intel.7z"),
+            ("sha256", "abc"),
+            ("size", 0),
+            ("name", "../evil.7z"),
+        ):
+            with self.subTest(key=key):
+                bad = json.loads(json.dumps(RAW))
+                bad["comfyui"]["intel"]["asset"][key] = value
+                with self.assertRaises(comfy_setup.SetupError):
+                    comfy_setup.parse_manifest(bad)
+
+    def test_supervisor_task_downloads_the_intel_build_without_cpu(self):
+        from openfill import supervisor
+        from openfill.config import Settings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "openfill"
+            profile.mkdir()
+            cfg = profile / "config.json"
+            Settings(comfy_dir=r"C:\nowhere").save(cfg)
+            worker = supervisor.TaskWorker(profile, cfg, supervisor.Logger(profile / "t.log", "t"))
+            used = []
+
+            def fake(manifest, install_dir, progress, cancel, log, popen=None):
+                used.append(manifest.archive_name)
+                return Path(tmp) / "ComfyUI" / "ComfyUI_windows_portable"
+
+            with mock.patch.object(comfy_setup, "run_setup", fake):
+                worker._setup_comfy(
+                    {"id": "t1", "type": "setup_comfy", "install_dir": str(Path(tmp) / "ComfyUI"), "intel": True}
+                )
+            self.assertEqual(used, ["ComfyUI_windows_portable_intel.7z"])
             self.assertNotIn("--cpu", Settings.load(cfg, backup=False).extra_server_args)
 
 
