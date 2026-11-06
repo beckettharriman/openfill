@@ -1532,6 +1532,52 @@ class ShellInterpreterTests(unittest.TestCase):
             with self.subTest(script=script):
                 self.run_script(script, False)
 
+    def run_as_mac(
+        self, script: str, extra: Path | None = None, system: str = "Darwin", pillow: bool = True
+    ) -> subprocess.CompletedProcess:
+        """Run ``script`` with ``uname`` saying ``system``, a fake Pillow (or a broken one) and no ComfyUI."""
+        temp = tempfile.mkdtemp(prefix="openfill mac python ")
+        self.addCleanup(shutil.rmtree, temp, True)
+        root = Path(temp)
+        stubs = root / "bin"
+        stubs.mkdir()
+        (stubs / "uname").write_text(f"#!/bin/sh\necho {system}\n")
+        (stubs / "uname").chmod(0o755)
+        (root / "PIL.py").write_text("" if pillow else "raise ImportError('test: no Pillow')\n")
+        package = root / "openfill_photocraft"
+        package.mkdir()
+        (package / "__init__.py").write_text("")
+        for name in ("install.py", "__main__.py"):
+            (package / name).write_text("print('started with', __import__('sys').executable)\n")
+        path = [str(stubs)] + ([str(extra)] if extra else []) + ["/usr/bin", "/bin"]
+        env = {"PATH": os.pathsep.join(path), "HOME": str(root / "home"), "PYTHONPATH": str(root)}
+        shutil.copy2(ROOT / "photocraft" / script, root / script)  # it puts its own folder on the path
+        return subprocess.run(["sh", str(root / script)], env=env, capture_output=True, text=True, timeout=30)
+
+    @unittest.skipUnless(os.access("/usr/bin/python3", os.X_OK), "needs a /usr/bin/python3 to refuse")
+    def test_mac_never_runs_the_system_python(self):
+        for script in ("install.sh", "openfill-photocraft.sh"):
+            with self.subTest(script=script):
+                r = self.run_as_mac(script)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertNotIn("started with", r.stdout)
+                self.assertIn("python.org/downloads/macos", r.stderr)
+                self.assertIn("OPENFILL_PYTHON=~/ComfyUI/venv/bin/python", r.stderr)
+
+    def test_mac_uses_a_python3_outside_usr_bin(self):
+        other = Path(tempfile.mkdtemp(prefix="openfill other python "))
+        self.addCleanup(shutil.rmtree, other, True)
+        (other / "python3").symlink_to(sys.executable)
+        r = self.run_as_mac("install.sh", other)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("started with", r.stdout)
+
+    def test_linux_failure_names_the_packages_to_install(self):
+        r = self.run_as_mac("install.sh", system="Linux", pillow=False)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("sudo dnf install python3-pillow python3-tkinter", r.stderr)
+        self.assertIn("sudo apt install python3-pil", r.stderr)
+
     def test_invalid_explicit_python_does_not_silently_switch(self):
         env = dict(os.environ, OPENFILL_PYTHON="/not/an/interpreter")
         result = subprocess.run(["sh", str(ROOT / "photocraft/install.sh")], env=env, capture_output=True, text=True)
@@ -1575,6 +1621,28 @@ class MacInputTests(unittest.TestCase):
         select.pick.assert_called_once_with("DreamShaper")
         previous.focus_set.assert_called_once()
         self.assertIsNone(select._native_menu)
+
+
+class WindowsInstallerTextTests(unittest.TestCase):
+    """What the Windows .cmd looks for and says; it runs on Windows (CI), this reads it anywhere."""
+
+    TEXT = (ROOT / "photocraft" / "Install OpenFill for PhotoCraft.cmd").read_bytes().decode("ascii")
+
+    def test_finds_current_python_org_installs(self):
+        for path in (
+            r"%LOCALAPPDATA%\Programs\Python\Python314\python.exe",  # the 3.14 installer, per user
+            r"%ProgramFiles%\Python313\python.exe",  # installed for all users
+        ):
+            self.assertEqual(self.TEXT.count(path), 2, path)  # with Pillow, and Pillow added
+        # The install manager (python.org's default from 3.14) gives `py`; Pillow is added to it too.
+        self.assertIn('py -3 -c "import sys; print(sys.executable)"', self.TEXT)
+        self.assertIn('"%PYEXE%") do (', self.TEXT)
+
+    def test_no_python_says_what_to_do_and_opens_the_page(self):
+        self.assertIn("Install Python from python.org", self.TEXT)
+        self.assertIn("double-click Install OpenFill for PhotoCraft.cmd again", self.TEXT)
+        self.assertIn('start "" "https://www.python.org/downloads/windows/"', self.TEXT)
+        self.assertIn("\r\n", self.TEXT)
 
 
 @unittest.skipUnless(os.name == "nt", "Windows command installer")

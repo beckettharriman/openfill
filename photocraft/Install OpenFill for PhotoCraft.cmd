@@ -16,15 +16,19 @@ if defined OPENFILL_PYTHON (
   set "PY=%OPENFILL_PYTHON%"
 )
 set "CHECK=import sys, PIL, tkinter; sys.exit(sys.version_info < (3, 10))"
-for %%P in ("%OPENFILL_PYTHON%" "%USERPROFILE%\Documents\ComfyUI\.venv\Scripts\python.exe" "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" "%LOCALAPPDATA%\Programs\Python\Python311\python.exe") do (
+for %%P in ("%OPENFILL_PYTHON%" "%USERPROFILE%\Documents\ComfyUI\.venv\Scripts\python.exe" "%LOCALAPPDATA%\Programs\Python\Python314\python.exe" "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" "%ProgramFiles%\Python314\python.exe" "%ProgramFiles%\Python313\python.exe" "%ProgramFiles%\Python312\python.exe" "%ProgramFiles%\Python311\python.exe") do (
   if not defined PY if exist "%%~P" "%%~P" -c "%CHECK%" >nul 2>&1 && set "PY=%%~P"
 )
 if not defined PY (
   where py >nul 2>&1 && for /f "delims=" %%E in ('py -3 -c "import sys, PIL, tkinter; print(sys.executable)" 2^>nul') do set "PY=%%E"
 )
+rem The Python `py` starts: python.org's install manager (the default from Python 3.14) keeps
+rem Python in its own folder and provides `py`.
+set "PYEXE="
+if not defined PY where py >nul 2>&1 && for /f "delims=" %%E in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do set "PYEXE=%%E"
 rem A Python with Tk but without Pillow (python.org's installer has Tk): add Pillow for this user.
 if not defined PY (
-  for %%P in ("%OPENFILL_PYTHON%" "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" "%LOCALAPPDATA%\Programs\Python\Python310\python.exe") do (
+  for %%P in ("%OPENFILL_PYTHON%" "%LOCALAPPDATA%\Programs\Python\Python314\python.exe" "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" "%ProgramFiles%\Python314\python.exe" "%ProgramFiles%\Python313\python.exe" "%ProgramFiles%\Python312\python.exe" "%ProgramFiles%\Python311\python.exe" "%PYEXE%") do (
     if not defined PY if exist "%%~P" (
       "%%~P" -c "import sys, tkinter; sys.exit(sys.version_info < (3, 10))" >nul 2>&1 && (
         echo Adding Pillow to %%~P ...
@@ -39,8 +43,13 @@ for %%P in ("%LOCALAPPDATA%\OpenFill\ComfyUI\ComfyUI_windows_portable\python_emb
   if not defined PY if exist "%%~P" "%%~P" -c "%CHECK%" >nul 2>&1 && set "PY=%%~P"
 )
 if not defined PY (
-  echo OpenFill needs Python 3.10 or newer with Pillow: ComfyUI's own Python has it.
-  echo Install ComfyUI first ^(OpenFill for GIMP can download it^), or set OPENFILL_PYTHON.
+  echo OpenFill needs Python, and none was found on this PC.
+  echo.
+  echo 1. Install Python from python.org: the page opens now. The default options are fine.
+  echo 2. Then double-click Install OpenFill for PhotoCraft.cmd again. It adds Pillow by itself.
+  echo.
+  echo Already have ComfyUI? Its Python works too: see Use ComfyUI's Python in docs\install.md.
+  if not defined OPENFILL_NO_BROWSER start "" "https://www.python.org/downloads/windows/"
   pause
   exit /b 1
 )
