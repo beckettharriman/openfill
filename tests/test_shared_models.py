@@ -5,7 +5,9 @@ model folders, the yaml for ComfyUI, the catalog, and the guarantee that nothing
 import hashlib
 import json
 import os
+import shutil
 import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -104,6 +106,17 @@ def snapshot(root: Path) -> dict:
     st = root.lstat()
     out["."] = {"mode": st.st_mode, "mtime": st.st_mtime_ns}
     return out
+
+
+def _yaml(path: Path):
+    """What ComfyUI's loader gets from the file (PyYAML when there, else the '{}' form only)."""
+    text = path.read_text(encoding="utf-8")
+    try:
+        import yaml  # noqa: PLC0415 - only to read the text back
+    except ImportError:
+        body = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
+        return {} if body == ["{}"] else text
+    return yaml.safe_load(text)
 
 
 class SettingTests(unittest.TestCase):
@@ -336,7 +349,9 @@ class YamlTests(unittest.TestCase):
             self.assertEqual(path, base / sm.CONFIG_FILENAME)
             self.assertIn(str((server / "models" / "vae").resolve()), path.read_text())
             self.assertIsNone(sm.write_config(base, []))
-            self.assertFalse(path.exists())
+            self.assertEqual(_yaml(path), {})  # kept as an empty mapping
+            self.assertIsNone(sm.write_config(Path(tmp) / "never", []))
+            self.assertFalse((Path(tmp) / "never" / sm.CONFIG_FILENAME).exists())  # not made when never used
 
 
 class CatalogTests(unittest.TestCase):
@@ -565,7 +580,7 @@ class WorkerTests(WorkerFixture):
         self.assertIn(str((self.server / "models" / "inpaint").resolve()), path.read_text())
         Settings(comfy_dir=str(self.comfy)).save(self.profile / "config.json")
         self.assertIsNone(supervisor.shared_model_paths(self.profile, self.profile / "config.json", logs.append))
-        self.assertFalse(path.exists())
+        self.assertEqual(_yaml(path), {})  # kept for a ComfyUI started by hand, with no folders
 
 
 class NeverWriteTests(WorkerFixture):
@@ -699,12 +714,12 @@ class AppTests(unittest.TestCase):
         self.assertEqual(queued[0]["files"], [])  # nothing of the other install is ever named for deletion
         self.assertEqual(self.app.set_shared_models(""), "No other ComfyUI folders are used.")
         self.assertFalse(self.installed("realvisxl-v5"))
-        self.assertFalse((self.app.paths.base / sm.CONFIG_FILENAME).exists())
+        self.assertEqual(_yaml(self.app.paths.base / sm.CONFIG_FILENAME), {})  # kept, empty (review 2, N3)
 
     def test_changing_the_list_does_not_kill_a_running_job(self):
         """Review B2: saving the list never stops the engine; the next job restarts it only
         when nothing runs (no task, nothing queued in ComfyUI)."""
-        stale = {"server_pid": 1, "url": "http://127.0.0.1:9", "shared_models": ""}
+        stale = {"supervisor_pid": os.getpid(), "server_pid": 1, "url": "http://127.0.0.1:9", "shared_models": ""}
         busy = {"current": {"type": "download", "model_id": "flux1-fill-dev-gguf-q4"}}
         with (
             mock.patch.object(self.app.server, "read_state", return_value=stale),
@@ -902,6 +917,200 @@ class BundledSizeLimitTests(unittest.TestCase):
         _entries, found = self.build()
         (mine,) = [e for e in found if e.files[0].dest == "unet/my-fill.gguf"]
         self.assertEqual(mine.file_by_role("clip1").dest, "text_encoders/t5xxl_fp8_e4m3fn.safetensors")  # closest
+
+
+class Review2AppTests(AppTests):
+    """The second review's cases (review-models2.md, 2026-11-06), kept."""
+
+    test_set_shared_models_and_remove = None
+    test_changing_the_list_does_not_kill_a_running_job = None
+    test_suggestions_skip_folders_already_used = None
+
+    def api(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "photocraft"))
+        from openfill_photocraft import web
+
+        api = web.Api.__new__(web.Api)
+        api.service = mock.Mock(app=self.app)
+        return api
+
+    def test_clearing_the_list_keeps_a_yaml_comfyui_can_read(self):
+        """N3: a ComfyUI started by hand names the file on its command line; it must stay readable."""
+        self.app.set_shared_models(str(self.server))
+        path = self.app.paths.base / sm.CONFIG_FILENAME
+        self.app.set_shared_models("")
+        self.assertEqual(_yaml(path), {})
+
+    def test_an_unplugged_shared_folder_does_not_block_other_settings(self):
+        """N2: the page sends the unchanged list on every save; it is not checked again."""
+        self.app.set_shared_models(str(self.server))
+        stored = self.app.settings.shared_models
+        moved = self.server.with_name("server-unplugged")
+        self.server.rename(moved)
+        try:
+            self.api().post("/api/settings", {"steps": 31, "shared_models": sm.display(stored)})
+            self.assertEqual(Settings.load(self.app.paths.config).steps, 31)
+            self.assertEqual(Settings.load(self.app.paths.config).shared_models, stored)
+        finally:
+            moved.rename(self.server)
+
+    def test_web_save_with_a_new_comfyui_folder_is_all_or_nothing(self):
+        """N8: the list is checked against the ComfyUI folder saved with it."""
+        other = Path(self.tmp.name) / "OtherComfy"
+        (other / "python_embeded").mkdir(parents=True)
+        (other / "python_embeded" / "python.exe").write_text("")
+        (other / "ComfyUI" / "custom_nodes").mkdir(parents=True)
+        (other / "ComfyUI" / "models" / "checkpoints").mkdir(parents=True)
+        (other / "ComfyUI" / "main.py").write_text("")
+        before = Settings.load(self.app.paths.config).comfy_dir
+        if os.name == "posix":  # the new ComfyUI folder's models are a link to the folder in the list
+            krita_models = self.server / "models"
+            shutil.rmtree(other / "ComfyUI" / "models")
+            (other / "ComfyUI" / "models").symlink_to(krita_models, target_is_directory=True)
+            body = {"comfy_dir": str(other), "shared_models": str(self.server)}
+            with self.assertRaises(BackendError):
+                self.api().post("/api/settings", body)
+            self.assertEqual(Settings.load(self.app.paths.config).comfy_dir, before, "half the save was applied")
+        # a good pair is saved together, and the yaml follows the new ComfyUI folder (N11)
+        (other / "ComfyUI" / "models").unlink() if os.name == "posix" else None
+        (other / "ComfyUI" / "models" / "checkpoints").mkdir(parents=True, exist_ok=True)
+        self.api().post("/api/settings", {"comfy_dir": str(other), "shared_models": str(self.server)})
+        saved = Settings.load(self.app.paths.config)
+        self.assertEqual((saved.comfy_dir, sm.parse(saved.shared_models)), (str(other), [str(self.server)]))
+        text = (self.app.paths.base / sm.CONFIG_FILENAME).read_text(encoding="utf-8")
+        self.assertIn(json.dumps(str((other / "ComfyUI" / "models" / "inpaint").resolve())), text)
+
+    def test_a_deferred_restart_does_not_promise_models_the_engine_cannot_load(self):
+        """N7: while the running engine has not read the new list, the catalog keeps the list
+        it runs with, and a job for a model only the new list has says why it waits."""
+        running = {
+            "supervisor_pid": os.getpid(),
+            "server_pid": 1,
+            "url": "http://127.0.0.1:9",
+            "shared_models": "",
+            "shared_roots": [],
+        }
+        busy = {"current": {"type": "download", "model_id": "flux1-fill-dev-gguf-q4"}}
+        with (
+            mock.patch.object(self.app.server, "read_state", return_value=running),
+            mock.patch.object(self.app.server, "task_status", return_value=busy),
+            mock.patch.object(self.app.server, "pending_tasks", return_value=[]),
+            mock.patch.object(self.app.server, "request_stop", return_value=True) as stop,
+        ):
+            self.app.set_shared_models(str(self.server))
+            stop.assert_not_called()
+            self.assertTrue(self.app.shared_pending())
+            self.assertFalse(self.installed("realvisxl-v5"))  # the running ComfyUI cannot load it
+            with self.assertRaises(BackendError) as cm:
+                self.app.resolve_model("realvisxl-v5")
+            self.assertIn("reads when it starts again", str(cm.exception))
+        # once the engine runs with the new list (or is not running), Krita's model counts
+        self.app.rescan()
+        self.assertTrue(self.installed("realvisxl-v5"))
+
+    def test_a_stale_state_file_does_not_stall_every_job(self):
+        """N6: a state file whose supervisor is gone is not waited on."""
+        self.app.set_shared_models(str(self.server))
+        stale = {"supervisor_pid": 999999, "server_pid": 999998, "url": "http://127.0.0.1:9", "shared_models": ""}
+        clock = [0.0]
+        with (
+            mock.patch.object(self.app.server, "read_state", return_value=stale),
+            mock.patch.object(self.app.server, "task_status", return_value={}),
+            mock.patch.object(self.app.server, "pending_tasks", return_value=[]),
+            mock.patch.object(self.app.server, "is_healthy", return_value=True),
+            mock.patch.object(self.app.server, "request_stop", return_value=True) as stop,
+            mock.patch("openfill.app.time.monotonic", side_effect=lambda: clock[0]),
+            mock.patch("openfill.app.time.sleep", side_effect=lambda s: clock.__setitem__(0, clock[0] + s)),
+        ):
+            self.app._restart_for_shared_models()
+        self.assertLess(clock[0], 5)
+        stop.assert_not_called()
+
+    def test_the_restart_waits_for_the_supervisor_to_be_gone(self):
+        """N10: not only for ComfyUI to stop answering: for the state file to go."""
+        self.app.set_shared_models(str(self.server))
+        state = {"supervisor_pid": os.getpid(), "server_pid": 1, "url": "http://127.0.0.1:9", "shared_models": ""}
+        reads = iter([state, state, state, state, {}])
+        with (
+            mock.patch.object(self.app.server, "read_state", side_effect=lambda: next(reads, {})),
+            mock.patch.object(self.app.server, "task_status", return_value={}),
+            mock.patch.object(self.app.server, "pending_tasks", return_value=[]),
+            mock.patch.object(self.app.server, "is_healthy", return_value=False),  # ComfyUI already silent
+            mock.patch.object(self.app.server, "request_stop", return_value=True),
+            mock.patch("openfill.app.ComfyClient") as client,
+            mock.patch("openfill.app.time.sleep") as sleep,
+        ):
+            client.return_value.queue.return_value = {"queue_running": [], "queue_pending": []}
+            self.app._restart_for_shared_models()
+        self.assertGreaterEqual(sleep.call_count, 2)  # kept waiting while the state file was there
+
+
+class Review2NamesTests(unittest.TestCase):
+    @unittest.skipIf(sys.platform != "linux", "Linux file names are bytes")
+    def test_a_non_utf8_folder_name_does_not_stop_the_engine_from_starting(self):
+        """N4: refused with a plain message; a hand-edited setting never kills the supervisor."""
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = os.path.join(os.fsencode(tmp), b"caf\xe9")
+            os.mkdir(raw)
+            server = make_krita(Path(os.fsdecode(raw)) / "server")
+            folders, problem = sm.check(str(server))
+            self.assertEqual(folders, [])
+            self.assertIn("not UTF-8", problem)
+            profile = Path(tmp) / "profile"
+            profile.mkdir()
+            Settings(shared_models=sm.join([str(server)])).save(profile / "config.json")
+            # no exception, and no undecodable name in the file ComfyUI reads
+            path = supervisor.shared_model_paths(profile, profile / "config.json", lambda *a: None)
+            if path is not None:
+                path.read_text(encoding="utf-8")
+
+    def test_another_comfyui_that_reads_openfills_models_can_still_be_shared(self):
+        """N5: its own extra_model_paths.yaml points at OpenFill's models: accepted, that root
+        left out (those files are OpenFill's) and never guarded against OpenFill."""
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "OpenFill" / "ComfyUI" / "models"
+            (own / "checkpoints").mkdir(parents=True)
+            other = Path(tmp) / "ComfyUI"
+            (other / "models" / "checkpoints").mkdir(parents=True)
+            (other / "main.py").write_text("")
+            (other / "extra_model_paths.yaml").write_text(
+                f"openfill:\n    base_path: {own}\n    checkpoints: checkpoints\n", encoding="utf-8"
+            )
+            folders, problem = sm.check(str(other), own)
+            self.assertEqual(problem, "")
+            self.assertEqual(sm.roots_for(sm.join(folders), own), [other / "models"])
+            guard = sm.guard_roots(sm.join(folders), own)
+            self.assertEqual(guard, [other / "models"])
+            self.assertFalse(sm.blocked(own / "checkpoints" / "x.safetensors", guard, own))
+            self.assertTrue(sm.blocked(other / "models" / "checkpoints" / "x.safetensors", guard, own))
+
+    def test_same_folder_by_identity(self):
+        """N1: folders are compared by identity, not by how their path is written."""
+        with tempfile.TemporaryDirectory() as tmp:
+            a = Path(tmp) / "a"
+            (a / "sub").mkdir(parents=True)
+            self.assertTrue(sm._same(a, Path(tmp) / "x" / ".." / "a"))
+            self.assertTrue(sm.inside(a / "sub" / "not-there-yet.bin", [a]))
+            self.assertFalse(sm.inside(Path(tmp) / "b" / "f", [a]))
+            if os.name == "posix":
+                link = Path(tmp) / "link"
+                link.symlink_to(a, target_is_directory=True)
+                self.assertTrue(sm._same(link, a))
+                self.assertTrue(sm.inside(link / "sub" / "f", [a]))
+
+
+class Review2DocsTests(unittest.TestCase):
+    def test_docs_match_the_size_rule(self):
+        """N9: the list's GGUF FLUX entries keep their T5 GGUF over a t5xxl_fp8; the docs say so."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "models"
+            fp8 = catalog_file("flux1-fill-dev", "clip1")
+            sized(write_safetensors(root / "text_encoders" / fp8.filename, T5_ST), fp8.size)
+            (entry,) = [e for e in lm.share(ENTRIES, root) if e.id == "flux1-fill-dev-gguf-q4"]
+            self.assertTrue(entry.file_by_role("clip1").url)  # downloaded, not taken
+        doc = (Path(__file__).resolve().parents[1] / "docs" / "models.md").read_text(encoding="utf-8")
+        self.assertNotIn("or one from the list", doc)
+        self.assertIn("1.2 times", doc)
 
 
 if __name__ == "__main__":

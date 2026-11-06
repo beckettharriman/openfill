@@ -1440,7 +1440,7 @@ class SharedModelsPageTests(unittest.TestCase):
         app.reload_settings = lambda: None
         app.shared_suggestions.return_value = [Candidate(Path(tmp.name) / "krita" / "server", "Krita AI Diffusion")]
 
-        def check(text):
+        def check(text, models_root=None):
             from openfill import shared_models
             from openfill.backend import BackendError
 

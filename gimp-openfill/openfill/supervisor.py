@@ -522,7 +522,7 @@ class TaskWorker:
         also when OpenFill's own models folder is a link into it (shared_models.blocked)."""
         settings = Settings.load(self.config_path, backup=False)
         own = catalog.default_models_root(settings.comfy_dir) if settings.comfy_dir else None
-        return shared_models.blocked(path, shared_models.guard_roots(settings.shared_models), own)
+        return shared_models.blocked(path, shared_models.guard_roots(settings.shared_models, own), own)
 
     def _refuse_shared(self, path: Path) -> None:
         """Raise ``ValueError`` when ``path`` is in a shared folder of another install."""
@@ -964,12 +964,32 @@ def shared_model_paths(base: Path, config_path: Path, log: Callable[..., None]) 
         settings = Settings.load(config_path, backup=False)
         own = catalog.default_models_root(settings.comfy_dir) if settings.comfy_dir else None
         path = shared_models.write_config(base, shared_models.roots_for(settings.shared_models, own), own)
-    except OSError as err:
+    except (OSError, UnicodeError) as err:  # ComfyUI starts without them rather than not at all
         log(f"could not write the shared model folders file: {err}", "WARN")
         return None
     if path is not None:
         log(f"models of other ComfyUI installs, read only, listed in {path}")
     return path
+
+
+def _yaml_roots(config_path: Path) -> list[str]:
+    """The shared roots of config.json, as ComfyUI is given them."""
+    try:
+        settings = Settings.load(config_path, backup=False)
+        own = catalog.default_models_root(settings.comfy_dir) if settings.comfy_dir else None
+        return [str(r) for r in shared_models.roots_for(settings.shared_models, own)]
+    except (OSError, UnicodeError):
+        return []
+
+
+def _yaml_text(path: Path | None) -> str:
+    """The text of the shared folders yaml ComfyUI was started with ("" for none)."""
+    if path is None:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
 
 
 def _run_backend(
@@ -1000,6 +1020,7 @@ def _run_backend(
     ]
     if args.extra_args.strip():
         cmd += args.extra_args.split()
+    base_cmd = list(cmd)
     shared_yaml = shared_model_paths(base, config_path, log)
     if shared_yaml is not None:
         cmd += ["--extra-model-paths-config", str(shared_yaml)]
@@ -1052,7 +1073,8 @@ def _run_backend(
         "command": cmd,
         # the shared folders (yaml text) this ComfyUI was started with: App starts it again,
         # when idle, after the setting changed (ComfyUI reads model folders only when it starts)
-        "shared_models": shared_yaml.read_text(encoding="utf-8") if shared_yaml is not None else "",
+        "shared_models": _yaml_text(shared_yaml),
+        "shared_roots": _yaml_roots(config_path) if shared_yaml is not None else [],
         "status": "starting",
     }
     write_json(state_path, state)
@@ -1063,9 +1085,21 @@ def _run_backend(
         with restart_lock:
             log("restarting backend after node install")
             backend.stop()
+            # the shared folders may have changed since the start: read them again
+            fresh = shared_model_paths(base, config_path, log)
+            backend.cmd = base_cmd + (["--extra-model-paths-config", str(fresh)] if fresh is not None else [])
             backend.start()
             current = read_json(state_path)
-            current.update({"server_pid": backend.pid, "status": "starting", "started": time.time()})
+            current.update(
+                {
+                    "server_pid": backend.pid,
+                    "status": "starting",
+                    "started": time.time(),
+                    "command": backend.cmd,
+                    "shared_models": _yaml_text(fresh),
+                    "shared_roots": _yaml_roots(config_path) if fresh is not None else [],
+                }
+            )
             write_json(state_path, current)
 
     worker = None

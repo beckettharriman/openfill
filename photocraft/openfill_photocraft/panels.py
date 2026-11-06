@@ -133,7 +133,10 @@ class GearView(tk.Frame):
 
         typed = self.engine.shared.get().strip()
         try:
-            shared = app.check_shared_models(typed)  # first: a bad folder changes nothing
+            from openfill import catalog as cat
+
+            new_root = cat.default_models_root(folder) if folder and folder != (app.settings.comfy_dir or "") else None
+            shared = app.check_shared_models(typed, new_root)  # first: a bad folder changes nothing
         except Exception as err:  # noqa: BLE001 - says what is wrong
             self.say(str(err), BAD)
             return

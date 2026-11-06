@@ -105,10 +105,41 @@ def display(text: str | None) -> str:
     return os.pathsep.join(parse(text))
 
 
+def _utf8(path: Path | str) -> bool:
+    """True when ``path`` can be written into the yaml: ComfyUI reads it as strict UTF-8, and a
+    Linux folder name that is not UTF-8 (an old Latin-1 archive) cannot be."""
+    try:
+        str(path).encode("utf-8")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def _lexically_inside(path: Path | str, folder: Path | str) -> bool:
+    """``path`` is ``folder`` or below it, as written (no links followed)."""
+    a = os.path.normcase(os.path.normpath(os.path.abspath(str(path))))
+    b = os.path.normcase(os.path.normpath(os.path.abspath(str(folder))))
+    try:
+        return os.path.commonpath([a, b]) == b
+    except ValueError:  # other drives
+        return False
+
+
+def _own_alias(folder: str, root: Path, own: Path) -> bool:
+    """``root`` (a models root of the other install ``folder``) is OpenFill's own models folder
+    by identity AND is the other install's own folder: OpenFill's folder is a link, junction
+    or bind mount to it. A root that is OpenFill's folder because the other ComfyUI's
+    ``extra_model_paths.yaml`` points at it (sharing the other way round) is not an alias:
+    those files are OpenFill's."""
+    return _same(root, own) and _lexically_inside(root, folder)
+
+
 def check(text: str | None, own_models_root: Path | str | None = None) -> tuple[list[str], str]:
     """(the folders, written out in full, "") or ([], the problem in plain words) for what the
-    user typed: every folder must be a full path to an existing folder (``~`` is expanded),
-    and none may be OpenFill's own models folder or a link to it."""
+    user typed: every folder must be a full path to an existing folder (``~`` is expanded)
+    whose name ComfyUI can read, and OpenFill's own models folder must not be a link to one of
+    its model folders. A root that already is OpenFill's own folder (the other ComfyUI reads
+    OpenFill's models) is fine: it is left out (:func:`roots_for`)."""
     out = []
     for raw in parse(text):
         folder = os.path.expanduser(raw)
@@ -116,66 +147,78 @@ def check(text: str | None, own_models_root: Path | str | None = None) -> tuple[
             return [], f"Use the full path of the folder, not {raw!r}."
         if not os.path.isdir(folder):
             return [], f"Folder not found: {raw}"
+        if not _utf8(folder):
+            return [], f"The name of the folder {raw!r} is not UTF-8, which ComfyUI cannot read. Rename it first."
         folder = os.path.normpath(folder)
         if own_models_root is not None:
             own = Path(own_models_root)
             for root in model_roots(folder) or [Path(folder)]:
-                if _same(root, own):
+                if _own_alias(folder, root, own):
                     return [], (
-                        f"{raw} is OpenFill's own models folder (or a link to it). "
-                        "Choose the folder of the other ComfyUI instead."
+                        f"OpenFill's own models folder is the same folder as {root} (a link to it). "
+                        "OpenFill would write into the other ComfyUI there: remove that link first."
                     )
         out.append(folder)
     return out, ""
 
 
-def _same(a: Path, b: Path) -> bool:
+def _same(a: Path | str, b: Path | str) -> bool:
+    """The same folder, by identity (device and inode: links, junctions, bind mounts and a
+    different letter case on a case-insensitive disk all count); by path when one is missing."""
     try:
-        return os.path.normcase(str(Path(a).resolve())) == os.path.normcase(str(Path(b).resolve()))
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.realpath(str(a))) == os.path.normcase(os.path.realpath(str(b)))
+
+
+def _ancestors(path: Path | str):
+    """``path`` and its parents that exist, as written and with links resolved (a file that
+    is not there yet, e.g. a download, is judged by the folder it would land in)."""
+    seen = set()
+    for start in (os.path.abspath(str(path)), os.path.realpath(str(path))):
+        q = start
+        while True:
+            if q not in seen and os.path.exists(q):
+                seen.add(q)
+                yield q
+            parent = os.path.dirname(q)
+            if parent == q:
+                break
+            q = parent
+
+
+def _within(path: Path | str, root: Path | str) -> bool:
+    """``path`` is ``root`` or below it, by identity of ``path``'s folders."""
+    try:
+        target = os.stat(root)
     except OSError:
         return False
-
-
-def _real(path: Path | str) -> str:
-    return os.path.normcase(os.path.realpath(str(path)))
-
-
-def inside(path: Path | str, roots: Iterable[Path | str]) -> bool:
-    """True when ``path`` is one of ``roots`` or below one, comparing real paths (links and
-    junctions resolved)."""
-    try:
-        p = _real(path)
-    except OSError:
-        return True  # cannot tell: treat as shared, so nothing is written there
-    for root in roots:
+    for q in _ancestors(path):
         try:
-            r = _real(root)
+            st = os.stat(q)
         except OSError:
             continue
-        if p == r or p.startswith(r.rstrip(os.sep) + os.sep):
+        if (st.st_dev, st.st_ino) == (target.st_dev, target.st_ino):
             return True
     return False
 
 
+def inside(path: Path | str, roots: Iterable[Path | str]) -> bool:
+    """True when ``path`` is one of ``roots`` or below one, by folder identity (links,
+    junctions and bind mounts count)."""
+    return any(_within(path, root) for root in roots)
+
+
 def blocked(path: Path | str, guard: Iterable[Path | str], own_models_root: Path | str | None) -> bool:
-    """True when OpenFill must not write or delete ``path``: it is (by its real path) in a
+    """True when OpenFill must not write or delete ``path``: it is (by folder identity) in a
     shared root of :func:`guard_roots`. OpenFill's own models folder is never blocked when a
-    shared folder merely contains it (a parent such as ``C:\\AI`` holding both installs);
-    it is when its real path IS a shared root (a link from OpenFill's folder to the other's)."""
-    own = None
-    if own_models_root is not None:
-        try:
-            own = _real(own_models_root)
-        except OSError:
-            own = None
+    shared folder merely contains it (a parent such as ``C:\\AI`` holding both installs); it
+    is when it IS a shared root (a link or bind mount from OpenFill's folder to the other's)."""
+    own = own_models_root if own_models_root is not None and os.path.isdir(own_models_root) else None
     for root in guard:
-        try:
-            r = _real(root)
-        except OSError:
+        if not _within(path, root):
             continue
-        if not inside(path, [r]):
-            continue
-        if own is not None and own != r and inside(own, [r]) and inside(path, [own]):
+        if own is not None and not _same(own, root) and _within(own, root) and _within(path, own):
             continue  # OpenFill's own folder below a shared parent: only the rest is shared
         return True
     return False
@@ -261,12 +304,21 @@ def model_roots(folder: Path | str) -> list[Path]:
     return unique
 
 
-def guard_roots(setting: str | None) -> list[Path]:
-    """Every root of the folders in the setting, OpenFill's own models folder included when a
-    link makes it one of them: the places the supervisor never writes to (:func:`blocked`)."""
+def guard_roots(setting: str | None, own_models_root: Path | str | None = None) -> list[Path]:
+    """Every root of the folders in the setting: the places the supervisor never writes to
+    (:func:`blocked`). OpenFill's own models folder is one of them when a link or mount makes
+    it the other install's folder; a root that is OpenFill's folder because the other ComfyUI
+    reads OpenFill's models is left out (those files are OpenFill's)."""
     out: list[Path] = []
-    for folder in parse(setting):
-        for root in model_roots(os.path.expanduser(folder)) or [Path(os.path.expanduser(folder))]:
+    for raw in parse(setting):
+        folder = os.path.expanduser(raw)
+        for root in model_roots(folder) or [Path(folder)]:
+            if (
+                own_models_root is not None
+                and _same(root, own_models_root)
+                and not _own_alias(folder, root, Path(own_models_root))
+            ):
+                continue
             if not any(_same(root, r) for r in out):
                 out.append(root)
     return out
@@ -386,7 +438,7 @@ def yaml_text(roots: Iterable[Path], own_models_root: Path | str | None = None) 
         entries = []
         for name in MODEL_FOLDERS:
             folder = Path(root) / name
-            if folder.is_dir():
+            if folder.is_dir() and _utf8(folder.resolve()):
                 entries.append((name, str(folder.resolve())))
         if entries:
             sections.append((f"{SECTION_PREFIX}{index}", entries))
@@ -408,15 +460,17 @@ def config_path(base: Path | str) -> Path:
 
 
 def write_config(base: Path | str, roots: Iterable[Path], own_models_root: Path | str | None = None) -> Path | None:
-    """Write the yaml for ``roots`` into OpenFill's profile folder ``base`` and return it;
-    remove a stale one and return None when no root has a model folder."""
+    """Write the yaml for ``roots`` into OpenFill's profile folder ``base`` and return it. With
+    no root holding a model folder it returns None; a file already there (a ComfyUI you start
+    yourself may name it on its command line) is kept as an empty mapping, ``{}``, which
+    ComfyUI reads as "no extra folders" (a missing or empty file would stop it starting)."""
     path = config_path(base)
     text = yaml_text(list(roots), own_models_root)
     if SECTION_PREFIX not in text:
-        try:
-            path.unlink()
-        except OSError:
-            pass
+        if path.exists():
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text("# Written by OpenFill: no other ComfyUI folders.\n{}\n", encoding="utf-8")
+            os.replace(tmp, path)
         return None
     Path(base).mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")

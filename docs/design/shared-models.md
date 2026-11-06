@@ -57,6 +57,23 @@ before building; where the build differs, "As built" below wins.
     Files a catalog entry takes from an alias folder are not listed again as your own.
   - Bundled FLUX entries take a found T5, CLIP-L or VAE only up to 1.2 times the
     catalog file's size; the user's own FLUX file takes any compatible one.
+- **After the second review (2026-11-06)**:
+  - Folders are compared by identity (`os.path.samefile`, device and inode of each
+    existing parent), so bind mounts, second mounts and case differences count.
+  - OpenFill's folder is refused only when it is an alias (link or mount) of a folder
+    inside the other install. A root that is OpenFill's folder through the other's
+    extra_model_paths.yaml is skipped, and it is not guarded either.
+  - An unchanged list is not checked again (an unplugged drive does not block saving).
+    Web and Tk check the list against the ComfyUI folder saved with it.
+  - Clearing the list keeps the yaml as `{}`. Names that are not UTF-8 are refused, and
+    are never written. The supervisor and the app catch UnicodeError.
+  - The supervisor records the roots it started with (`shared_roots`). While the running
+    engine has an older list, the catalog uses that list, and a job for a model only the
+    new list has says it waits for the restart.
+  - The restart is skipped when the supervisor is gone, and it waits for the state file
+    to go.
+  - The yaml is rewritten when the ComfyUI folder changes and when the supervisor
+    restarts after a node install.
 
 ## Problem
 

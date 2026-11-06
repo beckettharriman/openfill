@@ -43,6 +43,7 @@ from .geometry import Rect
 from .log import get_logger
 from .progress import OverallProgress
 from .server import ServerManager, _split_host_port, port_answers
+from .supervisor import pid_is_python
 from .workflow import model_display_name
 
 NO_OPENCV_MESSAGE = (
@@ -147,9 +148,34 @@ class App:
 
     @property
     def shared_roots(self) -> list[Path]:
-        """Model folders of other ComfyUI installs (``shared_models`` setting), read only."""
+        """Model folders of other ComfyUI installs, read only, that the AI engine can load: the
+        ``shared_models`` setting, or, while the managed engine still runs with an older list
+        (it is started again when idle, see :meth:`_restart_for_shared_models`), that list,
+        so no job picks a model the running ComfyUI was not given."""
+        running = self._running_shared()
+        if running is not None and running[0] != self._config_text(self.configured_shared_roots):
+            return [Path(r) for r in running[1]]
+        return self.configured_shared_roots
+
+    @property
+    def configured_shared_roots(self) -> list[Path]:
+        """The roots of the ``shared_models`` setting."""
         own = self.models_root if self.settings.comfy_dir else None
         return shared_models.roots_for(self.settings.shared_models, own)
+
+    def _running_shared(self) -> tuple[str, list[str]] | None:
+        """(yaml text, roots) the managed engine was started with, when its supervisor is alive
+        (one from before shared folders recorded none: it runs without any); else None."""
+        state = self.server.read_state()
+        pid = int(state.get("supervisor_pid") or 0) if state else 0
+        if not pid or not pid_is_python(pid):
+            return None
+        return str(state.get("shared_models", "")), [str(r) for r in state.get("shared_roots") or []]
+
+    def shared_pending(self) -> bool:
+        """The setting changed, and the running engine has not read it yet."""
+        running = self._running_shared()
+        return running is not None and running[0] != self._config_text(self.configured_shared_roots)
 
     def shared_suggestions(self) -> list[shared_models.Candidate]:
         """Other installs found on this computer that are not in the setting yet (Krita AI
@@ -165,10 +191,16 @@ class App:
             self.log.warning("other ComfyUI installs not looked for: %s", err)
             return []
 
-    def check_shared_models(self, text: str) -> str:
+    def check_shared_models(self, text: str, models_root: Path | None = None) -> str:
         """The setting's text for what the user typed (full paths, one folder per line); raises
-        ``BackendError`` with the problem in plain words (shared_models.check)."""
-        folders, problem = shared_models.check(text, self.models_root if self.settings.comfy_dir else None)
+        ``BackendError`` with the problem in plain words (shared_models.check). An unchanged
+        list is not checked again (a folder on a drive that is unplugged now must not stop the
+        other settings from being saved). ``models_root``: OpenFill's models folder to check
+        against (the new one when the ComfyUI folder changes in the same save)."""
+        if shared_models.parse(text) == shared_models.parse(self.settings.shared_models):
+            return self.settings.shared_models
+        own = models_root if models_root is not None else (self.models_root if self.settings.comfy_dir else None)
+        folders, problem = shared_models.check(text, own)
         if problem:
             raise BackendError(problem)
         return shared_models.join(folders)
@@ -178,16 +210,19 @@ class App:
         start yourself, see docs/models.md); None when there are no folders. Never raises."""
         own = self.models_root if self.settings.comfy_dir else None
         try:
-            return shared_models.write_config(self.paths.base, self.shared_roots, own)
-        except OSError as err:
+            return shared_models.write_config(self.paths.base, self.configured_shared_roots, own)
+        except (OSError, UnicodeError) as err:
             self.log.warning("shared model folders file not written: %s", err)
             return None
 
-    def shared_config_text(self) -> str:
-        """The yaml text the backend should have been started with ("" for none)."""
+    def _config_text(self, roots: list[Path]) -> str:
         own = self.models_root if self.settings.comfy_dir else None
-        text = shared_models.yaml_text(self.shared_roots, own)
+        text = shared_models.yaml_text(roots, own)
         return text if shared_models.SECTION_PREFIX in text else ""
+
+    def shared_config_text(self) -> str:
+        """The yaml text the backend should be started with ("" for none)."""
+        return self._config_text(self.configured_shared_roots)
 
     def set_shared_models(self, text: str) -> str:
         """Check and save the shared folders, write the yaml and rebuild the catalog. A running
@@ -199,7 +234,7 @@ class App:
         self.rescan()
         if not path:
             return "No other ComfyUI folders are used."
-        roots = self.shared_roots
+        roots = self.configured_shared_roots
         return (
             f"Using the models in {len(roots)} folder(s) of other ComfyUI installs, read only. "
             "The AI engine picks them up at the next job."
@@ -224,6 +259,9 @@ class App:
             return
         if str(state.get("shared_models", "")) == self.shared_config_text():
             return
+        pid = int(state.get("supervisor_pid") or 0)
+        if not pid or not pid_is_python(pid):
+            return  # a state file left behind by a supervisor that is gone: nothing to stop
         url = str(state.get("url") or self.server.url())
         if not self._backend_idle(url):
             self.log.info("shared model folders changed; the AI engine is busy, so it keeps its old list for now")
@@ -231,9 +269,26 @@ class App:
         self.log.info("shared model folders changed; restarting the AI engine to read them")
         if not self.server.request_stop():
             return
+        # until the supervisor is gone (it removes its state file last), so the next start is clean
         deadline = time.monotonic() + 60
-        while time.monotonic() < deadline and self.server.read_state() and self.server.is_healthy(url):
+        while time.monotonic() < deadline and self.server.read_state() and pid_is_python(pid):
             time.sleep(0.5)
+        self.rescan()  # the catalog now counts the new folders
+
+    def _installed_after_restart(self, entry: cat.ModelEntry) -> bool:
+        """``entry`` is installed with the shared folders of the setting, which the running
+        engine has not read yet (see :attr:`shared_roots`)."""
+        if not self.settings.comfy_dir or not self.shared_pending():
+            return False
+        try:
+            entries = cat.load_merged(plugin_dir=self.plugin_dir, base=self.paths.base)
+            entries, _found, _skipped = local_models.build(
+                entries, self.models_root, self.paths.base, self.configured_shared_roots
+            )
+            future = cat.by_id(entries, entry.id)
+            return cat.install_status(future, self.models_root, None, entries).installed
+        except Exception:  # noqa: BLE001 - only changes the wording of the message
+            return False
 
     def rescan(self) -> None:
         """Load the catalog again with the files on disk (own and shared folders)."""
@@ -337,6 +392,7 @@ class App:
     def resolve_model(self, choice: str | None) -> tuple[cat.ModelEntry | None, ModelSpec]:
         """Map a dialog choice ('active', a legacy tier or a catalog id) to a model."""
         self.require_backend_install()
+        self._restart_for_shared_models()
         choice = (choice or "active").strip()
         if choice == "active":
             model_id = self.active_model_id()
@@ -359,6 +415,12 @@ class App:
         status = cat.install_status(entry, self.models_root, self.custom_nodes_dir, self.catalog)
         if status.missing_nodes and self._put_bundled_nodes(entry):
             status = cat.install_status(entry, self.models_root, self.custom_nodes_dir, self.catalog)
+        if not status.installed and self._installed_after_restart(entry):
+            raise ModelMissing(
+                f"'{model_display_name(entry.name)}' uses files from another ComfyUI that the AI engine reads "
+                "when it starts again. It does that before the next job once nothing is generating or downloading; "
+                "try again then."
+            )
         if not status.installed:
             if not self.has_model_for("fill"):
                 raise ModelMissing(cat.NO_MODEL_MESSAGE)
@@ -703,6 +765,7 @@ class App:
             )
         self.settings.comfy_dir = str(path)
         self._save_settings()
+        self.write_shared_config()
 
     def found_comfy(self) -> list[comfy_setup.Candidate]:
         """ComfyUI installs already on this PC (see comfy_setup.detect_comfy)."""
