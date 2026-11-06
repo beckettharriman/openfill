@@ -1,6 +1,46 @@
 # Shared models: use the models of another ComfyUI, read-only (issue #6)
 
-Status: design, not built. Stacked on the issue #8 fix (`fix/issue-8-companion-encoders`).
+Status: option A built on `feat/issue-6-shared-models`, stacked on the issue #8 fix
+(`fix/issue-8-companion-encoders`). The rest of this note is the design as written
+before building; where the build differs, "As built" below wins.
+
+## As built
+
+- **Setting**: `shared_models` in config.json, one string, folders separated by
+  `os.pathsep` (or new lines), `shared_models.parse`/`join`. No separate list widget
+  and no one-time "Use Krita's models?" offer: the field has **Add folder...** and
+  **Find Krita AI Diffusion** (detection) buttons instead, in GIMP's Settings >
+  General and the PhotoCraft companion's Engine view (page and Tk panel).
+- **Where a file is**: instead of a `ModelRoots` value threaded through every
+  catalog function, a `FileSpec` gets `root` (the shared folder it was found in, ""
+  for OpenFill's own). `catalog.spec_path` joins it; `file_installed`,
+  `missing_previews` and `install_status` use it, so every caller works unchanged.
+  `local_models.build(entries, models_root, base, shared)` is the one place that
+  rewrites the catalog (app, companion rescan, supervisor, GIMP model menu):
+  `share()` adopts catalog files found in a shared folder (same name and size, its
+  folder or the alias) and, for FLUX, resolves T5/CLIP-L/VAE by role across own and
+  shared folders; `scan()` finds own model files in shared folders too (ids keyed
+  by root, so they never collide with OpenFill's own).
+- **Bundled entries** now get the issue #8 companion resolution too, with or without
+  shared folders (a bundled FLUX entry reuses a `text_encoders/` T5 of OpenFill's own
+  ComfyUI as well). `ModelEntry.checksum_known` only counts files that would be
+  downloaded.
+- **Order**: OpenFill's own folder, then the shared roots in the setting's order. A
+  shared file whose loader name an earlier folder already has is not counted
+  (ComfyUI would load the other one). One ComfyUI detail found while building:
+  comfyui-inpaint-nodes registers `inpaint` after the yaml is read and appends
+  ComfyUI's own `models/inpaint` after the extra paths, so the yaml starts with an
+  `openfill_own` section naming OpenFill's own `models/inpaint` when a shared root
+  has an `inpaint` folder; the node then finds its path already listed.
+- **Guards at the trust point** (supervisor): a download task for a file that has a
+  `root` or no download address is refused; a download destination inside a shared
+  root is refused; delete skips files with a `root`, files found in place, and any
+  path inside a shared root. Delete also joins every path under OpenFill's own models
+  folder, so a shared file is out of its reach in the first place.
+- **Restart**: changing the list asks a running backend to stop (App.set_shared_models,
+  GIMP's Settings save); the next job starts it with the new yaml.
+- **Not built**: B (using the other server as is) and the "N usable models found" count
+  per folder.
 
 ## Problem
 
