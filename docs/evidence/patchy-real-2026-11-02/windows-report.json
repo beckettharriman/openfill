@@ -1,0 +1,228 @@
+[
+  {
+    "case": "environment",
+    "ok": true,
+    "os": "Windows-11-10.0.26300-SP0",
+    "machine": "AMD64",
+    "python": "~\\miniconda3\\python.exe"
+  },
+  {
+    "case": "install",
+    "ok": true,
+    "exit_code": 0,
+    "manifest_keys": [
+      "args",
+      "command",
+      "id",
+      "maxProtocol",
+      "menuLabel",
+      "minProtocol",
+      "name",
+      "workingDirectory"
+    ],
+    "output": "Added OpenFill to Plugins > Companions in Patchy (<scratch>\\win-home\\AppData\\Roaming\\RTsoft\\Patchy\\companions\\openfill.json)."
+  },
+  {
+    "case": "attach",
+    "ok": true,
+    "version": "1.24",
+    "companionProtocol": {
+      "max": 1,
+      "min": 1
+    }
+  },
+  {
+    "case": "companion_starts",
+    "ok": true,
+    "seconds": 1.0,
+    "log": [
+      "OpenFill for Patchy 0.1.0, companion protocol 1 to 1; Patchy 1.24, companionProtocol {'max': 1, 'min': 1}."
+    ]
+  },
+  {
+    "case": "comfy_folder",
+    "ok": true,
+    "found_by_itself": true,
+    "chosen": null,
+    "problem": ""
+  },
+  {
+    "case": "model_lama-big",
+    "ok": true,
+    "downloaded": true,
+    "seconds": 6.5,
+    "status": "Installed",
+    "missing_nodes": [],
+    "missing_models": []
+  },
+  {
+    "case": "model_dreamshaper-8-inpainting",
+    "ok": true,
+    "downloaded": false,
+    "seconds": 0.7,
+    "status": "Active",
+    "missing_nodes": [],
+    "missing_models": []
+  },
+  {
+    "case": "backend_start",
+    "ok": true,
+    "seconds": 11.6,
+    "device": "cuda:0 NVIDIA GeForce RTX 5090 (cuda, 31.8 GB)",
+    "detail": "ComfyUI 0.39.0",
+    "hardware": "RTX 5090 \u00b7 32 GB VRAM \u00b7 64 GB RAM \u00b7 1973 GB free"
+  },
+  {
+    "case": "remove_lama",
+    "ok": true,
+    "state": "done",
+    "message": "Added layer: Object Removal",
+    "seconds": 15.1,
+    "model": "LaMa",
+    "variations": [],
+    "layers": [
+      [
+        "test-scene",
+        true,
+        []
+      ],
+      [
+        "Object Removal",
+        true,
+        []
+      ]
+    ]
+  },
+  {
+    "case": "fill_3_keep_one_step",
+    "ok": true,
+    "state": "done",
+    "message": "Added layer: Generative Fill: a red wooden door (1)",
+    "seconds": 11.1,
+    "model": "DreamShaper 8 Inpainting",
+    "variations": [
+      "Generative Fill: a red wooden door (1)",
+      "Generative Fill: a red wooden door (2)",
+      "Generative Fill: a red wooden door (3)"
+    ],
+    "group": [
+      [
+        "test-scene",
+        true,
+        []
+      ],
+      [
+        "Object Removal",
+        true,
+        []
+      ],
+      [
+        "Generative Fill: a red wooden door",
+        true,
+        [
+          [
+            "Generative Fill: a red wooden door (3)",
+            false,
+            []
+          ],
+          [
+            "Generative Fill: a red wooden door (2)",
+            false,
+            []
+          ],
+          [
+            "Generative Fill: a red wooden door (1)",
+            true,
+            []
+          ]
+        ]
+      ]
+    ],
+    "kept": [
+      [
+        "test-scene",
+        true,
+        []
+      ],
+      [
+        "Object Removal",
+        true,
+        []
+      ],
+      [
+        "Generative Fill: a red wooden door",
+        true,
+        []
+      ]
+    ]
+  },
+  {
+    "case": "fill_3_discard_no_step",
+    "ok": true,
+    "state": "done",
+    "message": "Added layer: Generative Fill: a blue window (1)",
+    "seconds": 4.0,
+    "model": "DreamShaper 8 Inpainting",
+    "variations": [
+      "Generative Fill: a blue window (1)",
+      "Generative Fill: a blue window (2)",
+      "Generative Fill: a blue window (3)"
+    ]
+  },
+  {
+    "case": "expand_left_one_step",
+    "ok": true,
+    "state": "done",
+    "message": "Canvas is now 1184 x 768",
+    "seconds": 5.1,
+    "model": "DreamShaper 8 Inpainting",
+    "variations": [],
+    "width": [
+      1024,
+      1184
+    ],
+    "bottom": {
+      "height": 768,
+      "width": 1024,
+      "x": 160,
+      "y": 0
+    }
+  },
+  {
+    "case": "create_new_image",
+    "ok": true,
+    "state": "done",
+    "message": "Done",
+    "seconds": 3.0,
+    "model": "DreamShaper 8 Inpainting",
+    "variations": [],
+    "size": [
+      512,
+      512
+    ]
+  },
+  {
+    "case": "comfy_running_before_close",
+    "ok": true,
+    "server_pid": 52572
+  },
+  {
+    "case": "patchy_closes_companion_and_comfy_stop",
+    "ok": true,
+    "companion_exit": 0,
+    "companion_seconds": 6.4,
+    "comfy_stopped_after": 7.4,
+    "comfy_alive": false
+  },
+  {
+    "case": "uninstall",
+    "ok": true,
+    "manifest_left": false,
+    "settings_kept": true,
+    "models_kept": {
+      "inpaint/big-lama.pt": true,
+      "checkpoints/DreamShaper_8_INPAINTING.inpainting.safetensors": true
+    },
+    "still_running": []
+  }
+]
