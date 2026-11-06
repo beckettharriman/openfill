@@ -598,9 +598,12 @@ class RemoteLink:
         host = self.host
         detail = str((info or {}).get("error") or "")
         if kind in ("asleep", "reset", "error") and self.via_ssh and self.tunnel is not None:
-            time.sleep(0.5)  # ssh prints why the forwarded connection failed a moment after it closes it
+            time.sleep(0.5)  # OpenSSH prints why the forwarded connection failed a moment after closing it
             stderr = self.tunnel.stderr_text().lower()
-            if "connect failed" in stderr or "open failed" in stderr:
+            # The SSH login worked (ssh still runs) and the far end closed the forwarded connection at
+            # once: nothing listens there. (Windows' SSH server closes it without saying why.) A
+            # dropped network makes the connection hang instead.
+            if "connect failed" in stderr or "open failed" in stderr or (kind == "reset" and self.tunnel.alive()):
                 kind = "nothing-behind-tunnel"
         messages = {
             "bad-token": (

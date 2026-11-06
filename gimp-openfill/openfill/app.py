@@ -209,6 +209,8 @@ class App:
             request_timeout=timeout,
             logger=self.log,
             connection_lost=ui_text.remote_connection_lost(self.server.remote.host),
+            # checked every few seconds while a job runs: a drop shows within about 15 s
+            link_path="/openfill/ping" if self.server.remote.kind == "gpu-server" else "/system_stats",
         )
 
     def _check_device(self, url: str) -> None:

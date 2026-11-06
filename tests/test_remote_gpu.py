@@ -120,8 +120,11 @@ class FakeComfyHandler(BaseHTTPRequestHandler):
             raw = json.dumps(msg).encode()
             self.wfile.write(bytes((0x81, len(raw))) + raw)
         self.wfile.flush()
-        self.server.done = True
-        time.sleep(0.3)
+        if self.server.ws_messages:
+            self.server.done = True
+            time.sleep(0.3)
+        else:  # a GPU busy for a while: an open websocket and no news
+            time.sleep(5)
         self.close_connection = True
 
 
@@ -450,6 +453,16 @@ class PairingTests(unittest.TestCase):
             self.assertEqual(gpu_server.tailscale_ip(run), "100.114.250.87")
         self.assertEqual(run.call_args[0][0][1:], ["ip", "-4"])
 
+    def test_a_busy_managed_comfyui_stays_up_while_its_process_runs(self):
+        comfy = gpu_server.Comfy("http://127.0.0.1:9", ["py", "main.py"], log=lambda _t: None)
+        comfy.proc = mock.Mock(poll=lambda: None)
+        comfy.state = "up"
+        comfy.answers = mock.Mock(return_value=False)  # too busy to answer in time
+        self.assertEqual(comfy.status(), "up")
+        comfy.answers.assert_not_called()
+        comfy.proc = mock.Mock(poll=lambda: 1)  # it exited
+        self.assertEqual(comfy.status(), "down")
+
     def test_comfyui_must_stay_on_this_computer(self):
         with self.assertRaises(SystemExit):
             gpu_server.Comfy("http://192.168.1.5:8188")
@@ -762,9 +775,15 @@ class TunnelTests(unittest.TestCase):
     def test_nothing_behind_the_tunnel(self):
         rl = link(ssh="becke@blade14")
         rl.tunnel = SimpleNamespace(
-            stderr_text=lambda: "channel 2: open failed: connect failed: Connection refused", close=lambda: None
+            stderr_text=lambda: "channel 2: open failed: connect failed: Connection refused",
+            close=lambda: None,
+            alive=lambda: False,
         )
         self.assertIn("nothing answers behind it on port 8188", rl.explain("reset"))
+        # Windows' SSH server says nothing: ssh still runs and the connection was closed at once
+        rl.tunnel = SimpleNamespace(stderr_text=lambda: "", close=lambda: None, alive=lambda: True)
+        self.assertIn("nothing answers behind it", rl.explain("reset"))
+        self.assertIn("may be asleep", rl.explain("asleep"))
 
     def test_the_ui_thread_does_not_open_the_tunnel(self):
         made = []
@@ -907,7 +926,112 @@ class AppTests(GpuServerCase):
         self.comfy = FakeComfy(self.nodes)
 
 
+class LinkWatchTests(GpuServerCase):
+    """A Remote GPU job notices a dropped network within the link timeout, and a busy GPU that
+    sends no progress for longer than that is not taken for one."""
+
+    def relay(self):
+        relay = _Relay(self.server.server_address[1])
+        self.addCleanup(relay.close)
+        return relay
+
+    def client(self, url, **kw):
+        comfy_api.set_token(url, TOKEN)
+        c = ComfyClient(url, timeout=10, link_path="/openfill/ping", link_timeout=1.5, **kw)
+        c.LINK_EVERY, c.LINK_REQUEST_TIMEOUT = 0.3, 0.5
+        return c
+
+    def test_a_silent_busy_gpu_is_not_a_drop(self):
+        self.comfy.ws_messages = []  # no progress at all
+        self.comfy.done = False
+        timer = threading.Timer(4.0, lambda: setattr(self.comfy, "done", True))  # finishes after 4 s
+        timer.start()
+        t0 = time.monotonic()
+        entry = self.client(self.url).wait_for("p1", 1, time.monotonic() + 30)
+        self.assertGreater(time.monotonic() - t0, 3.5)  # longer than the 1.5 s link timeout
+        self.assertIn("outputs", entry)
+
+    def test_a_dropped_network_is_noticed_within_the_link_timeout(self):
+        relay = self.relay()
+        url = f"http://127.0.0.1:{relay.port}"
+        self.comfy.ws_messages = []
+        self.comfy.done = False
+        threading.Timer(1.0, relay.blackhole).start()
+        t0 = time.monotonic()
+        with self.assertRaises(comfy_api.LinkLost):
+            self.client(url).wait_for("p1", 1, time.monotonic() + 60)
+        took = time.monotonic() - t0
+        self.assertLess(took, 1.0 + 1.5 + 2.0)
+        comfy_api.set_token(url, "")
+
+    def test_without_a_link_path_nothing_is_watched(self):
+        c = ComfyClient(self.url)
+        self.assertEqual(c.link_path, "")
+
+
+class _Relay:
+    """127.0.0.1:<port> -> 127.0.0.1:<target>; blackhole() stops moving bytes (a dropped network)."""
+
+    def __init__(self, target: int):
+        self.target = target
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(16)
+        self.port = self.sock.getsockname()[1]
+        self.dead = threading.Event()
+        self.held: list = []
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                c, _ = self.sock.accept()
+            except OSError:
+                return
+            self.held.append(c)
+            if self.dead.is_set():
+                continue
+            u = socket.create_connection(("127.0.0.1", self.target), timeout=10)
+            self.held.append(u)
+            for a, b in ((c, u), (u, c)):
+                threading.Thread(target=self._pipe, args=(a, b), daemon=True).start()
+
+    def _pipe(self, a, b):
+        try:
+            while True:
+                data = a.recv(65536)
+                if not data:
+                    break
+                if self.dead.is_set():
+                    self.dead.wait(3600)  # hold the bytes
+                    continue
+                b.sendall(data)
+        except OSError:
+            pass
+
+    def blackhole(self):
+        self.dead.set()
+
+    def close(self):
+        self.dead.set()
+        for sock in [self.sock, *self.held]:
+            sock.close()
+
+
 class ConnectionLostTests(unittest.TestCase):
+    def test_a_lost_link_is_the_remote_message_at_once(self):
+        from openfill.backends.comfy import ComfyBackend
+
+        client = mock.Mock()
+        client.queue_prompt.return_value = "p1"
+        client.wait_for.side_effect = comfy_api.LinkLost("no answer for 15 s")
+        client.last_model_files.return_value = set()
+        backend = ComfyBackend("http://x", client=client, connection_lost="lost the GPU computer")
+        with self.assertRaises(BackendUnavailable) as caught:
+            backend._run({"1": {"class_type": "KSampler", "inputs": {"steps": 2}}}, 2, 1, 4096, None)
+        self.assertEqual(str(caught.exception), "lost the GPU computer")
+        client.is_alive.assert_not_called()
+
     def test_a_job_whose_connection_drops_says_so(self):
         from openfill.backends.comfy import ComfyBackend
 

@@ -357,6 +357,8 @@ class Comfy:
             if self.managed and (self.proc is None or self.proc.poll() is not None):
                 self.state = "down"
                 return "down"
+            if self.managed and self.state == "up":
+                return "up"  # its process runs: busy with a long step is not down
             if time.monotonic() - self._checked > 2.0:
                 self._checked = time.monotonic()
                 self.state = "up" if self.answers() else "down"

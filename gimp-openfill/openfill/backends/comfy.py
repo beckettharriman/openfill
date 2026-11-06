@@ -30,7 +30,7 @@ from ..backend import (
     UnsupportedGpu,
     WorkflowRejected,
 )
-from ..comfy_api import ComfyApiError, ComfyClient, ComfyExecutionError
+from ..comfy_api import ComfyApiError, ComfyClient, ComfyExecutionError, LinkLost
 from ..geometry import estimate_timeout, seed_or_random
 
 # While the server keeps sending progress, previews or node events, the
@@ -63,11 +63,12 @@ class ComfyBackend(Backend):
         logger=None,
         models_root: Path | str | None = None,
         connection_lost: str = "",
+        link_path: str = "",
     ) -> None:
         self.url = url
         self.connection_lost = connection_lost or CONNECTION_LOST  # what to say when ComfyUI goes away mid-job
         self.models_root = Path(models_root) if models_root else None
-        self.client = client or ComfyClient(url)
+        self.client = client or ComfyClient(url, link_path=link_path)
         self.request_timeout = request_timeout  # 0 = estimate per request
         self.log = logger
         self._caps: workflow.Capabilities | None = None
@@ -245,6 +246,10 @@ class ComfyBackend(Backend):
                 cancel=cancel,
                 activity_extension=0.0 if self.request_timeout else ACTIVITY_EXTENSION,
             )
+        except LinkLost as err:
+            if self.log:
+                self.log.warning("connection lost mid-job: %s", err)
+            raise BackendUnavailable(self.connection_lost) from err
         except ComfyExecutionError as err:
             if err.is_unsupported_gpu:
                 raise UnsupportedGpu(str(err)) from err
