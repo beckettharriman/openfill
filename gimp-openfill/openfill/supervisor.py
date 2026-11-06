@@ -56,7 +56,7 @@ from typing import Any
 from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from openfill import catalog, comfy_setup, downloads, hardware, local_models  # noqa: E402
+from openfill import catalog, comfy_setup, downloads, hardware, local_models, shared_models  # noqa: E402
 from openfill.config import Settings, comfy_layout  # noqa: E402
 from openfill.log import redact  # noqa: E402
 
@@ -511,6 +511,18 @@ class TaskWorker:
     def _comfy_dir(self) -> str:
         return Settings.load(self.config_path, backup=False).comfy_dir
 
+    def _shared_roots(self) -> list[Path]:
+        """Model folders of other installs named in config.json: read, never written."""
+        settings = Settings.load(self.config_path, backup=False)
+        own = catalog.default_models_root(settings.comfy_dir) if settings.comfy_dir else None
+        return shared_models.roots_for(settings.shared_models, own)
+
+    def _refuse_shared(self, path: Path) -> None:
+        """Raise ``ValueError`` when ``path`` is in a shared folder of another install."""
+        roots = self._shared_roots()
+        if roots and shared_models.inside(path, roots):
+            raise ValueError(f"{path} is in another ComfyUI's models folder, which OpenFill only reads")
+
     def _catalog(self) -> list[catalog.ModelEntry]:
         """The shipped catalog plus the live (hub) entries the user chose in the
         Models tab (``hub-selected.json``), each re-validated by the strict live rules,
@@ -519,7 +531,8 @@ class TaskWorker:
         comfy_dir = self._comfy_dir()
         if not comfy_dir:
             return entries
-        return local_models.with_local(entries, catalog.default_models_root(comfy_dir), self.base)
+        root = catalog.default_models_root(comfy_dir)
+        return local_models.with_local(entries, root, self.base, self._shared_roots())
 
     def _catalog_files(self, task: dict[str, Any]) -> dict[str, catalog.FileSpec]:
         """Files of the task's catalog entry, keyed by normalised ``dest``."""
@@ -548,7 +561,11 @@ class TaskWorker:
             spec = known.get(downloads.safe_relative_path(f["dest"]))
             if spec is None or spec.url != f.get("url"):
                 raise ValueError(f"{f.get('dest')!r} from {f.get('url')!r} is not a catalog download")
-            out.append((spec, downloads.safe_join(root, spec.dest)))
+            if spec.root or not spec.url:
+                raise ValueError(f"{spec.dest!r} is already there (found in place) and is never downloaded")
+            dest = downloads.safe_join(root, spec.dest)
+            self._refuse_shared(dest)
+            out.append((spec, dest))
         return out
 
     def checked_node_install(self, task: dict[str, Any]) -> tuple[Path, Path, list[catalog.NodeSpec]]:
@@ -747,6 +764,7 @@ class TaskWorker:
         root = self._checked_models_root(task)
         known = self._catalog_files(task)
         main = catalog.live_main_file(catalog.by_id(self._catalog(), str(task.get("model_id") or "")))
+        shared = self._shared_roots()
         removed = []
         for rel in task["files"]:
             try:
@@ -757,8 +775,12 @@ class TaskWorker:
             if rel not in known:
                 continue  # only files the catalog put there are ever deleted
             spec = known[rel]
+            if spec.root:
+                continue  # a file of another ComfyUI install (shared_models.py) is only ever read
             if not spec.url and spec != main:
                 continue  # a companion found in place (your own text encoder or VAE) is never deleted
+            if shared_models.inside(path, shared):
+                continue
             for p in (path, downloads.part_path(path)):
                 if p.is_file():
                     p.unlink()
@@ -925,6 +947,22 @@ def run_backend(
         release_start_lock(lock)
 
 
+def shared_model_paths(base: Path, config_path: Path, log: Callable[..., None]) -> Path | None:
+    """Write ``<base>/shared-model-paths.yaml`` for the shared folders in config.json (models of
+    other installs, read only) and return it; None when there are none. The file is in OpenFill's
+    own profile and goes on ComfyUI's command line, so nothing is written into the other install."""
+    try:
+        settings = Settings.load(config_path, backup=False)
+        own = catalog.default_models_root(settings.comfy_dir) if settings.comfy_dir else None
+        path = shared_models.write_config(base, shared_models.roots_for(settings.shared_models, own), own)
+    except OSError as err:
+        log(f"could not write the shared model folders file: {err}", "WARN")
+        return None
+    if path is not None:
+        log(f"models of other ComfyUI installs, read only, listed in {path}")
+    return path
+
+
 def _run_backend(
     args: argparse.Namespace, base: Path, state_path: Path, worker_path: Path, config_path: Path, log: Logger
 ) -> int:
@@ -953,6 +991,9 @@ def _run_backend(
     ]
     if args.extra_args.strip():
         cmd += args.extra_args.split()
+    shared_yaml = shared_model_paths(base, config_path, log)
+    if shared_yaml is not None:
+        cmd += ["--extra-model-paths-config", str(shared_yaml)]
     url = f"http://{args.host}:{args.port}"
     if not is_loopback(args.host):
         log(

@@ -105,7 +105,7 @@ def missing_previews(entry: ModelEntry, models_root: Path) -> list[FileSpec]:
     for f in entry.files:
         if f.role != PREVIEW_ROLE or file_installed(models_root, f):
             continue
-        folder = (Path(models_root) / f.dest).parent
+        folder = spec_path(models_root, f).parent
         stem = f.filename.rsplit(".", 1)[0] + "."
         try:
             if any(p.name.startswith(stem) and p.stat().st_size > 0 for p in folder.iterdir()):
@@ -128,6 +128,9 @@ class FileSpec:
     gated: bool = False
     optional: bool = False  # skip if another entry already provided it
     license: str = ""
+    # A folder of another ComfyUI install the file was found in (see shared_models.py), read
+    # only: never downloaded, deleted or replaced. "" = OpenFill's own models folder.
+    root: str = ""
 
     @property
     def filename(self) -> str:
@@ -216,8 +219,9 @@ class ModelEntry:
 
     @property
     def checksum_known(self) -> bool:
-        """Every file has a SHA-256 to verify the download against."""
-        return all(f.sha256 for f in self.files)
+        """Every file it downloads has a SHA-256 to verify the download against (files found in
+        place, which have no download address, are never downloaded)."""
+        return all(f.sha256 for f in self.files if f.url)
 
     @property
     def total_size(self) -> int:
@@ -621,9 +625,16 @@ def merge_entries(*groups: Iterable[ModelEntry]) -> list[ModelEntry]:
 # ---------------------------------------------------------------- status ----
 
 
+def spec_path(models_root: Path, spec: FileSpec) -> Path:
+    """Where ``spec`` is on disk: under its read-only ``root`` when it has one, else under
+    ``models_root``."""
+    return Path(spec.root or models_root) / spec.dest
+
+
 def file_installed(models_root: Path, spec: FileSpec) -> bool:
-    """True when ``spec.dest`` exists under ``models_root`` with the catalog size."""
-    path = Path(models_root) / spec.dest
+    """True when ``spec.dest`` exists under ``models_root`` (or the spec's own read-only
+    ``root``) with the catalog size."""
+    path = spec_path(models_root, spec)
     if not path.is_file():
         return False
     if spec.size:
@@ -647,7 +658,7 @@ def install_status(
         if f.role == PREVIEW_ROLE or file_installed(models_root, f):
             continue  # a missing live-preview decoder only costs the preview
         missing.append(f.dest)
-        if (Path(models_root) / (f.dest + ".part")).exists():
+        if not f.root and (Path(models_root) / (f.dest + ".part")).exists():
             partial.append(f.dest)
     missing_nodes = []
     if custom_nodes_dir is not None:
@@ -991,6 +1002,8 @@ def model_row(
         "fit_label": getattr(fit, "label", "") if fit is not None else "",
         "fit_reason": getattr(fit, "reason", "") if fit is not None else "",
         "amd_note": amd_note(entry) if amd else "",
+        # folders of another ComfyUI some of the files are read from (never written to)
+        "shared_from": sorted({f.root for f in entry.files if f.root}),
     }
 
 
@@ -1108,6 +1121,8 @@ def row_details(row: dict[str, Any]) -> str:
         parts.append("in " + SOURCE_LABELS["local"])
     elif origin != "bundled":
         parts.append("from " + SOURCE_LABELS.get(origin, origin))
+    if row.get("shared_from"):
+        parts.append("uses files from another ComfyUI (read only)")
     if not row.get("checksum_known", True) and origin != "local":
         parts.append("unverified checksum")
     if not row.get("runnable", True):

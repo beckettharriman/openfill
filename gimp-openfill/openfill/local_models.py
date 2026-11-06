@@ -259,13 +259,41 @@ def candidates(models_root: Path) -> list[Path]:
     return out
 
 
+def _shadowed(rel: str, earlier: Iterable[Path]) -> bool:
+    """True when a root ComfyUI reads first already has a file under ``rel``'s loader name
+    (its folder or the alias folder): ComfyUI would load that one, so the later file must
+    not be counted."""
+    folder, _, name = rel.replace("\\", "/").partition("/")
+    for root in earlier:
+        for alias in FOLDER_ALIASES.get(folder, (folder,)):
+            if (Path(root) / alias / name).is_file():
+                return True
+    return False
+
+
 def scan(
-    models_root: Path | None, entries: Iterable[cat.ModelEntry], base: Path | None = None
+    models_root: Path | None,
+    entries: Iterable[cat.ModelEntry],
+    base: Path | None = None,
+    shared: Iterable[Path] = (),
 ) -> tuple[list[cat.ModelEntry], list[dict[str, str]]]:
     """(catalog entries for recognised files, skipped files with the reason). Files the
-    catalog already lists (bundled or chosen from the hubs) are left to their own entry."""
-    if models_root is None or not Path(models_root).is_dir():
+    catalog already lists (bundled or chosen from the hubs) are left to their own entry.
+
+    ``shared``: model folders of other ComfyUI installs (shared_models.py), read only and
+    after ``models_root``, in the order ComfyUI reads them. Their files get entries too,
+    marked with the folder (``FileSpec.root``); a file whose name a folder read earlier
+    already has is left out (ComfyUI would load the other one).
+    """
+    roots: list[tuple[Path, str]] = []
+    if models_root is not None and Path(models_root).is_dir():
+        roots.append((Path(models_root), ""))
+    for r in shared:
+        if Path(r).is_dir():
+            roots.append((Path(r), str(r)))
+    if models_root is None or not roots:
         return [], []
+    shared_roots = [r for r, tag in roots if tag]
     entries = list(entries)
     known = {f.dest.replace("\\", "/").lower() for e in entries for f in e.files}
     by_id = {e.id: e for e in entries}
@@ -275,37 +303,47 @@ def scan(
     fresh: dict[str, Any] = {}
     out: list[cat.ModelEntry] = []
     skipped: list[dict[str, str]] = []
-    for path in candidates(Path(models_root)):
-        rel = path.relative_to(models_root).as_posix()
-        if rel.lower() in known:
-            continue
-        try:
-            st = path.stat()
-        except OSError:
-            continue
-        stamp = f"{st.st_size}:{int(st.st_mtime)}"
-        hit = cache.get(rel)
-        if isinstance(hit, dict) and hit.get("stamp") == stamp:
-            found = Found(str(hit.get("family", "")), str(hit.get("note", "")))
-        else:
-            found = inspect(path)
-        fresh[rel] = {"stamp": stamp, "family": found.family, "note": found.note}
-        template_id = TEMPLATES.get((found.family, path.suffix.lower()))
-        template = by_id.get(template_id or "")
-        folder = rel.split("/", 1)[0]
-        if found.family and folder not in FAMILY_FOLDERS[found.family]:
-            where = " or ".join(FAMILY_FOLDERS[found.family])
-            skipped.append(
-                {
-                    "file": rel,
-                    "reason": f"{FAMILY_NAMES[found.family]} model in {folder}/; ComfyUI loads it from {where}/",
-                }
+    for index, (root, tag) in enumerate(roots):
+        for path in candidates(root):
+            rel = path.relative_to(root).as_posix()
+            if rel.lower() in known:
+                continue
+            if tag and _shadowed(rel, [Path(models_root), *shared_roots[: index - 1]]):
+                continue
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            key = f"{tag}|{rel}" if tag else rel  # the cache is in OpenFill's profile, never in a root
+            stamp = f"{st.st_size}:{int(st.st_mtime)}"
+            hit = cache.get(key)
+            if isinstance(hit, dict) and hit.get("stamp") == stamp:
+                found = Found(str(hit.get("family", "")), str(hit.get("note", "")))
+            else:
+                found = inspect(path)
+            fresh[key] = {"stamp": stamp, "family": found.family, "note": found.note}
+            template_id = TEMPLATES.get((found.family, path.suffix.lower()))
+            template = by_id.get(template_id or "")
+            folder = rel.split("/", 1)[0]
+            shown = str(path) if tag else rel
+            if found.family and folder not in FAMILY_FOLDERS[found.family]:
+                where = " or ".join(FAMILY_FOLDERS[found.family])
+                skipped.append(
+                    {
+                        "file": shown,
+                        "reason": f"{FAMILY_NAMES[found.family]} model in {folder}/; ComfyUI loads it from {where}/",
+                    }
+                )
+                continue
+            if not found.family or template is None:
+                reason = found.note or "no matching bundled model to copy settings from"
+                skipped.append({"file": shown, "reason": reason})
+                continue
+            out.append(
+                entry_for(
+                    path, rel, st.st_size, found.family, template, Path(models_root), gguf_nodes, shared_roots, tag
+                )
             )
-            continue
-        if not found.family or template is None:
-            skipped.append({"file": rel, "reason": found.note or "no matching bundled model to copy settings from"})
-            continue
-        out.append(entry_for(path, rel, st.st_size, found.family, template, Path(models_root), gguf_nodes))
     _save_cache(base, fresh)
     return out, skipped
 
@@ -386,7 +424,25 @@ def _loaded_first(models_root: Path, rel: str) -> bool:
     return True
 
 
-def resolve_companion(models_root: Path, spec: cat.FileSpec, kind: str) -> cat.FileSpec:
+def _found(spec: cat.FileSpec, rel: str, size: int, root: str = "") -> cat.FileSpec:
+    """A file found in place for ``spec``: no download address and optional, so it is never
+    downloaded or replaced, and never deleted (supervisor.TaskWorker._remove)."""
+    return cat.FileSpec(spec.role, "", rel, size, None, False, True, "", root)
+
+
+# A bundled FLUX entry takes a found text encoder or VAE only up to this times the size of the
+# catalog's file: the entry was sized for that file (a 9.8 GB fp16 T5 must not replace the
+# 3.4 GB GGUF the Q4 entry was made for). The user's own FLUX file takes any compatible one.
+BUNDLED_MAX_RATIO = 1.2
+
+
+def resolve_companion(
+    models_root: Path,
+    spec: cat.FileSpec,
+    kind: str,
+    shared: Iterable[Path] = (),
+    max_ratio: float | None = None,
+) -> cat.FileSpec:
     """The file to use for the companion ``spec`` of kind ``kind`` (see :func:`compatible`).
 
     Preference, first match wins:
@@ -394,11 +450,14 @@ def resolve_companion(models_root: Path, spec: cat.FileSpec, kind: str) -> cat.F
     1. the catalog's own file, where the catalog puts it with the catalog size (``spec``
        itself, unchanged), if ComfyUI loads it for that name;
     2. compatible files in the catalog's folder or its ComfyUI alias (``text_encoders`` and
-       ``clip``), ordered by: the catalog's file name first, then the size closest to the
-       catalog file's (the variant nearest to what the bundled model was set up with, so an
-       fp8 T5 wins over fp16 when both are there), then ComfyUI's folder order, then the path
+       ``clip``), in OpenFill's models folder and then in the ``shared`` folders of other
+       installs (read only), ordered by: the catalog's file name first, then OpenFill's own
+       folder before shared ones (in their order), then the size closest to the catalog
+       file's (the variant nearest to what the bundled model was set up with, so an fp8 T5
+       wins over fp16 when both are there), then ComfyUI's folder order, then the path
        (alphabetical) so the pick never changes between runs. A file ComfyUI would not load
-       for its name (the same name is in a folder it reads first) is never picked;
+       for its name (the same name is in a folder or a root it reads first) is never picked,
+       and with ``max_ratio`` none larger than that times the catalog file;
     3. ``spec`` unchanged, to be downloaded, when nothing compatible is there.
 
     A found file is returned as an optional file without a download address, like the
@@ -408,34 +467,124 @@ def resolve_companion(models_root: Path, spec: cat.FileSpec, kind: str) -> cat.F
         return spec
     folder = spec.dest.replace("\\", "/").split("/", 1)[0]
     folders = FOLDER_ALIASES.get(folder, (folder,))
-    best: tuple[tuple[Any, ...], str, int] | None = None
-    for index, name in enumerate(folders):
-        for path in _folder_files(models_root, name):
-            rel = path.relative_to(models_root).as_posix()
-            if not _loaded_first(models_root, rel) or not compatible(kind, path):
-                continue
-            try:
-                size = path.stat().st_size
-            except OSError:
-                continue
-            key = (path.name != spec.filename, abs(size - (spec.size or 0)), index, rel.lower())
-            if best is None or key < best[0]:
-                best = (key, rel, size)
+    roots = [Path(models_root), *[Path(r) for r in shared]]
+    limit = max_ratio * spec.size if max_ratio and spec.size else None
+    best: tuple[tuple[Any, ...], str, int, str] | None = None
+    for r_index, root in enumerate(roots):
+        for index, name in enumerate(folders):
+            for path in _folder_files(root, name):
+                rel = path.relative_to(root).as_posix()
+                if not _loaded_first(root, rel) or (r_index and _shadowed(rel, roots[:r_index])):
+                    continue
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                if limit is not None and size > limit:
+                    continue
+                if not compatible(kind, path):
+                    continue
+                key = (path.name != spec.filename, r_index, abs(size - (spec.size or 0)), index, rel.lower())
+                if best is None or key < best[0]:
+                    best = (key, rel, size, str(root) if r_index else "")
     if best is None:
         return spec
-    _key, rel, size = best
-    return cat.FileSpec(spec.role, "", rel, size, None, False, True, "")
+    _key, rel, size, tag = best
+    return _found(spec, rel, size, tag)
+
+
+def _in_shared(models_root: Path, spec: cat.FileSpec, shared: list[Path]) -> cat.FileSpec | None:
+    """``spec``'s own file (same name, catalog size) in OpenFill's alias folder (``text_encoders``
+    for ``clip``, ...) or in a shared folder (its folder or the alias), unless a folder ComfyUI
+    reads first has that name. Keeps the checksum: it is the catalog's file, found by name and
+    size like one in OpenFill's own folder."""
+    folder, _, name = spec.dest.replace("\\", "/").partition("/")
+    roots = [Path(models_root), *shared]
+    for index, root in enumerate(roots):
+        tag = str(root) if index else ""
+        for alias in FOLDER_ALIASES.get(folder, (folder,)):
+            rel = f"{alias}/{name}"
+            if not index and rel == spec.dest:
+                continue  # the catalog's own place, checked by the caller
+            candidate = replace(spec, dest=rel, root=tag)
+            if not cat.file_installed(models_root, candidate):
+                continue
+            if index and _shadowed(rel, roots[:index]):
+                return None
+            try:
+                size = cat.spec_path(models_root, candidate).stat().st_size
+            except OSError:
+                continue
+            return replace(_found(spec, rel, size, tag), sha256=spec.sha256, license=spec.license)
+    return None
+
+
+def share(
+    entries: Iterable[cat.ModelEntry], models_root: Path | None, shared: Iterable[Path] = ()
+) -> list[cat.ModelEntry]:
+    """Catalog entries (bundled and from the hubs) with each missing file taken from what is
+    already there: the same file in a ``shared`` folder of another install, or, for the FLUX
+    text encoders and VAE, a compatible file in OpenFill's folder or a shared one
+    (:func:`resolve_companion`). What is still missing keeps its download. Local entries
+    (resolved by :func:`entry_for`) and entries with everything in place stay as they are."""
+    entries = list(entries)
+    if models_root is None:
+        return entries
+    shared = [Path(r) for r in shared if Path(r).is_dir()]
+    gguf_nodes = tuple(n for x in entries for n in x.requires_nodes if n.folder == GGUF_NODE_FOLDER)[:1]
+    out = []
+    for e in entries:
+        if e.source == SOURCE:
+            out.append(e)
+            continue
+        files = []
+        for f in e.files:
+            new = f
+            if not cat.file_installed(models_root, f):
+                new = _in_shared(models_root, f, shared) or f
+                kind = COMPANION_KINDS.get((e.template or "", f.role))
+                if new is f and kind:
+                    new = resolve_companion(models_root, f, kind, shared, BUNDLED_MAX_RATIO)
+            files.append(new)
+        if any(a is not b for a, b in zip(files, e.files, strict=True)):
+            nodes = e.requires_nodes
+            if any(f.dest.lower().endswith(".gguf") and not f.url for f in files) and not any(
+                n.folder == GGUF_NODE_FOLDER for n in nodes
+            ):
+                nodes = nodes + gguf_nodes
+            e = replace(e, files=tuple(files), requires_nodes=nodes)
+        out.append(e)
+    return out
+
+
+def build(
+    entries: Iterable[cat.ModelEntry],
+    models_root: Path | None,
+    base: Path | None = None,
+    shared: Iterable[Path] = (),
+) -> tuple[list[cat.ModelEntry], list[cat.ModelEntry], list[dict[str, str]]]:
+    """(the whole catalog, the local entries in it, the skipped files): ``entries`` with what
+    is already on disk taken into account (:func:`share`) plus the user's own model files
+    (:func:`scan`), in OpenFill's models folder and the ``shared`` folders. May raise for a
+    broken folder; :func:`with_local` is the form that never raises."""
+    entries = list(entries)
+    shared = list(shared)
+    found, skipped = scan(models_root, entries, base, shared)
+    return cat.merge_entries(share(entries, models_root, shared), found), found, skipped
 
 
 def with_local(
-    entries: list[cat.ModelEntry], models_root: Path | None, base: Path | None = None
+    entries: list[cat.ModelEntry],
+    models_root: Path | None,
+    base: Path | None = None,
+    shared: Iterable[Path] = (),
 ) -> list[cat.ModelEntry]:
-    """``entries`` plus the recognised local files (see :func:`scan`); never raises."""
+    """:func:`build`'s catalog, or ``entries`` unchanged if anything goes wrong (never raises)."""
     try:
-        found, _skipped = scan(models_root, entries, base)
+        merged, _found, _skipped = build(entries, models_root, base, shared)
     except Exception:  # noqa: BLE001 - a broken folder must not hide the catalog
         return entries
-    return cat.merge_entries(entries, found)
+    return merged
 
 
 def local_id(rel: str) -> str:
@@ -450,36 +599,48 @@ def entry_for(
     template: cat.ModelEntry,
     models_root: Path | None = None,
     gguf_nodes: tuple[cat.NodeSpec, ...] = (),
+    shared: Iterable[Path] = (),
+    root: str = "",
 ) -> cat.ModelEntry:
     """The template entry with ``path`` as its main file. With ``models_root``, each companion
-    file is the compatible one already there, if any (:func:`resolve_companion`); a ``.gguf``
-    text encoder found for a template without the GGUF node adds ``gguf_nodes``."""
+    file is the compatible one already there, if any (:func:`resolve_companion`, also in the
+    ``shared`` folders); a ``.gguf`` text encoder found for a template without the GGUF node
+    adds ``gguf_nodes``. ``root``: the shared folder ``path`` is in ("" = ``models_root``)."""
     main = cat.live_main_file(template) or template.files[0]
     folder = rel.split("/", 1)[0]
     role = main.role
     # optional: an existing file is never downloaded (it has no download address anyway)
-    files = [cat.FileSpec(role, "", rel, size, None, False, True, "")]
+    files = [cat.FileSpec(role, "", rel, size, None, False, True, "", root)]
+    shared = [Path(r) for r in shared]
     for f in template.files:
         if f is main:
             continue
         kind = COMPANION_KINDS.get((template.template or "", f.role))
-        files.append(resolve_companion(models_root, f, kind) if kind and models_root is not None else f)
+        if models_root is None:
+            files.append(f)
+        elif kind:
+            files.append(resolve_companion(models_root, f, kind, shared))
+        elif cat.file_installed(models_root, f):
+            files.append(f)
+        else:
+            files.append(_in_shared(models_root, f, shared) or f)
     nodes = template.requires_nodes
     if any(f.dest.lower().endswith(".gguf") for f in files[1:]) and not any(
         n.folder == GGUF_NODE_FOLDER for n in nodes
     ):
         nodes = nodes + tuple(gguf_nodes)
     stem = path.stem.removesuffix(".inpainting")
+    where = f"found in {Path(root) / folder}" if root else f"found in ComfyUI's {folder} folder"
     return replace(
         template,
-        id=local_id(rel),
+        id=local_id(f"{root}|{rel}" if root else rel),
         name=f"{stem} ({FAMILY_NAMES[family]}, your file)",
         page="",
         license_name="your own file",
         license_url="",
         gated=False,
         source_type="local",
-        uploader=f"found in ComfyUI's {folder} folder",
+        uploader=where,
         files=tuple(files),
         requires_nodes=nodes,
         source=SOURCE,

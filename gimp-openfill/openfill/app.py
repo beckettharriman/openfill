@@ -21,7 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from . import caption, comfy_setup, geometry, hardware, local_models, quality, ui_text, workflow
+from . import caption, comfy_setup, geometry, hardware, local_models, quality, shared_models, ui_text, workflow
 from . import catalog as cat
 from .backend import (
     SETTINGS_MENU,
@@ -125,13 +125,15 @@ class App:
             self.log.warning("catalog unavailable: %s", err)
             self.catalog = []
         if self.catalog and self.settings.comfy_dir:
-            # The user's own SD 1.5 inpainting, SDXL and FLUX.1 Fill files in ComfyUI's folders.
+            # The user's own SD 1.5 inpainting, SDXL and FLUX.1 Fill files in ComfyUI's folders,
+            # and the models of other installs in the shared folders (read only).
             try:
-                found, skipped = local_models.scan(self.models_root, self.catalog, self.paths.base)
+                self.catalog, found, skipped = local_models.build(
+                    self.catalog, self.models_root, self.paths.base, self.shared_roots
+                )
             except Exception as err:  # noqa: BLE001 - a broken folder must not hide the catalog
                 self.log.warning("own model files not scanned: %s", err)
                 found, skipped = [], []
-            self.catalog = cat.merge_entries(self.catalog, found)
             for e in found:
                 self.log.debug("own model file: %s (%s)", e.files[0].dest, e.family)
             for item in skipped:
@@ -142,6 +144,57 @@ class App:
     @property
     def models_root(self) -> Path:
         return cat.default_models_root(self.settings.comfy_dir)
+
+    @property
+    def shared_roots(self) -> list[Path]:
+        """Model folders of other ComfyUI installs (``shared_models`` setting), read only."""
+        own = self.models_root if self.settings.comfy_dir else None
+        return shared_models.roots_for(self.settings.shared_models, own)
+
+    def shared_suggestions(self) -> list[shared_models.Candidate]:
+        """Other installs found on this computer that are not in the setting yet (Krita AI
+        Diffusion first). Never raises."""
+        try:
+            have = shared_models.parse(self.settings.shared_models)
+            out = []
+            for c in shared_models.detect(self.settings.comfy_dir):
+                if not any(shared_models.inside(c.path, [h]) or shared_models.inside(h, [c.path]) for h in have):
+                    out.append(c)
+            return out
+        except Exception as err:  # noqa: BLE001 - detection is a convenience only
+            self.log.warning("other ComfyUI installs not looked for: %s", err)
+            return []
+
+    def set_shared_models(self, text: str) -> str:
+        """Save the shared folders, rebuild the catalog and ask a running backend to stop (ComfyUI
+        reads model folders when it starts; the next job starts it again with the new list).
+        Returns what changed, in plain words."""
+        folders = shared_models.parse(text)
+        missing = [f for f in folders if not Path(f).is_dir()]
+        if missing:
+            raise BackendError(f"Folder not found: {missing[0]}")
+        before = self.settings.shared_models
+        self.settings.shared_models = shared_models.join(folders)
+        self._save_settings()
+        self.rescan()
+        if self.settings.shared_models != before and self.server.read_state():
+            self.server.request_stop()
+        roots = self.shared_roots
+        if not folders:
+            return "No other ComfyUI folders are used."
+        return f"Using the models in {len(roots)} folder(s) of other ComfyUI installs, read only."
+
+    def rescan(self) -> None:
+        """Load the catalog again with the files on disk (own and shared folders)."""
+        try:
+            entries = cat.load_merged(plugin_dir=self.plugin_dir, base=self.paths.base)
+            if self.settings.comfy_dir:
+                entries, _found, _skipped = local_models.build(
+                    entries, self.models_root, self.paths.base, self.shared_roots
+                )
+            self.catalog = entries
+        except Exception as err:  # noqa: BLE001 - the catalog stays as it was
+            self.log.warning("models not rescanned: %s", err)
 
     @property
     def custom_nodes_dir(self) -> Path:
@@ -560,7 +613,8 @@ class App:
             for f in e.files
             if cat.install_status(e, self.models_root, None).installed
         }
-        files = [f.dest for f in entry.files if f.dest not in shared]
+        # files of another install (shared folders) are only read, never deleted
+        files = [f.dest for f in entry.files if f.dest not in shared and not f.root]
         task = {"type": "remove", "model_id": entry.id, "models_root": str(self.models_root), "files": files}
         return self.server.queue_task(task)
 

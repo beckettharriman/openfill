@@ -58,6 +58,9 @@ class Settings:
     request_timeout: int = 0  # 0 = estimate per request
     extra_server_args: str = ""  # appended to the ComfyUI command
     cpu_comfy_dir: str = ""  # the ComfyUI folder Download ComfyUI added --cpu for (no NVIDIA card)
+    # Folders of other ComfyUI installs (Krita AI Diffusion's server, ...) whose models are used
+    # read only; separated by os.pathsep or new lines (shared_models.parse). Never written to.
+    shared_models: str = ""
     checkpoint: str = "sd-v1-5-inpainting.ckpt"  # default (SD 1.5) model
     sdxl_checkpoint: str = "sd_xl_base_1.0.safetensors"
     fooocus_head: str = "fooocus_inpaint_head.pth"
