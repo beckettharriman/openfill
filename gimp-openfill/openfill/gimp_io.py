@@ -163,6 +163,17 @@ def mask_png_from_bytes(rect: Rect, pixels: bytes) -> bytes:
     return png.encode(rect.width, rect.height, pixels, 1)
 
 
+def decode_image(data: bytes) -> tuple[int, int, bytes]:
+    """A JPEG or WebP picture from the cloud service as (width, height, RGBA bytes): GdkPixbuf's
+    loader for that one format, with the size checked before pixels are allocated (``pixbuf``)."""
+    from .pixbuf import PixbufError, decode
+
+    try:
+        return decode(data)
+    except PixbufError as err:
+        raise GimpIoError(str(err)) from None
+
+
 # ---------------------------------------------------------------- writing ----
 
 

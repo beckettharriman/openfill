@@ -195,6 +195,8 @@ class Service:
         from openfill.config import comfy_layout
 
         app = self.app
+        if app.uses_cloud:  # nothing to start, and no request to the service until the user generates
+            return
         if comfy_layout(app.settings.comfy_dir) is None or not app.settings.autostart:
             return
         if not (app.has_model_for("fill") or app.has_model_for("remove")):
@@ -263,6 +265,8 @@ class Service:
     def cancel(self) -> None:
         with self.state.lock:
             self.state.cancel_requested = True
+        if self.app.uses_cloud:  # the cloud job polls the cancel flag itself; ComfyUI is not involved
+            return
         try:
             self.app.server.request_cancel()
         except Exception:  # noqa: BLE001

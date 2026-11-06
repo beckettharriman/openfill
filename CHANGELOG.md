@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Add OpenFill for Patchy (prototype): the PhotoCraft panel as a Patchy companion app, started from Plugins > Companions, with each result one step in Patchy's history.
+- Add an optional cloud service: run Fill, Remove, Expand and Create on OpenRouter or any OpenAI-compatible image API (OpenAI, LiteLLM) with your own key, for computers without a suitable graphics card. Off unless you pick it; every screen then says your image is sent to it; never used as a fallback. The result is put back through your selection, so pixels outside it never change. Untested against the real services so far. See docs/cloud.md.
 - Detect long Windows paths before ComfyUI startup or download and explain the shorter-folder fix.
 - Add PhotoCraft installation on Apple Silicon, tested with all four tools on an M3 MacBook Air.
 - Fix Finder Python architecture, Aqua panel startup and PhotoCraft discovery on macOS.

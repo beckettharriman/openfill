@@ -20,7 +20,7 @@ import tkinter as tk
 from typing import TYPE_CHECKING, Any
 
 from . import ui
-from .ui import BAD, BG, CW, DIM, OK
+from .ui import BAD, BG, CW, DIM, OK, WARN
 
 if TYPE_CHECKING:
     from .bar import Bar
@@ -92,6 +92,7 @@ class GearView(tk.Frame):
 
     def load(self) -> None:
         settings = self.bar.service.app.settings
+        self.engine.load_backend(settings)
         self.engine.folder.set(settings.comfy_dir or "")
         self.engine.autostart.set(bool(settings.autostart))
         self.engine.idle.set(str(settings.idle_timeout_minutes))
@@ -121,19 +122,43 @@ class GearView(tk.Frame):
         except ValueError as err:
             self.say(str(err), BAD)
             return
+        from dataclasses import replace
+
         folder = self.engine.folder.get().strip()
+        backend, cloud = self.engine.backend_values()
+        if backend == self.engine.loaded_backend:
+            # not switched here: keep what is set now (the browser page may have changed it since)
+            backend = app.settings.backend
+        for key in ("cloud_provider", "cloud_url", "cloud_model"):  # the same for the cloud fields
+            if cloud[key] == self.engine.loaded_cloud.get(key):
+                cloud[key] = getattr(app.settings, key)
+        trial = replace(app.settings)
+        trial.set_cloud(cloud["cloud_provider"], cloud["cloud_url"], cloud["cloud_model"], cloud["cloud_api_key"])
+        if backend == "cloud" and not trial.cloud_key_usable:
+            self.say(trial.cloud_key_problem() or "Paste your API key for the cloud service first.", BAD)
+            return
         try:
-            if folder != (app.settings.comfy_dir or ""):
+            if folder and folder != (app.settings.comfy_dir or ""):
                 app.use_comfy_dir(folder)
                 self.bar.service.rescan_models()
                 self.bar.service.warm_up()
             for key, value in values.items():
                 setattr(app.settings, key, value)
+            # a new key is bound to this service and address; an empty field never moves the saved one
+            app.settings.set_cloud(
+                cloud["cloud_provider"], cloud["cloud_url"], cloud["cloud_model"], cloud["cloud_api_key"]
+            )
+            was_cloud, app.settings.backend = app.settings.uses_cloud, backend
             app.settings.save(app.paths.config)
             app.reload_settings()
+            app.log.info("settings saved; images are made by: %s", app.settings.backend)
         except Exception as err:  # noqa: BLE001 - says what is wrong
             self.say(str(err), BAD)
             return
+        self.engine.load_backend(app.settings)  # clears the key field: the key is saved, never shown
+        self.bar.service.engine = ""
+        if was_cloud and not app.settings.uses_cloud:
+            self.bar.service.warm_up()
         self.bar.refresher.wake.set()
         self.say("Settings saved.", OK)
 
@@ -356,36 +381,26 @@ class ModelsView(tk.Frame):
 
 
 class EngineView(tk.Frame):
-    """ComfyUI's folder, starting and stopping it, and its extra options."""
+    """Where images are made: this computer (ComfyUI's folder, starting and stopping it, its
+    extra options) or a cloud service (its key, model and address, and where pictures go)."""
 
     def __init__(self, bar: Bar, parent: tk.Misc) -> None:
         super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
         self.bar = bar
+        self.loaded_backend = ""  # what the switch showed when the settings were loaded
+        self.loaded_cloud: dict[str, str] = {}  # and the cloud fields
+        from openfill.config import BACKENDS
 
-        def folder_row(box):
-            row = ui.frame(box)
-            browse = ui.Button(row, "Browse", self._browse)
-            self.folder = ui.Field(row, CW - 8 - browse.w)
-            self.folder.pack(side="left")
-            browse.pack(side="left", padx=(8, 0))
-            return row
-
-        box, _ = field(self, "ComfyUI folder", folder_row)
+        choices = [(b.id, b.short or b.label) for b in BACKENDS if b.photocraft]
+        box, self.backend = field(
+            self, "Where images are made", lambda b: ui.Seg(b, choices, self._backend_picked, CW, 13)
+        )
         box.pack(fill="x", pady=(12, 0))
-        self.autostart = ui.Checkbox(self, f"Start the AI engine with {bar.host}")
-        self.autostart.pack(anchor="w", pady=(12, 0))
-
-        def idle_row(box):
-            row = ui.frame(box)
-            self.idle = ui.Field(row, 72)
-            self.idle.pack(side="left")
-            ui.small(row, "minutes, 0 = never", wrap=0).pack(side="left", padx=(8, 0))
-            return row
-
-        box, _ = field(self, "Stop after idle", idle_row)
-        box.pack(fill="x", pady=(12, 0))
-        box, self.extra = field(self, "Extra ComfyUI options", lambda b: ui.Field(b, CW, "for example --lowvram"))
-        box.pack(fill="x", pady=(12, 0))
+        self.local = ui.frame(self)
+        self.cloud = ui.frame(self)
+        self._build_cloud(self.cloud)
+        self._build_local(self.local)
+        self.local.pack(fill="x")
         ui.divider(self).pack(fill="x", pady=(12, 0))
         tools = ui.frame(self)
         tools.pack(fill="x", pady=(12, 0))
@@ -395,6 +410,116 @@ class EngineView(tk.Frame):
         for i, (label, command) in enumerate((("Check", self.check), ("Stop engine", self.stop), ("Logs", self.logs))):
             ui.Button(row, label, command).pack(side="left", padx=(8 if i else 0, 0))
         self.result = ui.small(tools, "")
+        self._tools = tools
+
+    def _build_cloud(self, parent: tk.Misc) -> None:
+        from openfill import ui_text
+
+        ui.small(parent, f"{ui_text.CLOUD_INTRO} {ui_text.CLOUD_WHEN}").pack(fill="x", pady=(12, 0))
+        box, self.provider = field(
+            parent,
+            "Service",
+            lambda b: ui.Seg(
+                b, (("openrouter", "OpenRouter"), ("openai", "OpenAI-compatible")), self._cloud_changed, CW, 13
+            ),
+        )
+        box.pack(fill="x", pady=(12, 0))
+        box, self.key = field(parent, "API key", lambda b: ui.Field(b, CW, ui_text.CLOUD_KEY_EMPTY, secret=True))
+        box.pack(fill="x", pady=(12, 0))
+        ui.small(parent, ui_text.CLOUD_KEY_HINT).pack(fill="x", pady=(6, 0))
+        box, self.model = field(parent, "Model", lambda b: ui.Field(b, CW))
+        box.pack(fill="x", pady=(12, 0))
+        box, self.url = field(parent, "Address", lambda b: ui.Field(b, CW))
+        box.pack(fill="x", pady=(12, 0))
+        ui.small(parent, "Empty model or address: the service's own. For LiteLLM, its /v1 address.").pack(
+            fill="x", pady=(6, 0)
+        )
+        self.note = ui.small(parent, "", fg=WARN)
+        self.note.pack(fill="x", pady=(12, 0))
+        ui.small(parent, ui_text.CLOUD_COST).pack(fill="x", pady=(6, 0))
+        self.url.entry.bind("<KeyRelease>", lambda _e: self._cloud_changed(), add="+")
+
+    def _cloud_changed(self, _key: object = None) -> None:
+        from openfill.backends.cloud import cloud_note, provider
+
+        info = provider(self.provider.get())
+        for entry, text in (
+            (self.model, info.default_model or "the model name your service uses"),
+            (self.url, info.base_url),
+        ):
+            entry.placeholder = text
+            if not entry.get():  # only an empty field is redrawn: typing is never disturbed
+                entry.set("")
+        from openfill import ui_text
+
+        url = self.url.get().strip()
+        self.key.placeholder = ui_text.cloud_key_placeholder(
+            getattr(self, "_key_for", ""), info.id, url, getattr(self, "_has_key", False)
+        )
+        if not self.key.get():
+            self.key.set("")
+        self.note.configure(text=cloud_note(info.id, url))
+
+    def _backend_picked(self, key: str) -> None:
+        with ui.frozen(self.bar.root):
+            self._show_backend(key)
+
+    def _show_backend(self, key: str) -> None:
+        self.backend.set(key)
+        shown, hidden = (self.cloud, self.local) if key == "cloud" else (self.local, self.cloud)
+        hidden.pack_forget()
+        shown.pack(fill="x", after=self.backend.master)  # under the switch, above the tools
+
+    def load_backend(self, settings) -> None:
+        backend = settings.backend if settings.backend in ("comfyui", "cloud") else "comfyui"
+        self.provider.set(
+            settings.cloud_provider if settings.cloud_provider in ("openrouter", "openai") else "openrouter"
+        )
+        self.model.set(settings.cloud_model or "")
+        self.url.set(settings.cloud_url or "")
+        self._has_key, self._key_for = bool(settings.cloud_api_key), settings.cloud_key_for
+        self.key.set("")  # the saved key is never put on screen
+        self._cloud_changed()
+        self.loaded_backend = backend
+        self.loaded_cloud = self.backend_values()[1]
+        self._show_backend(backend)
+
+    def backend_values(self) -> tuple[str, dict[str, str]]:
+        """(the backend picked, the cloud fields; ``cloud_api_key`` is "" unless a new key was typed)."""
+        return self.backend.get(), {
+            "cloud_provider": self.provider.get(),
+            "cloud_model": self.model.get().strip(),
+            "cloud_url": self.url.get().strip(),
+            "cloud_api_key": self.key.get().strip(),
+        }
+
+    def _build_local(self, parent: tk.Misc) -> None:
+        self._local_parent = parent
+
+        def folder_row(box):
+            row = ui.frame(box)
+            browse = ui.Button(row, "Browse", self._browse)
+            self.folder = ui.Field(row, CW - 8 - browse.w)
+            self.folder.pack(side="left")
+            browse.pack(side="left", padx=(8, 0))
+            return row
+
+        box, _ = field(parent, "ComfyUI folder", folder_row)
+        box.pack(fill="x", pady=(12, 0))
+        self.autostart = ui.Checkbox(parent, f"Start the AI engine with {self.bar.host}")
+        self.autostart.pack(anchor="w", pady=(12, 0))
+
+        def idle_row(box):
+            row = ui.frame(box)
+            self.idle = ui.Field(row, 72)
+            self.idle.pack(side="left")
+            ui.small(row, "minutes, 0 = never", wrap=0).pack(side="left", padx=(8, 0))
+            return row
+
+        box, _ = field(parent, "Stop after idle", idle_row)
+        box.pack(fill="x", pady=(12, 0))
+        box, self.extra = field(parent, "Extra ComfyUI options", lambda b: ui.Field(b, CW, "for example --lowvram"))
+        box.pack(fill="x", pady=(12, 0))
 
     def say(self, text: str, color: str = OK) -> None:
         if not text:
@@ -412,7 +537,10 @@ class EngineView(tk.Frame):
 
     def check(self) -> None:
         bar = self.bar
-        self.say("Checking the AI engine (starting it takes about a minute)...", DIM)
+        if bar.service.app.uses_cloud:
+            self.say("Checking the key with the cloud service (no picture is sent)...", DIM)
+        else:
+            self.say("Checking the AI engine (starting it takes about a minute)...", DIM)
 
         def work() -> None:
             try:
