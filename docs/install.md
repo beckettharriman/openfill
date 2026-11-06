@@ -5,6 +5,7 @@ The short steps are in the [README](../README.md#install). This page has the res
 ## What you need
 
 - **A graphics card with 8 GB or more** for the SDXL and FLUX models: NVIDIA, or AMD Radeon RX 7000 or newer (see [AMD graphics cards](#amd-graphics-cards)). LaMa (Remove) and the SD 1.5 models run on less. Without a card ComfyUI can use, it runs on the processor, which takes minutes per fill.
+- **No suitable graphics card?** You can use a paid cloud service (OpenRouter or an OpenAI-compatible one) instead of ComfyUI. It's optional and your images are then sent to it. See [docs/cloud.md](cloud.md).
 - **ComfyUI.** On Windows, OpenFill downloads it for you the first time (about 2 GB, about 7 GB unpacked). On Linux and macOS you set it up once (steps below). If you already have ComfyUI, point OpenFill at it.
 - **Disk space** for the models: from 0.2 GB (LaMa) to about 13 GB (FLUX.1 Fill Q6).
 - **For PhotoCraft:** PhotoCraft 0.12 to 0.16, Windows 10 or 11 or Linux, and Python 3.10 or newer with Pillow. ComfyUI's existing Python works; Tk is optional. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. PhotoCraft 0.2.3 adds Apple Silicon support, tested on an M3. See [PhotoCraft on macOS](#photocraft-on-macos).
@@ -239,7 +240,7 @@ PhotoCraft and GIMP stay installed. Your models stay in your ComfyUI folder, and
 
 ## If something goes wrong
 
-Every error message ends with what to do next, and in GIMP the same advice shows in the progress window. For a bug report, turn on Verbose log in Settings, do it again, and attach the log file to an [issue](https://github.com/beckettharriman/openfill/issues). Never attach `config.json`, it may hold your Hugging Face token.
+Every error message ends with what to do next, and in GIMP the same advice shows in the progress window. For a bug report, turn on Verbose log in Settings, do it again, and attach the log file to an [issue](https://github.com/beckettharriman/openfill/issues). Never attach `config.json`, it may hold your Hugging Face token or your cloud API key.
 
 - **PhotoCraft was opened another way:** open it with "PhotoCraft with OpenFill" (or the menu entry the installer set up on Linux). A PhotoCraft opened another way has no control channel; OpenFill notices and asks you to close it and open it again.
 - **Where things are kept:** `%APPDATA%\OpenFill for PhotoCraft` on Windows and `~/.config/openfill-photocraft` on Linux for the PhotoCraft version, `<GIMP profile>/openfill` for the GIMP plug-in. Settings in the GIMP plug-in are created the first time you change one; until then the defaults are used.

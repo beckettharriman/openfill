@@ -5,6 +5,10 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Add an optional cloud service under Engine: OpenRouter or any OpenAI-compatible image API, with your own key. Off unless you pick it; the panel then says your image is sent to it, and it is never used as a fallback. Untested against the real services so far. See docs/cloud.md.
+
 ## [0.2.4] - 2026-10-26
 
 - Fix Mac prompt typing by keeping the expanded panel keyboard-focusable.

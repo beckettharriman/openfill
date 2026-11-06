@@ -90,6 +90,19 @@ To remove the token, clear the field in the Models tab and save, or delete the
 `hf_token` value from `config.json`. Revoke it at
 https://huggingface.co/settings/tokens if you think it leaked.
 
+## The cloud API key
+
+The optional cloud service (see [cloud.md](cloud.md)) has its own key,
+`cloud_api_key`, kept like the Hugging Face token: only in `config.json`
+(created with mode 0600 on Linux and macOS), out of `repr()`, removed from
+logs by the same filter (`sk-...`, `Bearer ...`, `"cloud_api_key": ...`), and
+removed from any error text a service sends back. It goes only into the
+`Authorization` header of requests to the address you set; plain http is
+refused except for an address on this computer or your own network, and
+redirects are refused. In GIMP it's never a procedure argument, and
+PhotoCraft's settings page never sends it back. While the backend is not the
+cloud, the cloud service is never contacted.
+
 ## What is stored where
 
 All plug-in state lives in `<GIMP profile>/openfill/` (for example
@@ -98,7 +111,7 @@ Linux):
 
 | File | Contents |
 | --- | --- |
-| `config.json` | settings, including the Hugging Face token |
+| `config.json` | settings, including the Hugging Face token and the cloud API key |
 | `openfill.log` (+ `.1`, `.2`) | plug-in and supervisor log, rotated at 2 MB; prompts and file paths appear here, tokens do not |
 | `comfyui.log` | ComfyUI's output |
 | `server-state.json` | supervisor and ComfyUI pids, URL, status |
