@@ -113,6 +113,7 @@ CHECK_BACKEND_RUNNING = "Checking. The first start takes about a minute..."
 
 # (key, label, one-line hint)
 GENERAL_FIELDS = (
+    ("backend", "Where images are made", "A cloud service costs money and gets your image. Local stays the default."),
     ("comfy_dir", "AI backend folder", "Where ComfyUI (portable build) is installed."),
     ("autostart", "Start backend automatically", "Starts ComfyUI hidden when you generate."),
     (
@@ -138,7 +139,6 @@ ADVANCED_FIELDS = (
     ("txt2img_height", "Text to Image default height (px)", ""),
 )
 CONNECTION_FIELDS = (
-    ("backend", "Backend", "ComfyUI is managed for you. AUTOMATIC1111 must be started by you with --api."),
     ("url", "ComfyUI address", ""),
     ("a1111_url", "AUTOMATIC1111 address", ""),
     ("startup_timeout", "Startup time limit (s)", "How long to wait for the backend to start."),
@@ -471,6 +471,24 @@ def health_text(
             "and press Check backend again."
         )
     return f"Could not reach the backend: {reason.rstrip('.')}. {step}"
+
+
+CLOUD_TITLE = "Cloud service"
+CLOUD_INTRO = "Optional and paid: every tool runs on an online service instead of on this computer."
+CLOUD_WHEN = "Nothing is sent until you press Generate, and never while This computer is picked."
+CLOUD_KEY_SAVED = "Saved. Paste a new key to replace it."
+CLOUD_KEY_EMPTY = "Paste your API key"
+CLOUD_KEY_HINT = "Kept only in OpenFill's settings file on this computer, readable by you alone."
+CLOUD_COST = "Each picture is billed to your account with the service."
+CLOUD_SETUP_BUTTON = "Use a cloud service instead..."
+CLOUD_SETUP_LINE = "No suitable graphics card? A paid cloud service can do the work. Your images are then sent to it."
+CLOUD_PROVIDERS = (("openrouter", "OpenRouter"), ("openai", "OpenAI-compatible (OpenAI, LiteLLM, ...)"))
+
+
+def cloud_health_text(ok: bool, detail: str) -> str:
+    """Result line of Check backend when the cloud service is the backend (no picture is sent)."""
+    detail = " ".join((detail or "no answer").split())
+    return f"Cloud OK: {detail}" if ok else f"Cloud check failed: {detail}"
 
 
 # ------------------------------------------------------------ models -----

@@ -1423,6 +1423,151 @@ class PageTests(unittest.TestCase):
             server.shutdown()
 
 
+class CloudCompanionTests(unittest.TestCase):
+    """The optional cloud backend in the companion: settings never hand out the key, every
+    tool offers the cloud model, and nothing local starts while the cloud is picked."""
+
+    KEY = "sk-or-v1-" + "fedcba9876543210" * 4
+
+    def setUp(self):
+        from types import SimpleNamespace
+
+        from openfill.app import App
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        profile = Path(self.tmp.name)
+        (profile / "openfill").mkdir()
+        (profile / "openfill" / "config.json").write_text(
+            json.dumps({"comfy_dir": str(profile / "none"), "url": "http://127.0.0.1:9"}), encoding="utf-8"
+        )
+        self.app = App(
+            interactive=False,
+            io=SimpleNamespace(profile_dir=lambda: str(profile), message=lambda _t: None),
+            runner_cls=object,
+        )
+        self.addCleanup(self._close_log)
+        self.config = profile / "openfill" / "config.json"
+
+    def _close_log(self):
+        for handler in list(self.app.log.handlers):
+            handler.close()
+            self.app.log.removeHandler(handler)
+
+    def api(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft import web
+
+        warmed = []
+        service = SimpleNamespace(
+            app=self.app,
+            warm_up=lambda: warmed.append(True),
+            state=SimpleNamespace(snapshot=lambda: {}),
+            photocraft=lambda: {},
+            busy=lambda: False,
+            setup_progress=lambda: None,
+        )
+        return web.Api(service), warmed
+
+    def test_page_settings_save_the_key_but_never_return_it(self):
+        api, warmed = self.api()
+        with self.assertRaises(ValueError):  # no key yet: the cloud cannot be picked
+            api.post("/api/settings", {"backend": "cloud"})
+        with self.assertRaises(ValueError):
+            api.post("/api/settings", {"backend": "a1111"})  # not offered here
+        out = api.post("/api/settings", {"backend": "cloud", "cloud_api_key": self.KEY, "cloud_model": "x/y"})
+        self.assertNotIn(self.KEY, json.dumps(out))
+        self.assertTrue(out["cloud_key_saved"])
+        self.assertEqual(self.app.settings.cloud_api_key, self.KEY)
+        if os.name == "posix":
+            self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
+        api.post("/api/settings", {"backend": "cloud", "cloud_api_key": ""})  # empty keeps the saved key
+        self.assertEqual(self.app.settings.cloud_api_key, self.KEY)
+        state = api.state()
+        self.assertNotIn(self.KEY, json.dumps(state))
+        self.assertEqual(state["cloud"]["note"], "Cloud: your image is sent to OpenRouter.")
+        self.assertEqual(state["activeModel"], "cloud")
+        self.assertTrue(state["comfyReady"])
+        self.assertEqual(warmed, [])
+        api.post("/api/settings", {"backend": "comfyui"})
+        self.assertIsNone(api.state()["cloud"])
+        self.assertEqual(warmed, [True])  # back to local: ComfyUI may warm up again
+
+    def test_every_tool_offers_the_cloud_model(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.bar import Refresher, fill_choices, removal_choices, status_color
+        from openfill_photocraft.ui import WARN
+
+        self.app.settings.backend = "cloud"
+        self.app.settings.cloud_api_key = self.KEY
+        refresher = Refresher.__new__(Refresher)  # no lookup thread
+        refresher.service = SimpleNamespace(app=self.app)
+        refresher._vendor = "none"
+        facts = refresher.look()
+        self.assertTrue(facts["cloud"] and facts["cloud_key"])
+        name = "google/gemini-2.5-flash-image (OpenRouter)"
+        for tool in ("fill", "remove", "expand", "txt2img"):
+            self.assertEqual(facts["models"][tool], [("cloud", name)])
+        self.assertEqual(removal_choices(facts), {"google/gemini-2.5-flash-image": "cloud"})
+        self.assertEqual(fill_choices(facts), {name: "cloud"})
+        self.assertEqual(status_color("Cloud: OpenRouter"), WARN)
+        self.assertNotIn(self.KEY, json.dumps(facts))
+
+    def test_bridge_reads_a_jpeg_from_the_service(self):
+        buf = io.BytesIO()
+        Image.new("RGB", (6, 4), (200, 10, 20)).save(buf, "JPEG")
+        width, height, rgba = PhotoCraftBridge.decode_image(None, buf.getvalue())
+        self.assertEqual((width, height, len(rgba)), (6, 4, 6 * 4 * 4))
+        self.assertEqual(rgba[3], 255)
+
+    def test_no_comfyui_warm_up_while_the_cloud_is_picked(self):
+        from openfill_photocraft.service import Service
+
+        self.app.settings.backend = "cloud"
+        service = Service.__new__(Service)
+        service.app = self.app
+        service._warm = None
+        service.warm_up()
+        self.assertIsNone(service._warm)
+
+    def test_engine_view_switches_and_never_shows_the_key(self):
+        try:
+            import tkinter as tk
+
+            root = tk.Tk()
+        except Exception:  # noqa: BLE001 - no Tk or no display
+            self.skipTest("no display")
+        from types import SimpleNamespace
+
+        from openfill_photocraft.panels import EngineView
+
+        try:
+            bar = SimpleNamespace(root=root, service=SimpleNamespace(app=self.app), call_soon=lambda fn, *a: fn(*a))
+            view = EngineView(bar, root)
+            view.pack()
+            self.app.settings.backend = "cloud"
+            self.app.settings.cloud_api_key = self.KEY
+            view.load_backend(self.app.settings)
+            root.update()
+            self.assertTrue(view.cloud.winfo_ismapped())
+            self.assertFalse(view.local.winfo_ismapped())
+            self.assertEqual(view.key.get(), "")
+            self.assertIn("Saved", view.key.placeholder)
+            self.assertEqual(view.note.cget("text"), "Cloud: your image is sent to OpenRouter.")
+            view._show_backend("comfyui")
+            root.update()
+            self.assertTrue(view.local.winfo_ismapped())
+            self.assertFalse(view.cloud.winfo_ismapped())
+            self.assertEqual(view.backend_values()[0], "comfyui")
+        finally:
+            root.destroy()
+            from openfill_photocraft import ui
+
+            ui.FONTS = None  # the fonts belonged to this root; the next test makes its own
+
+
 class LaunchTests(unittest.TestCase):
     """How the launcher starts PhotoCraft, which refuses unknown, repeated and conflicting options."""
 

@@ -54,6 +54,17 @@ NO_MODELS = "No models installed"
 STATUS_COLOR = {"Ready": OK, "Not set up": WARN, "Checking...": DIM, "Starting the AI engine...": WARN}
 
 
+def status_color(status: str) -> str:
+    """The dot's colour; the cloud is always marked, as pictures leave the computer."""
+    return WARN if status.startswith("Cloud:") else STATUS_COLOR.get(status, DIM)
+
+
+CLOUD_OFFER = (
+    "No suitable graphics card? A paid cloud service can do the work instead (gear, Engine). "
+    "Your images are then sent to it."
+)
+
+
 def icon_image(size: int = 64) -> Image.Image:
     """OpenFill's window icon: a white four-point sparkle on a blue rounded square."""
     return ui.app_icon_image(size)
@@ -219,6 +230,11 @@ class Refresher:
             "comfy_ok": comfy_ok,
             "comfy_problem": "" if comfy_ok else comfy_problem(app.settings.comfy_dir),
         }
+        if app.uses_cloud:
+            facts = self._cloud_facts(facts)
+            if not comfy_ok:
+                facts["gpu_vendor"] = self._gpu_vendor()
+                return facts
         if not comfy_ok:
             if sys.platform == "win32":
                 try:
@@ -289,7 +305,23 @@ class Refresher:
         facts["gpu_vendor"] = self._vendor
         if self._vendor == "amd":
             cat.add_amd_notes(rows, app.catalog)  # what may not work on an AMD card
+        if app.uses_cloud:  # the local models stay listed under Models; the tools use the cloud
+            facts.update({k: v for k, v in self._cloud_facts({}).items() if k != "comfy_ok"})
         return facts
+
+    def _cloud_facts(self, facts: dict[str, Any]) -> dict[str, Any]:
+        """The cloud model in every tool's menu, and what the panel says about the cloud."""
+        app = self.service.app
+        name = app.cloud_model_name()
+        out = dict(facts)
+        out.update(
+            cloud=True,
+            cloud_key=bool(app.settings.cloud_api_key),
+            models={cap: [("cloud", name)] for cap in ("fill", "remove", "expand", "txt2img")},
+            active="cloud",
+            active_name=name,
+        )
+        return out
 
     def _gpu_vendor(self) -> str:
         """Who made the graphics card (``Hardware.gpu_vendor``), detected once."""
@@ -438,6 +470,8 @@ class Bar:
         self.context_icon.pack(side="left", anchor="n", pady=(1, 0))
         self.context = ui.small(self.context_row, "", wrap=CW - 20)
         self.context.pack(side="left", padx=(6, 0), fill="x")
+        # Shown under the context whenever the cloud is the backend: what leaves this computer.
+        self.cloud_line = ui.small(m, "", fg=WARN)
         self.remove_line = ui.small(m, "Erases what you selected and fills in the background around it.")
 
         from .expand_view import ExpandView
@@ -1014,6 +1048,8 @@ class Bar:
         """Pack the tool view's parts for the current mode (12 px apart)."""
         key = self.tab.get()
         parts: list[tk.Misc] = [self.modes, self.context_row]
+        if self._shown.get("cloud_note"):
+            parts.append(self.cloud_line)
         if key == "remove":
             parts.append(self.remove_line)
         if key == "expand":
@@ -1346,6 +1382,11 @@ class Bar:
 
     def _engine_status(self, facts: dict[str, Any]) -> str:
         engine = self.service.engine
+        if self.service.app.uses_cloud:
+            from openfill.backends.cloud import destination
+
+            s = self.service.app.settings
+            return f"Cloud: {destination(s.cloud_provider, s.cloud_url)}"
         if not facts:
             return "Checking..."
         if not facts.get("comfy_ok"):
@@ -1356,8 +1397,17 @@ class Bar:
             return "Ready"
         return "AI engine: " + engine[:60]
 
+    def _update_cloud_line(self) -> None:
+        note = self.service.app.settings.cloud_note("prompt" if self.tab.get() == "txt2img" else "image")
+        if self._shown.get("cloud_note") != note:
+            self._shown["cloud_note"] = note
+            self.cloud_line.configure(text=note)
+            if not self.view:
+                self._layout_main()
+
     def _update(self) -> None:
         facts = self.refresher.get()
+        self._update_cloud_line()
         if not self.view:
             self._update_context()
             self._fill_models()
@@ -1365,7 +1415,7 @@ class Bar:
         if self._shown.get("status") != status:
             self._shown["status"] = status
             self.status.configure(text=ui.ellipsize(status, self.small, 200))
-            self.status_dot.configure(image=ui.dot(STATUS_COLOR.get(status, DIM), BG))
+            self.status_dot.configure(image=ui.dot(status_color(status), BG))
         self._update_setup(facts)
         if facts.get("rows") is not self._shown.get("rows") or self.view:
             # new facts (a look every few seconds): the models list follows, shown or not
@@ -1381,7 +1431,7 @@ class Bar:
             elif st["state"] == "done" and len(st["variations"]) > 1:
                 self.expand()  # pick a variation
             else:
-                self._draw_pill(status, STATUS_COLOR.get(status, DIM), None)
+                self._draw_pill(status, status_color(status), None)
         self._update_job(st)
         self._layout_footer()
         if st["state"] != self._last_state and st["state"] in ("done", "error"):
@@ -1393,7 +1443,17 @@ class Bar:
         key: tuple = ()
         setup = facts.get("setup") or {}
         pre = facts.get("preflight") or {}
-        if facts and not facts.get("comfy_ok", True) and setup and "error" not in setup:
+        if facts.get("cloud"):
+            if not facts.get("cloud_key"):
+                key = (
+                    "cloud",
+                    "warn",
+                    WARN,
+                    "The cloud service needs your key",
+                    "Paste your API key under Engine in the settings. Nothing is sent until you generate.",
+                    (("Open settings", "accent", lambda: self.select_view("settings")),),
+                )
+        elif facts and not facts.get("comfy_ok", True) and setup and "error" not in setup:
             key = (
                 "setup",
                 "download",
@@ -1403,7 +1463,7 @@ class Bar:
                 (),
             )
         elif facts and not facts.get("comfy_ok", True) and pre and not pre.get("blocked"):
-            line = download_card_line(pre)
+            line = download_card_line(pre) + " " + CLOUD_OFFER
             if setup.get("error"):
                 line = f"The download stopped: {setup['error']} " + line
             key = (
@@ -1418,7 +1478,7 @@ class Bar:
                 ),
             )
         elif facts and not facts.get("comfy_ok", True):
-            line = choose_card_line(facts.get("gpu_vendor") == "amd" and sys.platform != "win32")
+            line = choose_card_line(facts.get("gpu_vendor") == "amd" and sys.platform != "win32") + " " + CLOUD_OFFER
             if pre.get("blocked") and pre.get("text"):
                 line = pre["text"] + " " + line
             key = (

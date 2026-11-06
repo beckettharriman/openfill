@@ -61,7 +61,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from openfill import __version__, ui_text  # noqa: E402
 from openfill.backend import BackendError, GenerationCancelled, describe_error  # noqa: E402
-from openfill.config import Paths, Settings  # noqa: E402
+from openfill.config import BACKENDS, Paths, Settings  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -247,6 +247,12 @@ def _model_options(
 
     from openfill import catalog as cat
 
+    if settings.uses_cloud:  # one cloud model does every operation; the catalog is not used
+        from openfill.backends.cloud import destination, provider
+
+        name = settings.cloud_model or provider(settings.cloud_provider).default_model or "cloud model"
+        label = f"{name} (cloud, {destination(settings.cloud_provider, settings.cloud_url)})"
+        return [("active", label)], label, False, frozenset()
     nicks = [n for n, _ in (_choice_options(config, "model") or [("active", "Active model")])]
     active_name, prompt_free = settings.active_model, False
     installed_rows, other_rows = [], []
@@ -362,6 +368,7 @@ def _generation_dialog(
         test_dump=hooks.get("dialog_dump"),
         test_out=str(hooks.get("dialog_out") or ""),
         thumbnail=thumbnail,
+        cloud_note=settings.cloud_note("prompt" if kind == "txt2img" else "image"),
     )
     if result is None:
         return False
@@ -879,8 +886,18 @@ SETTINGS_KEYS = [
 def _settings_test_backend(app: App, values: dict, report: Callable[[str], None]) -> str:
     """Runs in the Settings dialog's worker thread (no GIMP calls): apply the
     values on screen to a private App, start the backend if needed, check it."""
+    cloud = values.get("_cloud")
     for key, value in values.items():
-        setattr(app.settings, key, value)
+        if key != "_cloud":
+            setattr(app.settings, key, value)
+    if cloud:  # the cloud fields on screen, not yet saved; a key typed now is tried, else the saved one
+        from openfill.dialogs import cloud_values
+
+        for key, value in cloud_values(cloud, {"cloud_api_key": app.settings.cloud_api_key}).items():
+            setattr(app.settings, key, value)
+    if app.uses_cloud:
+        health = app.check_backend()  # checks the key only: no picture is sent
+        return ui_text.cloud_health_text(health.ok, health.detail)
     try:
         backend = app.backend(lambda _f, text: report(ui_text.plain_step_text(text)))
         health = backend.health()
@@ -921,6 +938,13 @@ def _settings_dialog(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig) ->
             except AttributeError:
                 pass
     test_app = App()  # created here: App() reads the profile path through GIMP (main thread only)
+    saved = test_app.settings
+    cloud = {
+        "cloud_provider": saved.cloud_provider,
+        "cloud_url": saved.cloud_url,
+        "cloud_model": saved.cloud_model,
+        "has_key": bool(saved.cloud_api_key),  # the key itself never goes into the dialog
+    }
     result = dialogs.run_settings_dialog(
         values,
         choices,
@@ -934,9 +958,22 @@ def _settings_dialog(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig) ->
         select_model=str(hooks.get("select_model") or ""),
         test_steps=hooks.get("settings_steps"),
         test_out=str(hooks.get("settings_out") or ""),
+        cloud=cloud,
     )
     if result is None:
         return False
+    cloud_result = result.pop("_cloud", None)
+    if cloud_result is not None:
+        # Straight into config.json (owner-only): never a procedure argument, which GIMP would
+        # keep in its own plug-in settings file.
+        paths = Paths.for_profile(Gimp.directory()).ensure()
+        fresh = Settings.load(paths.config)
+        for key, value in dialogs.cloud_values(cloud_result, {"cloud_api_key": fresh.cloud_api_key}).items():
+            setattr(fresh, key, value)
+        try:
+            fresh.save(paths.config)
+        except OSError as err:
+            Gimp.message(ui_text.save_failed(str(paths.config), str(err)))
     for key, value in result.items():
         config.set_property(key.replace("_", "-"), value)
     config.set_property("check-backend", False)  # the dialog has its own Check backend button
@@ -1160,7 +1197,7 @@ class OpenFill(Gimp.PlugIn):
             "backend",
             "_Backend",
             "Generation server",
-            _choice([("comfyui", "ComfyUI (managed, recommended)"), ("a1111", "AUTOMATIC1111 WebUI (external)")]),
+            _choice([(b.id, b.label) for b in BACKENDS]),
             s.backend,
             RW,
         )

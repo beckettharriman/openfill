@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlparse
 
 from openfill import catalog as cat
 from openfill.backend import describe_error
+from openfill.config import BACKENDS
 
 from . import __version__
 from .service import Service
@@ -35,6 +36,15 @@ EDITABLE = {
     "grow_percent": float,
     "feather_percent": float,
     "debug": bool,
+    "backend": str,
+    "cloud_provider": str,
+    "cloud_model": str,
+    "cloud_url": str,
+}
+# Values a choice setting may take here (anything else is refused, not saved).
+CHOICES = {
+    "backend": lambda: {b.id for b in BACKENDS if b.photocraft},
+    "cloud_provider": lambda: {"openrouter", "openai"},
 }
 
 
@@ -57,11 +67,12 @@ class Api:
             "job": self.service.state.snapshot(),
             "photocraft": self.service.photocraft(),
             "busy": self.service.busy(),
-            "activeModel": app.active_model_id(),
-            "comfyReady": _comfy_set(app),
-            "comfyProblem": "" if _comfy_set(app) else _comfy_problem(app),
-            "setup": None if _comfy_set(app) else self.service.setup_progress(),
+            "activeModel": "cloud" if app.uses_cloud else app.active_model_id(),
+            "comfyReady": _comfy_set(app) or app.uses_cloud,
+            "comfyProblem": "" if _comfy_set(app) or app.uses_cloud else _comfy_problem(app),
+            "setup": None if _comfy_set(app) or app.uses_cloud else self.service.setup_progress(),
             "pick": self._pick,
+            "cloud": _cloud_state(app),
         }
 
     def models(self) -> dict[str, Any]:
@@ -109,7 +120,9 @@ class Api:
 
     def settings(self) -> dict[str, Any]:
         s = self.service.app.settings
-        return {k: getattr(s, k) for k in EDITABLE}
+        out = {k: getattr(s, k) for k in EDITABLE}
+        out["cloud_key_saved"] = bool(s.cloud_api_key)  # the key itself never leaves the settings file
+        return out
 
     # POST -----------------------------------------------------------------------------
 
@@ -148,11 +161,23 @@ class Api:
             app.save_token(str(body.get("token", "")))
             return {"ok": True}
         if path == "/api/settings":
+            for key, allowed in CHOICES.items():
+                if key in body and str(body[key]) not in allowed():
+                    raise ValueError(f"'{body[key]}' is not a choice for {key}.")
+            was_cloud = app.uses_cloud
+            if body.get("backend") == "cloud" and not (
+                str(body.get("cloud_api_key") or "").strip() or app.settings.cloud_api_key
+            ):
+                raise ValueError("Paste your API key for the cloud service first.")
             for key, kind in EDITABLE.items():
                 if key in body:
                     setattr(app.settings, key, kind(body[key]))
+            if str(body.get("cloud_api_key") or "").strip():  # an empty field keeps the saved key
+                app.settings.cloud_api_key = str(body["cloud_api_key"]).strip()
             app.settings.save(app.paths.config)
             app.reload_settings()
+            if was_cloud and not app.uses_cloud:
+                svc.warm_up()
             return self.settings()
         if path == "/api/comfy/setup":
             return {"task": svc.setup_comfy()}
@@ -165,6 +190,22 @@ class Api:
             app.open_log_folder()
             return {"ok": True}
         raise KeyError(path)
+
+
+def _cloud_state(app) -> dict[str, Any] | None:
+    """What the page shows while the cloud is the backend (None otherwise); never the key."""
+    if not app.uses_cloud:
+        return None
+    from openfill.backends.cloud import destination
+
+    s = app.settings
+    return {
+        "status": f"Cloud: {destination(s.cloud_provider, s.cloud_url)}",
+        "note": s.cloud_note(),
+        "promptNote": s.cloud_note("prompt"),
+        "model": app.cloud_model_name(),
+        "key": bool(s.cloud_api_key),
+    }
 
 
 def _comfy_set(app) -> bool:
