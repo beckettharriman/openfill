@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 from .backend import BackendUnavailable, GenerationCancelled
 from .comfy_api import ComfyClient
 from .config import Paths, Settings, comfy_layout, comfy_problem, in_app_bundle, windows_path_problem
-from .supervisor import WATCHERS_DIRNAME, pid_is_python
+from .supervisor import WATCHERS_DIRNAME, pid_alive, pid_is_python
 
 ProgressCallback = Callable[[float, str], None]
 IS_WINDOWS = sys.platform == "win32"
@@ -163,6 +163,35 @@ class ServerManager:
         """URL of the running managed backend, else the configured one."""
         state = self.read_state()
         return state.get("url") or self.settings.active_url
+
+    def death_watch(self) -> Callable[[], bool] | None:
+        """For the ComfyUI the supervisor runs: a check that turns True once that ComfyUI is
+        gone, so a job waiting on it can stop at once. None when no live managed ComfyUI is
+        recorded: a ComfyUI the user started (even behind a state file a killed supervisor
+        left) keeps the usual grace period.
+
+        Gone means: the state file was removed (the supervisor saw ComfyUI exit), the
+        supervisor died, it now runs another ComfyUI (a restart), or the recorded ComfyUI
+        process exited. The state is read again on every call, so a pid reused by another
+        program after the supervisor cleaned up still counts as gone."""
+        state = self.read_state()
+        pid, supervisor = state.get("server_pid"), state.get("supervisor_pid")
+        if not (_valid_pid(pid) and _valid_pid(supervisor)):
+            return None
+        if not pid_alive(pid) or not pid_is_python(supervisor):
+            return None  # a stale state: the ComfyUI that answered is not this one
+
+        def gone() -> bool:
+            if not self.paths.state.exists():
+                return True
+            now = self.read_state()
+            if not now:
+                return False  # being rewritten: ask again on the next poll
+            if now.get("supervisor_pid") != supervisor or now.get("server_pid") != pid:
+                return True
+            return not pid_is_python(supervisor) or not pid_alive(pid)
+
+        return gone
 
     def is_healthy(self, url: str | None = None) -> bool:
         """True when the selected backend answers at ``url``."""
@@ -447,6 +476,10 @@ class ServerManager:
         except OSError:
             return "(no backend log yet)"
         return "\n".join(strip_ansi(text).strip().splitlines()[-lines:])
+
+
+def _valid_pid(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _split_host_port(url: str) -> tuple[str, int]:

@@ -9,6 +9,7 @@ import hashlib
 import os
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from .. import hardware, workflow
@@ -104,8 +105,12 @@ class ComfyBackend(Backend):
         request_timeout: float = 0.0,
         logger=None,
         models_root: Path | str | None = None,
+        server_gone: Callable[[], bool] | None = None,
     ) -> None:
         self.url = url
+        # Tells whether the managed ComfyUI process has exited (ServerManager.death_watch);
+        # a lost connection then fails the job at once instead of after a grace period.
+        self.server_gone = server_gone
         self.models_root = Path(models_root) if models_root else None
         self.client = client or ComfyClient(url)
         self.request_timeout = request_timeout  # 0 = estimate per request
@@ -298,6 +303,7 @@ class ComfyBackend(Backend):
                 preview=preview,
                 cancel=cancel,
                 activity_extension=0.0 if self.request_timeout else ACTIVITY_EXTENSION,
+                server_gone=self.server_gone,
             )
         except ComfyExecutionError as err:
             if err.is_unsupported_gpu:

@@ -14,6 +14,10 @@ Each entry from now on says which PhotoCraft versions it works with.
 - The Engine section of the panel shows an About line: "OpenFill for PhotoCraft 0.2.x · works with PhotoCraft 0.12 to 0.20".
 - READMEs, badges and install docs name OpenFill's version and the PhotoCraft range separately, so 0.2.x can't be read as a PhotoCraft version.
 - Linux: when the installer downloads PhotoCraft for you, it checks the download against PhotoCraft's checksum list, never the signature file that releases carry from 0.20.2 on.
+- When ComfyUI crashes or closes during a job, say so right away instead of after 90 seconds.
+- The status line says "Stopped: Generate restarts it" after ComfyUI stops, instead of "Ready".
+- Error messages point to OpenFill's settings in PhotoCraft, not to GIMP's menus and profile folder.
+- Mac model menu: a menu closed while it is open is removed only after macOS has dismissed it.
 
 ## [0.2.4] - 2026-10-26
 

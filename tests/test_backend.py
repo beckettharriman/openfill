@@ -152,6 +152,23 @@ class ConnectionLostTests(unittest.TestCase):
     def test_server_still_up_keeps_detail(self):
         self.assertIn("/history", self.run_with(self.FakeClient(alive=True)))
 
+    def test_process_check_reaches_the_wait(self):
+        from unittest import mock
+
+        from openfill.backends.comfy import ComfyBackend
+        from openfill.comfy_api import ComfyApiError
+
+        client = self.FakeClient(alive=False)
+        client.wait_for = mock.Mock(side_effect=ComfyApiError("GET /history/p1 failed: refused"))
+
+        def gone():
+            return True
+
+        backend_ = ComfyBackend("http://x", client=client, request_timeout=30, server_gone=gone)
+        with self.assertRaises(BackendUnavailable):
+            backend_._run({}, 20, 1, 512 * 512, None)
+        self.assertIs(client.wait_for.call_args.kwargs["server_gone"], gone)
+
 
 class NoOpenCvFallbackTests(unittest.TestCase):
     """Without OpenCV on the server the fill is redone with the neutral pre-fill, and the result says so."""

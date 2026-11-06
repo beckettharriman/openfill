@@ -125,6 +125,9 @@ def _job_object_for_child(pid: int) -> Any:
     return None
 
 
+ERROR_ACCESS_DENIED = 5
+
+
 def pid_alive(pid: int) -> bool:
     """True while a process with ``pid`` exists (says nothing about which program it is)."""
     if pid <= 0:
@@ -134,7 +137,8 @@ def pid_alive(pid: int) -> bool:
         SYNCHRONIZE = 0x00100000
         handle = k32.OpenProcess(SYNCHRONIZE, False, pid)
         if not handle:
-            return False
+            # Access denied (an elevated process) means it exists, like PermissionError below.
+            return k32.GetLastError() == ERROR_ACCESS_DENIED
         try:
             return k32.WaitForSingleObject(handle, 0) == 0x102  # WAIT_TIMEOUT -> still running
         finally:

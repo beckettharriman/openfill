@@ -1064,6 +1064,7 @@ class Select(tk.Canvas):
         self.value = ""
         self.popdown: Popdown | None = None
         self._native_menu: tk.Menu | None = None
+        self._tracking = False  # the native Mac menu is open (tk_popup has not returned)
         self.bind("<Button-1>", lambda _e: self.toggle())
         self._draw()
 
@@ -1115,11 +1116,13 @@ class Select(tk.Canvas):
             menu.add_command(label=MANAGE, command=lambda: picked.append(MANAGE))
         previous = self.focus_get()
         self._draw()
+        self._tracking = True
         try:
             # Aqua returns after the native menu has been dismissed. Defer actions
             # until then, so they cannot destroy a menu during native tracking.
             menu.tk_popup(self.winfo_rootx(), self.winfo_rooty() + 32)
         finally:
+            self._tracking = False
             self.close()
             try:
                 self.winfo_toplevel().focus_force()
@@ -1131,7 +1134,9 @@ class Select(tk.Canvas):
             self.pick(picked[-1])
 
     def close(self) -> None:
-        if self._native_menu is not None:
+        # Tk keeps running timers while Aqua tracks the menu: a close from one of them
+        # (the panel folding, another view) waits for tk_popup to return, which closes it.
+        if self._native_menu is not None and not self._tracking:
             menu, self._native_menu = self._native_menu, None
             try:
                 menu.unpost()

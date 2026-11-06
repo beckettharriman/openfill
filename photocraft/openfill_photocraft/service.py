@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from openfill.app import App, NothingSelected
-from openfill.backend import GenerationCancelled, describe_error
+from openfill.backend import BackendUnavailable, GenerationCancelled, describe_error
+from openfill.backends.comfy import CONNECTION_LOST
 from openfill.progress import parse_preview_frame
 from openfill.supervisor import process_name
 
@@ -26,6 +27,44 @@ from .bridge import PCImage, PCLayer, PhotoCraftBridge
 from .control import ControlClient, ControlError
 
 NO_SELECTION = "Select an area first: Marquee, Lasso or Object Selection. Select > All works on the whole image."
+
+# The engine's messages name GIMP's menus and profile folder; in PhotoCraft they point to
+# OpenFill's own settings (the gear button). Longest first.
+SETTINGS = "OpenFill's settings: gear button"
+GIMP_TEXT = (
+    ("comfyui.log in the openfill folder of your GIMP profile", f"comfyui.log ({SETTINGS} > Engine > Logs)"),
+    (
+        "'Start backend automatically' in Filters > OpenFill > Generative Fill Settings, then press Check backend",
+        f'"Start the AI engine with PhotoCraft" in {SETTINGS} > Engine, then press Check',
+    ),
+    (
+        '"Generation time limit" in Filters > OpenFill > Generative Fill Settings > Connection and '
+        "troubleshooting (0 means it is estimated per request)",
+        "request_timeout in config.json (seconds, 0 means it is estimated per request; "
+        f"{SETTINGS} > Engine > Logs opens its folder)",
+    ),
+    ("Filters > OpenFill > Generative Fill Settings", SETTINGS),
+    ("Generative Fill Settings > Extra ComfyUI options", f"{SETTINGS} > Engine > Extra ComfyUI options"),
+    ("Run the command again", "Run it again"),
+)
+
+
+# Service.engine when the ComfyUI OpenFill started has exited (crashed or was closed), and
+# while one it started again is still loading.
+ENGINE_STOPPED = "stopped"
+ENGINE_RESTARTING = "restarting"
+
+
+def photocraft_text(text: str) -> str:
+    """An engine message with GIMP's menus and folders replaced by PhotoCraft's."""
+    for gimp, photocraft in GIMP_TEXT:
+        text = text.replace(gimp, photocraft)
+    return text
+
+
+def describe(error: BaseException) -> str:
+    """``describe_error`` in PhotoCraft's words."""
+    return photocraft_text(describe_error(error))
 
 
 @dataclass
@@ -135,7 +174,8 @@ class Service:
         self.app.server.watch_name = process_name(os.getpid()) or "python"
         self._thread: threading.Thread | None = None
         self.watcher = None  # menu.Watcher, set by the launcher: keeps the document's facts current
-        self.engine = ""  # "" not started by us, "starting", "ready", or why it failed
+        self.engine = ""  # "" not started by us, "starting", "ready", ENGINE_STOPPED, or why it failed
+        self._engine_watch = None  # True once the ComfyUI behind "ready" has exited (ServerManager.death_watch)
         self._warm: threading.Thread | None = None
         self.image: PCImage | None = None
         self.layers: list[PCLayer] = []
@@ -204,13 +244,64 @@ class Service:
             self.engine = "starting"
             try:
                 health = app.check_backend()
-                self.engine = "ready" if health.ok else (health.detail or "not running")
+                if health.ok:
+                    self._engine_ready()
+                else:
+                    self.engine = health.detail or "not running"
             except Exception as err:  # noqa: BLE001 - shown on the bar; a job tries again
-                self.engine = describe_error(err)
+                self.engine = describe(err)
             app.log.info("warm-up: %s", self.engine)
 
         self._warm = threading.Thread(target=run, name="openfill-warm-up", daemon=True)
         self._warm.start()
+
+    def _engine_ready(self) -> None:
+        try:
+            watch = self.app.server.death_watch()
+        except Exception:  # noqa: BLE001 - without it a crash shows when the next job runs
+            watch = None
+        self._engine_watch = watch  # before "ready": check_engine must not read the old one
+        self.engine = "ready"
+
+    def engine_stopped(self) -> None:
+        """ComfyUI stopped (a job lost it, or Stop engine): the next job starts it again
+        when OpenFill starts it automatically, else it is not running."""
+        self._engine_watch = None
+        self.engine = ENGINE_STOPPED if self.app.settings.autostart else "not running"
+
+    def stop_engine(self) -> str:
+        """Settings > Engine > Stop engine. Only a ComfyUI OpenFill runs can be stopped; one
+        the user started keeps running, and so does the status line's "Ready"."""
+        text = self.app.stop_backend()
+        if self.app.server.read_state().get("stop"):
+            self.engine_stopped()
+        return text
+
+    def check_engine(self) -> None:
+        """Called every few seconds (Refresher thread, no Tk): the ComfyUI behind "Ready"
+        exited (crashed or was closed), or one is back after the status said it was not
+        (started by Check, by the user, or by a job that then failed). "Ready" only once it
+        answers; a managed one that is still loading shows as starting."""
+        if self.busy():
+            return
+        server = self.app.server
+        try:
+            if self.engine == "ready":
+                if self._engine_watch is not None and self._engine_watch():
+                    self._engine_watch = None
+                    self.engine = ENGINE_STOPPED
+                    self.app.log.info("ComfyUI is no longer running")
+            elif self.engine not in ("", "starting") and not server.read_state().get("stop"):
+                if server.is_healthy():
+                    self._engine_ready()
+                    return
+                watch = server.death_watch()
+                if watch is not None and not watch():
+                    self.engine = ENGINE_RESTARTING  # OpenFill's ComfyUI runs but does not answer yet
+                elif self.engine == ENGINE_RESTARTING:
+                    self.engine = ENGINE_STOPPED
+        except Exception:  # noqa: BLE001 - the status line stays as it is
+            pass
 
     # status -------------------------------------------------------------------------
 
@@ -276,6 +367,9 @@ class Service:
 
     def _job(self, kind: str, p: dict[str, Any]) -> None:
         image = None
+        engine_before = self.engine
+        if self.engine == ENGINE_STOPPED:
+            self.engine = "starting"  # the job starts ComfyUI again
         if self._warm is not None and self._warm.is_alive():
             with self.state.lock:
                 self.state.text = "Starting the AI engine (the first time takes about a minute)..."
@@ -341,6 +435,7 @@ class Service:
                 self.bridge.finish(image)  # the results reach the document here, in one step
                 self._one_step(image, base)
             self.layers = list(layers or [])
+            self._engine_ready()  # it answered this job
             with self.state.lock:
                 self.state.state = "done"
                 self.state.fraction = 1.0
@@ -350,6 +445,13 @@ class Service:
         except BaseException as err:  # noqa: BLE001 - reported on the page
             cancelled = isinstance(err, GenerationCancelled) or self.state.cancel_requested
             self.app.log.warning("job %s failed: %s\n%s", kind, err, traceback.format_exc())
+            if isinstance(err, BackendUnavailable) and str(err) == CONNECTION_LOST:
+                self.engine_stopped()  # ComfyUI went away during the job: the next job restarts it
+            elif isinstance(err, BackendUnavailable):
+                self._engine_watch = None
+                self.engine = describe(err)  # a setup problem Generate cannot fix: keep the reason
+            elif self.engine == "starting":
+                self.engine = engine_before  # check_engine sees a ComfyUI that did come up
             with self.state.lock:
                 self.state.state = "cancelled" if cancelled else "error"
                 if cancelled:
@@ -357,7 +459,7 @@ class Service:
                 elif isinstance(err, NothingSelected):  # the core's message names GIMP's tools
                     self.state.message = NO_SELECTION
                 else:
-                    self.state.message = describe_error(err)
+                    self.state.message = describe(err)
         finally:
             if image is not None:
                 self.bridge.discard(image)  # whatever did not reach the document is dropped

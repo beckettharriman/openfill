@@ -181,6 +181,27 @@ class ComfyClientTests(unittest.TestCase):
         with self.assertRaises(ComfyApiError):
             self.client.wait_for("pid-1", 10, time.monotonic() + 20, poll_interval=0.05)
 
+    def test_wait_stops_at_once_when_the_server_process_has_exited(self):
+        # ComfyUI crashed mid-job: no 90 s wait once its process is known to be gone.
+        STATE.history_drop = 10**6
+        started = time.monotonic()
+        with self.assertRaises(ComfyApiError):
+            self.client.wait_for("pid-1", 10, time.monotonic() + 60, poll_interval=0.05, server_gone=lambda: True)
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_wait_keeps_the_grace_while_the_server_process_runs(self):
+        STATE.history_drop = 3
+        entry = self.client.wait_for("pid-1", 10, time.monotonic() + 20, poll_interval=0.05, server_gone=lambda: False)
+        self.assertEqual(entry["status"]["status_str"], "success")
+
+    def test_a_failing_process_check_keeps_the_grace(self):
+        def broken():
+            raise OSError("state file unreadable")
+
+        STATE.history_drop = 3
+        entry = self.client.wait_for("pid-1", 10, time.monotonic() + 20, poll_interval=0.05, server_gone=broken)
+        self.assertEqual(entry["status"]["status_str"], "success")
+
     def test_wait_reports_execution_error(self):
         STATE.history_error = True
         with self.assertRaises(ComfyExecutionError) as ctx:

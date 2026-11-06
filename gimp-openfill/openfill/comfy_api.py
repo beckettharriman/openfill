@@ -79,6 +79,16 @@ class ComfyExecutionError(ComfyApiError):
         return any(s in text for s in UNSUPPORTED_GPU_SIGNS)
 
 
+def _gone(server_gone: Callable[[], bool] | None) -> bool:
+    """``server_gone()``, False when it is not given or cannot tell."""
+    if server_gone is None:
+        return False
+    try:
+        return bool(server_gone())
+    except Exception:  # noqa: BLE001 - a failed check must not fail the job by itself
+        return False
+
+
 class ComfyClient:
     """Minimal ComfyUI HTTP and websocket client (standard library only)."""
 
@@ -224,16 +234,19 @@ class ComfyClient:
     # lets a loopback connection time out once although it is still running the job.
     HISTORY_GRACE_S = 90.0
 
-    def _history_patiently(self, prompt_id: str, unreachable: dict[str, float]) -> dict | None:
+    def _history_patiently(
+        self, prompt_id: str, unreachable: dict[str, float], server_gone: Callable[[], bool] | None = None
+    ) -> dict | None:
         """:meth:`history`, but a server that is not reached (no HTTP answer at all) counts as
-        "no entry yet" until it has been unreachable for ``HISTORY_GRACE_S``."""
+        "no entry yet" until it has been unreachable for ``HISTORY_GRACE_S``, or until
+        ``server_gone()`` says its process has exited (then at once)."""
         try:
             entry = self.history(prompt_id)
         except ComfyApiError as err:
             if err.status:
                 raise
             since = unreachable.setdefault("since", time.monotonic())
-            if time.monotonic() - since > self.HISTORY_GRACE_S:
+            if time.monotonic() - since > self.HISTORY_GRACE_S or _gone(server_gone):
                 raise
             return None
         unreachable.clear()
@@ -291,6 +304,7 @@ class ComfyClient:
         preview: Callable[[bytes], None] | None = None,
         cancel: Callable[[], bool] | None = None,
         activity_extension: float = 0.0,
+        server_gone: Callable[[], bool] | None = None,
     ) -> dict:
         """Block until ``prompt_id`` finishes; return ``history[prompt_id]``.
 
@@ -304,7 +318,9 @@ class ComfyClient:
         returns True the job is interrupted, the queue cleared and
         :class:`ComfyApiError` ("cancelled") raised. Raises
         :class:`ComfyApiError` on timeout and :class:`ComfyExecutionError`
-        on failure.
+        on failure. ``server_gone()`` (when given) tells whether the ComfyUI
+        process has exited; an unreachable server then fails the wait at once
+        instead of after ``HISTORY_GRACE_S``.
         """
         ws: WebSocket | None = None
         try:
@@ -379,7 +395,7 @@ class ComfyClient:
                     last_poll = now
                     if ws is None:
                         time.sleep(poll_interval)
-                    entry = self._history_patiently(prompt_id, unreachable)
+                    entry = self._history_patiently(prompt_id, unreachable, server_gone)
                     if entry:
                         status = entry.get("status", {})
                         if status.get("status_str") == "error":
@@ -390,7 +406,7 @@ class ComfyClient:
                 ws.close()
         entry = None
         for _ in range(30):
-            entry = self._history_patiently(prompt_id, unreachable)
+            entry = self._history_patiently(prompt_id, unreachable, server_gone)
             if entry:
                 break
             time.sleep(0.5)

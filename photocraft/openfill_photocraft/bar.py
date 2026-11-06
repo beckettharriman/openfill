@@ -29,7 +29,7 @@ from PIL import Image, ImageDraw
 from . import ui
 from .menu import Watcher
 from .modelinfo import choose_card_line, download_card_line, hardware_line, needed_by
-from .service import Service
+from .service import ENGINE_RESTARTING, ENGINE_STOPPED, Service, photocraft_text
 from .ui import ACCENT, BAD, BG, CW, DIM, LABEL_W, LINE, OK, PAD, PANEL, TEXT, WARN, W, photo
 
 WIDTH = W
@@ -51,7 +51,9 @@ PLACEHOLDERS = {
 }
 NO_SELECTION = "Select an area first: Marquee, Lasso or Object Selection."
 NO_MODELS = "No models installed"
-STATUS_COLOR = {"Ready": OK, "Not set up": WARN, "Checking...": DIM, "Starting the AI engine...": WARN}
+# The status line once the AI engine has stopped (crashed or was closed) after it was ready.
+STOPPED = "Stopped: Generate restarts it"
+STATUS_COLOR = {"Ready": OK, "Not set up": WARN, "Checking...": DIM, "Starting the AI engine...": WARN, STOPPED: WARN}
 
 
 def icon_image(size: int = 64) -> Image.Image:
@@ -232,6 +234,7 @@ class Refresher:
                     facts["setup"] = {"error": str(err)}
             facts["gpu_vendor"] = self._gpu_vendor()
             return facts
+        self.service.check_engine()  # the status line must not say Ready after ComfyUI stopped
         rows = app.model_rows(None)
         status = app.task_status()
         current = status.get("current") or {}
@@ -1172,7 +1175,7 @@ class Bar:
                 body.update(prompt=prompt, negative="", width=w, height=h, target=self.target.get())
                 self.service.start("txt2img", body)
         except Exception as err:  # noqa: BLE001
-            self._say(str(err), BAD)
+            self._say(photocraft_text(str(err)), BAD)
             return
         self._say("")
         self._thumbs_for = ()
@@ -1205,7 +1208,7 @@ class Bar:
         try:
             fn(*args)
         except Exception as err:  # noqa: BLE001
-            self.call_soon(self._say, str(err), BAD)
+            self.call_soon(self._say, photocraft_text(str(err)), BAD)
 
     def open_page(self) -> None:
         self.select_view("models")
@@ -1220,7 +1223,7 @@ class Bar:
         try:
             self.service.app.use_comfy_dir(folder)
         except Exception as err:  # noqa: BLE001 - says what the folder lacks
-            self._say(str(err), BAD)
+            self._say(photocraft_text(str(err)), BAD)
             return
         self.service.rescan_models()
         self.service.warm_up()
@@ -1235,7 +1238,7 @@ class Bar:
                 self.service.setup_comfy()
                 self.call_soon(self._say, f"Downloading ComfyUI. You can keep working in {self.host}.", OK)
             except Exception as err:  # noqa: BLE001 - shown on the panel
-                self.call_soon(self._say, str(err), BAD)
+                self.call_soon(self._say, photocraft_text(str(err)), BAD)
             self.refresher.wake.set()
 
         threading.Thread(target=work, name="openfill-setup", daemon=True).start()
@@ -1350,8 +1353,10 @@ class Bar:
             return "Checking..."
         if not facts.get("comfy_ok"):
             return "Not set up"
-        if engine == "starting":
+        if engine in ("starting", ENGINE_RESTARTING):
             return "Starting the AI engine..."
+        if engine == ENGINE_STOPPED:
+            return STOPPED
         if engine in ("", "ready"):
             return "Ready"
         return "AI engine: " + engine[:60]

@@ -155,7 +155,13 @@ class App:
         if self.settings.backend == "a1111":
             return A1111Backend(url, timeout, self.log)
         self._check_device(url)
-        return ComfyBackend(url, request_timeout=timeout, logger=self.log, models_root=self.models_root)
+        return ComfyBackend(
+            url,
+            request_timeout=timeout,
+            logger=self.log,
+            models_root=self.models_root,
+            server_gone=self.server.death_watch(),
+        )
 
     def _check_device(self, url: str) -> None:
         """Log the device ComfyUI computes on; when it is the processor, say so loudly

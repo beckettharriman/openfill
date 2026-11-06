@@ -6,6 +6,7 @@
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -16,6 +17,7 @@ from unittest import mock
 
 from openfill import server
 from openfill.backend import BackendUnavailable, has_next_step
+from openfill.comfy_api import ComfyApiError, ComfyClient
 from openfill.config import Paths, Settings
 from openfill.server import ServerManager, port_answers, strip_ansi
 from openfill.supervisor import build_parser
@@ -65,6 +67,96 @@ class EnsureRunningTests(ManagerCase):
         self.assertIn("Start backend automatically", text)
         self.assertIn("Filters > OpenFill > Generative Fill Settings", text)
         self.assertIn("Check backend", text)
+
+
+def dead_pid() -> int:
+    """The pid of a process that has exited."""
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    return child.pid
+
+
+class DeathWatchTests(ManagerCase):
+    """death_watch: True once OpenFill's own ComfyUI is gone, never for one the user started."""
+
+    def write_state(self, **state):
+        self.paths.state.write_text(json.dumps(state), encoding="utf-8")
+
+    def live_watch(self, server_pid=4242, supervisor_pid=4241):
+        """A watch on a recorded ComfyUI and supervisor that are alive at capture."""
+        self.write_state(server_pid=server_pid, supervisor_pid=supervisor_pid)
+        with (
+            mock.patch.object(server, "pid_alive", return_value=True),
+            mock.patch.object(server, "pid_is_python", return_value=True),
+        ):
+            watch = self.manager.death_watch()
+        self.assertIsNotNone(watch)
+        return watch
+
+    def test_none_without_a_managed_comfyui(self):
+        self.assertIsNone(self.manager.death_watch())  # no state: a ComfyUI the user started
+        self.write_state(url="http://127.0.0.1:8199")
+        self.assertIsNone(self.manager.death_watch())
+
+    def test_running_processes_are_not_gone(self):
+        self.write_state(server_pid=os.getpid(), supervisor_pid=os.getpid())
+        watch = self.manager.death_watch()
+        self.assertIsNotNone(watch)
+        self.assertFalse(watch())
+
+    def test_exited_comfyui_is_gone(self):
+        watch = self.live_watch()
+        with (
+            mock.patch.object(server, "pid_alive", return_value=False) as alive,
+            mock.patch.object(server, "pid_is_python", return_value=True),
+        ):
+            self.assertTrue(watch())
+        alive.assert_called_once_with(4242)
+
+    def test_dead_supervisor_or_a_restart_is_gone(self):
+        watch = self.live_watch()
+        with (
+            mock.patch.object(server, "pid_alive", return_value=True),
+            mock.patch.object(server, "pid_is_python", return_value=False),
+        ):
+            self.assertTrue(watch())  # the supervisor died
+        with (
+            mock.patch.object(server, "pid_alive", return_value=True),
+            mock.patch.object(server, "pid_is_python", return_value=True),
+        ):
+            self.write_state(server_pid=4243, supervisor_pid=4241)  # a node install restarted ComfyUI
+            self.assertTrue(watch())
+
+    def test_unreadable_state_is_not_gone(self):
+        watch = self.live_watch()
+        self.paths.state.write_text("{", encoding="utf-8")  # being rewritten
+        with (
+            mock.patch.object(server, "pid_alive", return_value=True),
+            mock.patch.object(server, "pid_is_python", return_value=True),
+        ):
+            self.assertFalse(watch())
+
+    # Adversarial review proofs (fix/comfy-died-feedback)
+
+    def test_crash_seen_although_the_pid_was_reused(self):
+        watch = self.live_watch()
+        self.paths.state.unlink()  # the supervisor saw ComfyUI exit and removed its state
+        with mock.patch.object(server, "pid_alive", return_value=True):  # pid 4242 now another program
+            self.assertTrue(watch(), "state gone, but the reused pid keeps the watch quiet")
+
+    def test_user_started_comfyui_behind_a_stale_state_keeps_its_grace(self):
+        # server-state.json left by a supervisor that was killed (logout, Task Manager, OOM killer)
+        self.write_state(supervisor_pid=dead_pid(), server_pid=dead_pid(), url="http://127.0.0.1:8199")
+        self.settings.autostart = False
+        with mock.patch.object(ServerManager, "is_healthy", return_value=True):
+            self.manager.ensure_running()  # the user's ComfyUI answers; the stale state stays
+        self.assertIsNone(self.manager.death_watch())
+
+    def test_one_slow_poll_behind_a_stale_state_does_not_fail_the_job(self):
+        self.write_state(supervisor_pid=dead_pid(), server_pid=dead_pid(), url="http://127.0.0.1:8199")
+        client = ComfyClient("http://127.0.0.1:8199")
+        with mock.patch.object(ComfyClient, "history", side_effect=ComfyApiError("timed out")):
+            self.assertIsNone(client._history_patiently("p", {}, self.manager.death_watch()))
 
 
 class LongPathTests(ManagerCase):
