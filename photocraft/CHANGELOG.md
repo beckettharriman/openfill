@@ -30,6 +30,12 @@ Engine:
 - The setup card's help link goes to the Intel steps on Intel graphics.
 - Mac model menu: a menu closed while it is open is removed only after macOS has dismissed it.
 
+Installing:
+- Windows: the installer finds python.org's 3.14 per-user, all-users and install manager Pythons and adds Pillow to them. It works from a folder with an apostrophe or ! in its name.
+- With no usable Python, the installers say what to install: python.org on Windows and Mac, the dnf, apt or pacman line on Linux.
+- Mac: the launchers never run macOS's own Python, which can pop up a developer tools dialog, and say so when OPENFILL_PYTHON points to it.
+- Uninstall docs point to the Uninstall OpenFill for PhotoCraft menu entries.
+
 ## [0.2.4] - 2026-10-26
 
 - Fix Mac prompt typing by keeping the expanded panel keyboard-focusable.

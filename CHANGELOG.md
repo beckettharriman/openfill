@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Add OpenFill for Patchy (prototype): the PhotoCraft panel as a Patchy companion app, started from Plugins > Companions, with each result one step in Patchy's history.
+- Add OpenFill for Patchy (prototype), by Seth Robinson (#9): the PhotoCraft panel as a Patchy companion app, started from Plugins > Companions, with each result one step in Patchy's history.
 - Add an optional cloud service: run Fill, Remove, Expand and Create on OpenRouter or any OpenAI-compatible image API (OpenAI, LiteLLM) with your own key, for computers without a suitable graphics card. Off unless you pick it; every screen then says your image is sent to it; never used as a fallback. The result is put back through your selection, so pixels outside it never change. Untested against the real services so far. See docs/cloud.md.
 - Add Remote GPU: edit on one computer while ComfyUI runs on another one of yours, over
   Tailscale or SSH. On the GPU computer, the new OpenFill GPU server starts ComfyUI for that
@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use the models of another ComfyUI, such as Krita AI Diffusion's, read only: nothing is downloaded, deleted or installed there (#6).
 - FLUX.1 Fill models from the list also reuse the text encoders and VAE already in ComfyUI.
 - When the ComfyUI OpenFill started crashes or closes during a job, report it right away instead of after 90 seconds.
+- OpenFill for PhotoCraft: the installers find more Pythons on Windows and say plainly what to install when none is found.
 - Intel Arc graphics, untested: I don't have an Intel card. On Windows,
   Download ComfyUI gets ComfyUI's own version for Intel
   (`ComfyUI_windows_portable_intel.7z`, PyTorch 2.14 for Intel XPU) for an
