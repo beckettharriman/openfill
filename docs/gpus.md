@@ -20,7 +20,7 @@ Checked on November 6, 2026.
 | AMD | RX 7000, RX 9000 | Linux | Your own ComfyUI with PyTorch for ROCm | untested |
 | AMD | RX 6800, 6900 (gfx1030) | Linux | Your own ComfyUI with PyTorch for ROCm | untested |
 | AMD | RX 6700, 6600 (gfx1031, gfx1032) | Linux | PyTorch for ROCm from pytorch.org, OpenFill sets `HSA_OVERRIDE_GFX_VERSION=10.3.0` | untested |
-| AMD | RX 6700, 6600 (gfx1031, gfx1032) | Linux | AMD's own PyTorch with the card's kernels (`device-gfx1031`, `device-gfx1032`), no override | untested |
+| AMD | RX 6700, 6600 (gfx1031, gfx1032) | Linux | AMD's own PyTorch with the card's kernels (`device-gfx1031`, `device-gfx1032`), OpenFill sets no override | untested |
 | AMD | RX 6000 | Windows | Your own ComfyUI with AMD's PyTorch for ROCm 10 (see [AMD on Windows](install.md#amd-on-windows)) | untested |
 | AMD | Radeon 780M, 760M (gfx1103) | Linux | PyTorch for ROCm, OpenFill sets `HSA_OVERRIDE_GFX_VERSION=11.0.0` | untested |
 | AMD | any | Windows | DirectML (`torch-directml`) | not supported |
@@ -39,7 +39,7 @@ The steps are in the install guide: [AMD on Windows](install.md#amd-on-windows) 
 
 **RX 6000 on Linux.** ComfyUI's README installs PyTorch from pytorch.org (`--index-url https://download.pytorch.org/whl/rocm7.2`). Those builds carry code for the RX 6800 and 6900 (gfx1030) but not the 6700 or 6600 (gfx1031, gfx1032). For those, ComfyUI's README says to start it with `HSA_OVERRIDE_GFX_VERSION=10.3.0`, and OpenFill does that by itself when it starts ComfyUI, unless you set it already. It writes that in its log.
 
-AMD's own PyTorch packages (the `whl-next` index in ComfyUI's Windows instructions, which has Linux packages too) do have kernels for the 6700 and 6600 (`torch[device-gfx1031]`, `torch[device-gfx1032]`). If your ComfyUI's venv has those, OpenFill leaves the override off, since it would point PyTorch at gfx1030 kernels that may not be installed.
+AMD's own PyTorch packages (the `whl-next` index in ComfyUI's Windows instructions, which has Linux packages too) do have kernels for the 6700 and 6600 (`torch[device-gfx1031]`, `torch[device-gfx1032]`). If your ComfyUI's venv has AMD's PyTorch (OpenFill checks that an `amd_torch_device_gfx*` package matches the installed torch version, so one left over from an earlier try doesn't count), OpenFill leaves the override off, since it would point PyTorch at gfx1030 kernels that may not be installed. That holds with a Ryzen's Radeon graphics next to the card too. With PyTorch from pytorch.org, OpenFill decides by the card with the most memory, not the Ryzen's built-in graphics.
 
 **RX 6000 on Windows.** ComfyUI's AMD download only runs on RX 7000 and newer. AMD's PyTorch for ROCm 10 lists RDNA 2 (RX 6000) as supported on Windows, and ComfyUI's [instructions for AMD on Windows](https://github.com/Comfy-Org/ComfyUI#amd-gpus-windows-rocm-100) use it. You can swap `device-all` for `device-gfx1031` (RX 6700, 6750) or `device-gfx1032` (RX 6600) to download less. Note that AMD's own compatibility table still doesn't list the consumer RX 6000 cards, so this is the newest and least proven of the AMD paths.
 
@@ -55,7 +55,7 @@ Known problems people have reported on RX 6000 cards with ComfyUI (not with Open
 
 ComfyUI makes a Windows build for Intel graphics, `ComfyUI_windows_portable_intel.7z` (Python 3.13, PyTorch 2.14 for Intel XPU). With an Intel Arc card or a Core Ultra chip with Arc graphics, **Download ComfyUI** gets it instead of the NVIDIA one: about 1.4 GB (about 5 GB unpacked), from the same ComfyUI release as the others and checked against its SHA-256. Keep the Intel graphics driver up to date; PyTorch's current Intel builds ask for driver 32.0.101.9033 or newer.
 
-PyTorch lists these as supported for its Intel builds: Arc A series, Arc B series, and Core Ultra chips with Arc graphics (Meteor Lake H, Lunar Lake, Arrow Lake H, and Panther Lake, Core Ultra series 3). Older Intel graphics (UHD, Iris Xe) are not on the list, so there Download ComfyUI offers only the slow processor route. If OpenFill can't tell which Intel chip it is (some just say "Intel(R) Graphics"), it downloads the Intel build and says so; on a chip PyTorch can't use, ComfyUI falls back to the processor.
+PyTorch lists these as supported for its Intel builds: Arc A series, Arc B series, and Core Ultra chips with Arc graphics (Meteor Lake H, Lunar Lake, Arrow Lake H, and Panther Lake, Core Ultra series 3). OpenFill only picks the Intel build when Windows names the chip "Arc", as Arc cards and the Core Ultra chips above do ("Intel(R) Arc(TM) Graphics", "Arc(TM) 140V GPU", "Arc(TM) B390 GPU"). Older Intel graphics (UHD, Iris Xe, HD) and chips that just say "Intel(R) Graphics" keep the NVIDIA download on the processor, which is slow but known to work. If you have an Arc card next to a Ryzen's Radeon graphics, OpenFill goes by the Arc, since it has memory of its own.
 
 On Linux, install ComfyUI with PyTorch for Intel, as [ComfyUI's instructions](https://github.com/Comfy-Org/ComfyUI#intel-gpus-windows-and-linux) say:
 
@@ -79,7 +79,7 @@ There is no Vulkan path for ComfyUI. ComfyUI is built on PyTorch, and PyTorch ha
 
 ## Models on other cards
 
-- **LaMa and MAT (Remove)** load as plain PyTorch through comfyui-inpaint-nodes, with nothing tied to NVIDIA. They need about 1 GB of graphics memory (my estimate; the LaMa file is 206 MB). I haven't found a report of them failing on AMD or Intel.
+- **LaMa and MAT (Remove)** load as plain PyTorch through comfyui-inpaint-nodes, with nothing tied to NVIDIA. OpenFill's own LaMa node splits a big photo into pieces that fit the free graphics memory on NVIDIA, AMD (PyTorch for ROCm calls the card cuda) and Intel (XPU) alike; on a Mac and on the processor it uses a fixed limit. They need about 1 GB of graphics memory (my estimate; the LaMa file is 206 MB). I haven't found a report of them failing on AMD or Intel.
 - **SD 1.5, SDXL and the Fooocus inpaint patch** are plain PyTorch too.
 - **FLUX.1 Fill GGUF** goes through ComfyUI-GGUF. There are open reports of noise-only images on an RX 7900 with ROCm ([ComfyUI-GGUF issue 300](https://github.com/city96/ComfyUI-GGUF/issues/300)) and of running out of memory on an Arc B580 ([issue 282](https://github.com/city96/ComfyUI-GGUF/issues/282)). On an AMD card the model manager marks the GGUF models and leaves them out of Recommended.
   - Q4_0 (6.8 GB file) plus the T5 GGUF (about 3 GB) needs ComfyUI to move part of it to the computer's memory on an 8 GB card (RX 6600, Arc A750): on NVIDIA that works but is slow, about 3 minutes a fill on my 8 GB laptop card.

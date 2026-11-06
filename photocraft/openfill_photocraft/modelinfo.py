@@ -90,7 +90,7 @@ def download_card_line(pre: dict[str, Any]) -> str:
 
 def choose_card_line(amd: bool = False, intel: bool = False) -> str:
     """The setup card's text where ComfyUI cannot be downloaded (Linux); ``amd``: the card is AMD,
-    ``intel``: the graphics are Intel."""
+    ``intel``: the graphics are Intel Arc (not UHD or Iris Xe, which PyTorch for Intel does not run)."""
     if amd:
         return (
             "OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it with "
@@ -99,7 +99,7 @@ def choose_card_line(amd: bool = False, intel: bool = False) -> str:
     if intel:
         return (
             "OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it with "
-            "PyTorch for Intel (XPU), which Intel graphics need (How to install). Not tested on Intel yet."
+            "PyTorch for Intel (XPU), which Intel Arc graphics need (How to install). Not tested on Intel yet."
         )
     return "OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it."
 

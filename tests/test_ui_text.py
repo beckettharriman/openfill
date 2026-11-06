@@ -371,6 +371,8 @@ class CpuBackendMessageTests(unittest.TestCase):
         self.assertIn("Extra ComfyUI options", ut.cpu_backend_message("--cpu"))
         self.assertIn("PyTorch", ut.cpu_backend_message(""))
         self.assertIn("ROCm", ut.cpu_backend_message(""))  # an AMD card: what it needs
+        self.assertIn("Intel Arc graphics need PyTorch for Intel (XPU)", ut.cpu_backend_message(""))
+        self.assertNotIn("ROCm", ut.cpu_backend_message("--cpu"))  # the flag is the reason: no card advice
         for flags in ("", "--cpu"):
             self.assertNotIn("\\u2014", ut.cpu_backend_message(flags))
 

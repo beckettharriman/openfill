@@ -13,7 +13,7 @@ It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharrima
 - **PhotoCraft 0.12 to 0.16** (the Windows `.msi` or the Linux build from its [releases page](https://github.com/storytold/photocraft/releases)). The newest, 0.16.0, is fine.
 - **Windows 10 or 11, Linux, or macOS on Apple Silicon.**
 - **An NVIDIA graphics card, or an AMD Radeon RX 7000 or newer**, 8 GB or more for the SDXL and FLUX models. LaMa (Remove) and the SD 1.5 models are fine on less. AMD support is new and I haven't been able to test it on an AMD card yet ([AMD graphics cards](../docs/install.md#amd-graphics-cards)). Intel Arc and older Radeons are untested; [Graphics cards](../docs/gpus.md) says which cards work how. Without a card ComfyUI can use, it runs on the processor, which is very slow.
-- **ComfyUI.** On Windows the OpenFill panel downloads it for you the first time (a 1.9 GB download, 6.7 GB unpacked; the version for AMD cards is 1.6 GB). If you use OpenFill for GIMP, the same ComfyUI is found by itself.
+- **ComfyUI.** On Windows the OpenFill panel downloads it for you the first time (a 1.9 GB download, 6.7 GB unpacked; the version for AMD cards is 1.6 GB, the one for Intel Arc 1.4 GB). If you use OpenFill for GIMP, the same ComfyUI is found by itself.
 - **Python 3.10 or newer with Pillow.** You can use ComfyUI's existing Python on Windows, macOS or Linux without installing another one. Tk is optional: with it, you get a separate OpenFill panel; without it, you get a tab in your default browser.
 - **Disk space** for the models: from 0.2 GB (LaMa) to about 13 GB (FLUX.1 Fill Q6).
 

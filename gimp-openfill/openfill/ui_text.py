@@ -561,14 +561,19 @@ def cpu_backend_message(flags: str) -> str:
         f"because of '{flags}' in Generative Fill Settings > Extra ComfyUI options; remove it if you have a "
         "supported graphics card"
         if flags
-        else "because its PyTorch cannot use your graphics card (an AMD card needs PyTorch for ROCm: on Windows "
-        "Download ComfyUI gets ComfyUI's version for AMD cards for a Radeon RX 7000 or newer, and its version for "
-        "Intel for Intel Arc graphics; on Linux Intel Arc needs PyTorch for Intel (XPU); an older Radeon needs "
-        "ComfyUI's own instructions for that card)"
+        else "because its PyTorch cannot use your graphics card"
+    )
+    help_text = (
+        ""
+        if flags
+        else " An AMD card needs PyTorch for ROCm. On Windows, Download ComfyUI gets ComfyUI's version for AMD "
+        "cards for a Radeon RX 7000 or newer; an older Radeon needs ComfyUI's own instructions for AMD cards. "
+        "Intel Arc graphics need PyTorch for Intel (XPU). On Windows, Download ComfyUI gets ComfyUI's version "
+        "for Intel for them."
     )
     return (
         f"ComfyUI is running on the processor, not the graphics card, {why}. Every generation will be many "
-        "times slower, and the larger models may not finish. The device ComfyUI uses is in openfill.log."
+        "times slower, and the larger models may not finish. The device ComfyUI uses is in openfill.log." + help_text
     )
 
 

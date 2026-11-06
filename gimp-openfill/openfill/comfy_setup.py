@@ -441,10 +441,13 @@ def gpu_kind(names: list[str] | None, nvidia_found: bool, vendor: str = "") -> s
     ``names`` decide when it found nothing."""
     if nvidia_found or vendor == "nvidia" or any("nvidia" in n.lower() for n in names or []):
         return "nvidia"
-    if vendor == "amd" or any(("amd" in n.lower() or "radeon" in n.lower()) for n in names or []):
+    # The card detection picked comes first: an Arc card next to a Ryzen's Radeon graphics is Intel.
+    if vendor == "amd":
         return "amd"
     if vendor == "intel":
         return "other"
+    if any(("amd" in n.lower() or "radeon" in n.lower()) for n in names or []):
+        return "amd"
     if names is None:
         return "none" if vendor == "none" else "unknown"
     for n in names:
@@ -479,14 +482,16 @@ def video_controller_names(runner: Callable[..., Any] = subprocess.run) -> list[
     return [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
 
 
-def linux_torch_hint(vendor: str) -> str:
-    """What to add to the Linux install for an AMD card or Intel graphics (with a leading space), else ``""``."""
+def linux_torch_hint(vendor: str, gpu_name: str | None = None) -> str:
+    """What to add to the Linux install for an AMD card or Intel Arc graphics (with a leading
+    space), else ``""``. Older Intel graphics (UHD, Iris Xe) get nothing: PyTorch for Intel
+    does not run on them."""
     if vendor == "amd":
         return (
             f" For an AMD card, install PyTorch for ROCm as ComfyUI's instructions say ({MANUAL_INSTALL_LINUX_AMD}): "
             f"{torch_install_command('amd')}."
         )
-    if vendor == "intel":
+    if vendor == "intel" and hardware.intel_build_support(gpu_name) == "yes":
         return (
             " For Intel Arc graphics, install PyTorch for Intel (XPU) as ComfyUI's instructions say "
             f"({MANUAL_INSTALL_INTEL}): {torch_install_command('intel')}. OpenFill has not been tested on "
@@ -519,7 +524,7 @@ def preflight(
                     "block",
                     f"Download ComfyUI only sets up the Windows build, which does not run on {system}. Install "
                     f"ComfyUI yourself ({manual}) in a folder with a venv, then choose 'I already have ComfyUI'."
-                    + (linux_torch_hint(vendor) if system == "Linux" else ""),
+                    + (linux_torch_hint(vendor, getattr(hw, "gpu_name", None)) if system == "Linux" else ""),
                 ),
             ),
             {"amd": "amd", "intel": "other"}.get(vendor, "unknown"),
@@ -620,9 +625,10 @@ def preflight(
                 )
             )
     elif kind == "other":
-        support = hardware.intel_build_support(name)
         card = name or "This PC's Intel graphics"
-        if support == "no" or not manifest.intel_asset:
+        # Only a name that says Arc gets the Intel build. Plain "Intel(R) Graphics", UHD, Iris
+        # Xe and HD keep the processor route, which is known to work on them.
+        if hardware.intel_build_support(name) != "yes" or not manifest.intel_asset:
             checks.append(
                 Check(
                     "gpu",
@@ -637,17 +643,7 @@ def preflight(
                 mem = " (built-in graphics, it shares the computer's memory)"
             else:
                 mem = f" ({vram:.0f} GB graphics memory)" if vram else ""
-            if support == "unknown":
-                checks.append(
-                    Check(
-                        "gpu",
-                        "warn",
-                        f"Graphics: {card}{mem}. OpenFill downloads ComfyUI's build for Intel graphics, which runs on "
-                        f"{INTEL_BUILD_CARDS}. OpenFill could not tell which Intel chip this is; if it is not one of "
-                        "those, ComfyUI runs on the processor, which is very slow.",
-                    )
-                )
-            elif vram is not None and 1 <= vram < MIN_VRAM_GB:
+            if vram is not None and 1 <= vram < MIN_VRAM_GB:
                 checks.append(
                     Check(
                         "gpu",

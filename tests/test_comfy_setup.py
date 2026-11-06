@@ -347,14 +347,23 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("shares the computer's memory", pf.text())
         self.assertNotIn(" GB", pf.checks[0].message)
 
-    def test_intel_chip_that_does_not_say_which_gets_the_build_with_a_warning(self):
-        pf = self.run_pf(["Intel(R) Graphics"], self.intel("Intel(R) Graphics", 0.125))
-        self.assertTrue(pf.intel_build)
-        self.assertEqual(pf.checks[0].level, "warn")
-        self.assertIn("could not tell which Intel chip", pf.text())
+    def test_lunar_and_panther_lake_names_get_the_intel_build(self):
+        for name in (
+            "Intel(R) Arc(TM) 140V GPU (16GB)",
+            "Intel(R) Arc(TM) 130V GPU (8GB)",
+            "Intel(R) Arc(TM) B390 GPU",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(self.run_pf([name], self.intel(name, 0.125)).intel_build)
 
     def test_old_intel_graphics_is_the_cpu_route(self):
-        for name in ("Intel(R) UHD Graphics 770", "Intel(R) Iris(R) Xe Graphics", "Intel(R) HD Graphics 620"):
+        # Plain "Intel(R) Graphics" too: only names that say Arc get the Intel build.
+        for name in (
+            "Intel(R) UHD Graphics 770",
+            "Intel(R) Iris(R) Xe Graphics",
+            "Intel(R) HD Graphics 620",
+            "Intel(R) Graphics",
+        ):
             with self.subTest(name=name):
                 pf = self.run_pf([name], self.intel(name, 0.125))
                 self.assertEqual(pf.gpu, "other")
@@ -386,6 +395,22 @@ class PreflightTests(unittest.TestCase):
         self.assertIn(comfy_setup.MANUAL_INSTALL_INTEL, pf.text())
         self.assertIn("not been tested", pf.text())
         self.assertNotIn("ROCm", pf.text())
+
+    def test_linux_old_intel_graphics_get_no_xpu_line(self):
+        for name in ("Intel(R) UHD Graphics 770", "Intel(R) Iris(R) Xe Graphics", "Intel(R) Graphics", None):
+            with self.subTest(name=name):
+                hw = Hardware(gpu_name=name, gpu_vendor="intel")
+                pf = comfy_setup.preflight(self.m, hw, None, 50 * GB, Path("/x"), 8188, False, platform="linux")
+                self.assertNotIn("xpu", pf.text().lower())
+
+    def test_gpu_kind_trusts_the_picked_card(self):
+        names = ["AMD Radeon(TM) Graphics", "Intel(R) Arc(TM) B580 Graphics"]
+        self.assertEqual(comfy_setup.gpu_kind(names, False, "intel"), "other")
+        self.assertEqual(comfy_setup.gpu_kind(names, False, ""), "amd")  # nothing picked: the names decide
+        self.assertEqual(comfy_setup.gpu_kind(["Intel(R) UHD Graphics", "AMD Radeon RX 6600"], False, "amd"), "amd")
+        self.assertEqual(
+            comfy_setup.gpu_kind(["Intel(R) UHD Graphics", "NVIDIA GeForce RTX 4070"], False, "intel"), "nvidia"
+        )
 
     def test_mac_gets_no_linux_pytorch_hint(self):
         pf = comfy_setup.preflight(self.m, self.intel(), None, 50 * GB, Path("/x"), 8188, False, platform="darwin")
