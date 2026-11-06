@@ -163,6 +163,28 @@ def mask_png_from_bytes(rect: Rect, pixels: bytes) -> bytes:
     return png.encode(rect.width, rect.height, pixels, 1)
 
 
+def decode_image(data: bytes) -> tuple[int, int, bytes]:
+    """A JPEG or WebP picture from the cloud service as (width, height, RGBA bytes), read
+    with GdkPixbuf (part of GIMP); the cloud backend reads PNG itself."""
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GdkPixbuf, GLib
+
+    loader = GdkPixbuf.PixbufLoader()
+    try:
+        loader.write(data)
+    finally:
+        loader.close()
+    pixbuf = loader.get_pixbuf()
+    if pixbuf is None:
+        raise GimpIoError("the picture could not be read")
+    if not pixbuf.get_has_alpha():
+        pixbuf = pixbuf.add_alpha(False, 0, 0, 0)
+    width, height, stride = pixbuf.get_width(), pixbuf.get_height(), pixbuf.get_rowstride()
+    raw = pixbuf.read_pixel_bytes()
+    pixels = raw.get_data() if isinstance(raw, GLib.Bytes) else bytes(raw)
+    return width, height, b"".join(pixels[y * stride : y * stride + width * 4] for y in range(height))
+
+
 # ---------------------------------------------------------------- writing ----
 
 

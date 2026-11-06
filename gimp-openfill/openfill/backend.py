@@ -51,6 +51,35 @@ class WorkflowRejected(BackendError):
     """The server refused the submitted workflow (invalid inputs)."""
 
 
+class CloudError(BackendError):
+    """A cloud service failed. The text is complete for the user (plain words and a next
+    step) and never holds the API key: it is shown as it is."""
+
+
+class CloudAuthError(CloudError):
+    """The service did not accept the API key (HTTP 401), or no key is set."""
+
+
+class CloudCreditsError(CloudError):
+    """The account has no credits left (HTTP 402)."""
+
+
+class CloudRateLimited(CloudError):
+    """Too many requests (HTTP 429)."""
+
+
+class CloudRefused(CloudError):
+    """The service refused this request (HTTP 400, 403, 404, moderation)."""
+
+
+class CloudTimeout(CloudError):
+    """No answer in time (timeout, HTTP 408 or 504)."""
+
+
+class CloudUnreachable(CloudError):
+    """The service could not be reached, or it is down (HTTP 5xx)."""
+
+
 @dataclass
 class Sampling:
     """Sampler settings shared by all backends."""
@@ -69,7 +98,7 @@ class ModelSpec:
     """The model files a request runs with (file names as the server lists them)."""
 
     checkpoint: str = ""
-    arch: str = "sd15"  # sd15 | sdxl | flux | qwen_image | inpaint_model
+    arch: str = "sd15"  # sd15 | sdxl | flux | qwen_image | inpaint_model | cloud
     fooocus_head: str | None = None  # SDXL only
     fooocus_patch: str | None = None  # SDXL only
     template: str = ""  # catalog template id; "" = derive from arch
@@ -129,7 +158,7 @@ class InpaintRequest:
     negative: str
     model: ModelSpec
     sampling: Sampling = field(default_factory=Sampling)
-    mode: str = "fill"  # "fill" or "expand"
+    mode: str = "fill"  # "fill" or "expand"; the cloud backend also takes "remove"
     grow: int = 16  # mask dilation in working pixels
     feather: int = 24  # mask blur in working pixels
     prefill: bool = True  # pre-fill masked area before sampling
@@ -288,6 +317,10 @@ def describe_error(error: BaseException) -> str:
     and other :class:`BackendError` subclasses without a branch here) are shown as they are.
     """
     text = str(error).strip()
+    if isinstance(error, CloudError):  # complete already; a bare one still gets a next step
+        return _with_next_step(
+            text or "The cloud service reported an error.", "Check the cloud settings and try again."
+        )
     if isinstance(error, BackendUnavailable):
         return _with_next_step(
             f"The AI backend is not available: {text}",

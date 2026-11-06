@@ -328,6 +328,12 @@ class PhotoCraftBridge:
     def mask_png_from_bytes(self, rect: Rect, pixels: bytes) -> bytes:
         return png.encode(rect.width, rect.height, pixels, 1)
 
+    def decode_image(self, data: bytes) -> tuple[int, int, bytes]:
+        """A JPEG or WebP picture from the cloud service as (width, height, RGBA bytes)."""
+        with Image.open(_io.BytesIO(data)) as im:
+            rgba = im.convert("RGBA")
+            return rgba.width, rgba.height, rgba.tobytes()
+
     # writing ------------------------------------------------------------------------
 
     def insert_results(

@@ -12,11 +12,13 @@ from pathlib import Path
 
 _FORMAT = "%(asctime)s %(levelname)-5s [%(process)d %(name)s] %(message)s"
 
-# Hugging Face user tokens ("hf_" + 30-40 letters/digits) and any bearer credential.
+# Hugging Face user tokens ("hf_" + 30-40 letters/digits), OpenRouter and OpenAI style
+# API keys ("sk-or-v1-...", "sk-..."), any bearer credential and the settings that hold them.
 _SECRET_PATTERNS = (
     re.compile(r"\bhf_[A-Za-z0-9]{16,}\b"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"),
-    re.compile(r"(?i)(\"?hf_token\"?\s*[:=]\s*\"?)[^\s\",}]+"),
+    re.compile(r"(?i)(\"?(?:hf_token|cloud_api_key|api[_-]?key)\"?\s*[:=]\s*\"?)[^\s\",}]+"),
 )
 
 

@@ -36,6 +36,7 @@ from .backend import (
     Txt2ImgRequest,
 )
 from .backends.a1111 import A1111Backend
+from .backends.cloud import CloudBackend
 from .backends.comfy import ComfyBackend
 from .comfy_api import ComfyApiError, ComfyClient, unsupported_gpu_line
 from .config import Paths, Settings, comfy_layout, comfy_problem
@@ -149,7 +150,29 @@ class App:
 
     # backend -------------------------------------------------------------
 
+    @property
+    def uses_cloud(self) -> bool:
+        """The user picked the cloud service: pictures go to it, and ComfyUI is never used."""
+        return self.settings.backend == "cloud"
+
+    def cloud_backend(self) -> CloudBackend:
+        s = self.settings
+        return CloudBackend(
+            s.cloud_provider,
+            s.cloud_api_key,
+            s.cloud_model,
+            s.cloud_url,
+            s.cloud_api,
+            float(s.request_timeout or 0),
+            self.log,
+            decode=getattr(self.io, "decode_image", None),
+        )
+
     def backend(self, progress=None, cancel=None) -> Backend:
+        # Exactly the backend the user picked: the cloud is never a stand-in for a ComfyUI
+        # that fails to start, and ComfyUI never runs a job meant for the cloud.
+        if self.uses_cloud:
+            return self.cloud_backend()
         url = self.server.ensure_running(progress, cancel)
         timeout = float(self.settings.request_timeout or 0)
         if self.settings.backend == "a1111":
@@ -230,7 +253,10 @@ class App:
     # models --------------------------------------------------------------
 
     def resolve_model(self, choice: str | None) -> tuple[cat.ModelEntry | None, ModelSpec]:
-        """Map a dialog choice ('active', a legacy tier or a catalog id) to a model."""
+        """Map a dialog choice ('active', a legacy tier or a catalog id) to a model.
+        With the cloud backend every choice means the cloud model (no catalog entry)."""
+        if self.uses_cloud:
+            return None, self.cloud_model_spec()
         self.require_backend_install()
         choice = (choice or "active").strip()
         if choice == "active":
@@ -272,6 +298,19 @@ class App:
             )
         self._fetch_missing_previews(entry)
         return entry, cat.model_spec_for(entry, self.catalog, self.models_root)
+
+    def cloud_model_spec(self) -> ModelSpec:
+        from .backends.cloud import provider
+
+        name = self.settings.cloud_model or provider(self.settings.cloud_provider).default_model
+        return ModelSpec(checkpoint=name or "cloud model", arch="cloud", template="cloud")
+
+    def cloud_model_name(self) -> str:
+        """The cloud model in words, e.g. "google/gemini-2.5-flash-image (OpenRouter)"."""
+        from .backends.cloud import destination
+
+        where = destination(self.settings.cloud_provider, self.settings.cloud_url)
+        return f"{self.cloud_model_spec().checkpoint} ({where})"
 
     def _put_bundled_nodes(self, entry: cat.ModelEntry) -> bool:
         """Copy OpenFill's own node pack (it ships with the plug-in) into ComfyUI when ``entry``
@@ -436,7 +475,10 @@ class App:
             raise BackendError(f"The settings could not be saved: {err}") from err
 
     def has_model_for(self, operation: str) -> bool:
-        """True when a downloaded model can run ``operation`` (fill, expand, txt2img, remove, edit)."""
+        """True when a downloaded model can run ``operation`` (fill, expand, txt2img, remove, edit).
+        The cloud service runs every operation."""
+        if self.uses_cloud:
+            return True
         return bool(cat.runnable_installed(self.catalog, self.models_root, self.custom_nodes_dir, operation))
 
     def installed_models(self, operation: str = "remove") -> list[cat.ModelEntry]:
@@ -669,6 +711,8 @@ class App:
         """(picked, better) when the Expand default is installed and is not the
         model picked; None otherwise. The pick is always respected unless the
         user agrees to the switch."""
+        if self.uses_cloud:
+            return None
         entry, _model = self.resolve_model(model_choice)
         try:
             installed = cat.runnable_installed(self.catalog, self.models_root, self.custom_nodes_dir, "expand")
@@ -719,7 +763,9 @@ class App:
         if selection is None:
             self.log.info("fill: refused, nothing selected")
             raise NothingSelected(NO_SELECTION_MESSAGE)
-        if (remove or not prompt.strip()) and not as_picked and self._is_default_choice(model_choice):
+        if self.uses_cloud:
+            pass  # one model does everything; LaMa and the catalog are not involved
+        elif (remove or not prompt.strip()) and not as_picked and self._is_default_choice(model_choice):
             # Remove object, or an empty prompt, with the default model: LaMa (then MAT)
             # whenever one is installed; generation checkpoints (SDXL in 10 of 13 judged
             # cases) repaint the object they were asked to remove. A model picked by
@@ -777,7 +823,11 @@ class App:
         layer_grow = geometry.layer_mask_grow(mp, removal_intent)
         color_match = geometry.color_match_strength(target, ctx, full, removal_intent)
         prefill_style, prefill_mode = geometry.prefill_for(removal_intent, strength, model.arch)
-        if model.prompt_free:
+        if self.uses_cloud:
+            # The cloud backend words its own instruction for a removal ("remove what is there").
+            prompt = "" if removal_intent else prompt
+            strength = 1.0
+        elif model.prompt_free:
             prompt, negative = "", ""
         elif model.eraser:
             # Erase-trained: their own prompt (what the user typed is not used).
@@ -842,7 +892,7 @@ class App:
             negative=negative,
             model=model,
             sampling=self.sampling(model, variations, seed, strength),
-            mode="fill",
+            mode="remove" if self.uses_cloud and removal_intent else "fill",
             grow=mp.grow_work,
             feather=mp.blur_work,
             prefill=self.settings.prefill,
@@ -883,9 +933,11 @@ class App:
         except BaseException as err:
             runner.fail(err)
             raise
-        if self.settings.seam_correction and not model.prompt_free:
+        # A cloud result is already blended inside the selection on this computer, and these two
+        # rewrite the layer where its mask reaches past the selection: skipped, so no pixel there changes.
+        if self.settings.seam_correction and not model.prompt_free and not self.uses_cloud:
             self._correct_seams(image, layers, ctx, image_rgba, mask_raw, layer_grow)
-        if self.settings.grain_match and not model.prompt_free:
+        if self.settings.grain_match and not model.prompt_free and not self.uses_cloud:
             self._match_grain(image, layers, ctx, image_rgba, mask_raw, result.seed)
         if len(layers) > 1 and self.settings.rank_variations:
             layers = self._rank_variations(
@@ -1107,7 +1159,7 @@ class App:
         )
         if model.prompt_free:
             prompt, negative = "", ""
-        else:
+        elif not self.uses_cloud:  # the cloud backend asks to continue the scene itself
             prompt, negative = workflow.expand_prompts(prompt, negative)
         sampling = self.sampling(model, variations, seed, 1.0)
         sampling = replace(sampling, cfg=workflow.expand_cfg(model.arch, sampling.cfg))
@@ -1191,7 +1243,7 @@ class App:
             )
         finally:
             image.undo_group_end()
-        if self.settings.seam_correction and not model.prompt_free:
+        if self.settings.seam_correction and not model.prompt_free and not self.uses_cloud:
             # Where the old image's pixels are, in context coordinates (the crop is not part of it).
             old_rect = (
                 crop[0] - source_rect.x,
@@ -1308,6 +1360,8 @@ class App:
             self.log.warning("debug dump failed: %s", err)
 
     def check_backend(self) -> HealthStatus:
+        if self.uses_cloud:  # checks the key; sends no picture
+            return self.cloud_backend().health()
         try:
             backend = self.backend(self.io.GimpProgress("Checking the AI backend"))
         except BackendError as err:

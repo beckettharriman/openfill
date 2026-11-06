@@ -31,6 +31,29 @@ HUB_CACHE_FILENAME = "hub-cache.json"
 HUB_SELECTED_FILENAME = "hub-selected.json"
 
 
+@dataclass(frozen=True)
+class BackendChoice:
+    """One entry of the "where images are made" choice. Add a backend here and every
+    settings screen (GIMP and PhotoCraft) offers it."""
+
+    id: str  # the value of Settings.backend
+    label: str  # in menus
+    online: bool  # sends the user's pictures to another computer: screens say so
+    short: str = ""  # in narrow switches (OpenFill for PhotoCraft)
+    photocraft: bool = True  # offered by OpenFill for PhotoCraft too
+
+
+BACKENDS = (
+    BackendChoice("comfyui", "This computer (ComfyUI)", False, "This computer"),
+    BackendChoice("a1111", "AUTOMATIC1111 WebUI (started by you with --api)", False, "AUTOMATIC1111", photocraft=False),
+    BackendChoice("cloud", "Cloud service (paid, sends your image online)", True, "Cloud service"),
+)
+
+
+def backend_choice(backend_id: str) -> BackendChoice | None:
+    return next((b for b in BACKENDS if b.id == backend_id), None)
+
+
 def default_comfy_dir() -> str:
     """The ComfyUI folder assumed when the config does not name one."""
     local = os.environ.get("LOCALAPPDATA")
@@ -43,12 +66,12 @@ def default_comfy_dir() -> str:
 class Settings:
     """User settings stored in ``config.json``.
 
-    ``hf_token`` is a secret: it is left out of ``repr()`` so it cannot end up
-    in a log line or a traceback, and :meth:`save` makes the file readable by
-    its owner only on POSIX systems.
+    ``hf_token`` and ``cloud_api_key`` are secrets: they are left out of ``repr()``
+    so they cannot end up in a log line or a traceback, and :meth:`save` makes the
+    file readable by its owner only on POSIX systems.
     """
 
-    backend: str = "comfyui"  # "comfyui" or "a1111"
+    backend: str = "comfyui"  # one of BACKENDS: "comfyui", "a1111" or "cloud"
     comfy_dir: str = field(default_factory=default_comfy_dir)
     url: str = "http://127.0.0.1:8188"  # ComfyUI (or A1111) base URL
     a1111_url: str = "http://127.0.0.1:7860"
@@ -112,6 +135,12 @@ class Settings:
     prompt_history: str = ""  # JSON list of recent prompts, newest first (dialogs)
     hub_search: bool = True  # Models tab: also list current models from Hugging Face and Civitai (read-only API calls)
     hub_civitai: bool = True  # include Civitai in that search (Hugging Face only when False)
+    # Cloud service (backend "cloud", see backends/cloud.py and docs/cloud.md). Only used when picked.
+    cloud_provider: str = "openrouter"  # "openrouter" or "openai" (any OpenAI-compatible images API)
+    cloud_url: str = ""  # API address; "" = the provider's own (https://openrouter.ai/api/v1)
+    cloud_model: str = ""  # "" = the provider's default (OpenRouter: google/gemini-2.5-flash-image)
+    cloud_api: str = "images"  # OpenRouter only: "images" (/images) or "chat" (/chat/completions)
+    cloud_api_key: str = field(default="", repr=False)  # secret, stored only in this file
     # Not persisted: why the last :meth:`load` fell back to defaults (None when it did not).
     load_problem: str | None = field(default=None, repr=False, compare=False, metadata={"persist": False})
     # Not persisted: a damaged settings file that could not be moved aside; :meth:`save` refuses to overwrite it.
@@ -205,9 +234,14 @@ class Settings:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         data = {f.name: getattr(self, f.name) for f in fields(self) if f.metadata.get("persist", True)}
-        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        text = json.dumps(data, indent=2) + "\n"
+        # Created owner-only from the start (the file holds the Hugging Face token and the
+        # cloud API key), so no other user can read it even for a moment.
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
         if os.name == "posix":
-            os.chmod(tmp, 0o600)  # the file holds the Hugging Face token
+            os.chmod(tmp, 0o600)  # a .tmp left over from before keeps its old mode otherwise
         os.replace(tmp, path)
 
     # derived -----------------------------------------------------------
@@ -215,7 +249,24 @@ class Settings:
     @property
     def active_url(self) -> str:
         """Base URL of the selected backend."""
+        if self.backend == "cloud":
+            from .backends.cloud import base_url
+
+            return base_url(self.cloud_provider, self.cloud_url)
         return self.a1111_url if self.backend == "a1111" else self.url
+
+    @property
+    def uses_cloud(self) -> bool:
+        """The cloud service is the backend: pictures leave this computer."""
+        return self.backend == "cloud"
+
+    def cloud_note(self, what: str = "image") -> str:
+        """The "Cloud: your image is sent to ..." line; "" when the backend is not the cloud."""
+        if not self.uses_cloud:
+            return ""
+        from .backends.cloud import cloud_note
+
+        return cloud_note(self.cloud_provider, self.cloud_url, what)
 
     def model_for(self, quality: str | None = None) -> ModelSpec:
         """Return a ``ModelSpec`` for the requested quality tier."""
