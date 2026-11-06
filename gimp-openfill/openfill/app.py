@@ -165,24 +165,75 @@ class App:
             self.log.warning("other ComfyUI installs not looked for: %s", err)
             return []
 
+    def check_shared_models(self, text: str) -> str:
+        """The setting's text for what the user typed (full paths, one folder per line); raises
+        ``BackendError`` with the problem in plain words (shared_models.check)."""
+        folders, problem = shared_models.check(text, self.models_root if self.settings.comfy_dir else None)
+        if problem:
+            raise BackendError(problem)
+        return shared_models.join(folders)
+
+    def write_shared_config(self) -> Path | None:
+        """Write ``shared-model-paths.yaml`` for the current setting (also for a ComfyUI you
+        start yourself, see docs/models.md); None when there are no folders. Never raises."""
+        own = self.models_root if self.settings.comfy_dir else None
+        try:
+            return shared_models.write_config(self.paths.base, self.shared_roots, own)
+        except OSError as err:
+            self.log.warning("shared model folders file not written: %s", err)
+            return None
+
+    def shared_config_text(self) -> str:
+        """The yaml text the backend should have been started with ("" for none)."""
+        own = self.models_root if self.settings.comfy_dir else None
+        text = shared_models.yaml_text(self.shared_roots, own)
+        return text if shared_models.SECTION_PREFIX in text else ""
+
     def set_shared_models(self, text: str) -> str:
-        """Save the shared folders, rebuild the catalog and ask a running backend to stop (ComfyUI
-        reads model folders when it starts; the next job starts it again with the new list).
-        Returns what changed, in plain words."""
-        folders = shared_models.parse(text)
-        missing = [f for f in folders if not Path(f).is_dir()]
-        if missing:
-            raise BackendError(f"Folder not found: {missing[0]}")
-        before = self.settings.shared_models
-        self.settings.shared_models = shared_models.join(folders)
+        """Check and save the shared folders, write the yaml and rebuild the catalog. A running
+        backend keeps going: it is started again with the new folders at the next job, once
+        nothing is running (see :meth:`backend`). Returns what changed, in plain words."""
+        self.settings.shared_models = self.check_shared_models(text)
         self._save_settings()
+        path = self.write_shared_config()
         self.rescan()
-        if self.settings.shared_models != before and self.server.read_state():
-            self.server.request_stop()
-        roots = self.shared_roots
-        if not folders:
+        if not path:
             return "No other ComfyUI folders are used."
-        return f"Using the models in {len(roots)} folder(s) of other ComfyUI installs, read only."
+        roots = self.shared_roots
+        return (
+            f"Using the models in {len(roots)} folder(s) of other ComfyUI installs, read only. "
+            "The AI engine picks them up at the next job."
+        )
+
+    def _backend_idle(self, url: str) -> bool:
+        """Nothing is running: no download or install task, nothing queued in ComfyUI."""
+        try:
+            if (self.server.task_status().get("current") or {}) or self.server.pending_tasks():
+                return False
+            queue = ComfyClient(url, timeout=5).queue()
+            return not (queue.get("queue_running") or queue.get("queue_pending"))
+        except Exception:  # noqa: BLE001 - when in doubt, do not stop anything
+            return False
+
+    def _restart_for_shared_models(self) -> None:
+        """When the shared folders changed since the managed backend started, stop it while it
+        is idle, so the start that follows reads the new folders. Never stops a running job,
+        download or install: then the change waits for a later job."""
+        state = self.server.read_state()
+        if not state or self.settings.backend != "comfyui" or not self.settings.autostart:
+            return
+        if str(state.get("shared_models", "")) == self.shared_config_text():
+            return
+        url = str(state.get("url") or self.server.url())
+        if not self._backend_idle(url):
+            self.log.info("shared model folders changed; the AI engine is busy, so it keeps its old list for now")
+            return
+        self.log.info("shared model folders changed; restarting the AI engine to read them")
+        if not self.server.request_stop():
+            return
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and self.server.read_state() and self.server.is_healthy(url):
+            time.sleep(0.5)
 
     def rescan(self) -> None:
         """Load the catalog again with the files on disk (own and shared folders)."""
@@ -203,6 +254,7 @@ class App:
     # backend -------------------------------------------------------------
 
     def backend(self, progress=None, cancel=None) -> Backend:
+        self._restart_for_shared_models()
         url = self.server.ensure_running(progress, cancel)
         timeout = float(self.settings.request_timeout or 0)
         if self.settings.backend == "a1111":

@@ -41,6 +41,22 @@ before building; where the build differs, "As built" below wins.
   GIMP's Settings save); the next job starts it with the new yaml.
 - **Not built**: B (using the other server as is) and the "N usable models found" count
   per folder.
+- **After review (2026-11-06)**:
+  - The setting is stored one folder per line (`join`). A typed single line is split on
+    the list separator, keeping existing folders whole.
+  - `check()` refuses relative, missing or own-models folders (also through a link) in
+    GIMP, the page and the Tk panel. The page saves all settings or none.
+  - Guards compare real paths (`blocked`, `guard_roots`). A link from OpenFill's models
+    folder into a shared one makes it read only, while a shared parent of OpenFill's
+    folder leaves OpenFill's own part writable.
+  - Saving the list no longer stops the engine. The supervisor records the yaml it
+    started with (`shared_models` in server-state.json), and `App.backend` restarts the
+    engine before the next job only when nothing runs. The yaml is also written on save,
+    for a ComfyUI started by hand.
+  - The yaml is written with `ensure_ascii=False`. The `scan()` shadow slice is fixed.
+    Files a catalog entry takes from an alias folder are not listed again as your own.
+  - Bundled FLUX entries take a found T5, CLIP-L or VAE only up to 1.2 times the
+    catalog file's size; the user's own FLUX file takes any compatible one.
 
 ## Problem
 

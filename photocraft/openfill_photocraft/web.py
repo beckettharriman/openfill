@@ -109,8 +109,12 @@ class Api:
         return buf.getvalue()
 
     def settings(self) -> dict[str, Any]:
+        from openfill import shared_models
+
         s = self.service.app.settings
-        return {k: getattr(s, k) for k in EDITABLE}
+        out = {k: getattr(s, k) for k in EDITABLE}
+        out["shared_models"] = shared_models.display(s.shared_models)  # one line for the text field
+        return out
 
     # POST -----------------------------------------------------------------------------
 
@@ -149,20 +153,26 @@ class Api:
             app.save_token(str(body.get("token", "")))
             return {"ok": True}
         if path == "/api/settings":
+            from openfill import shared_models
+
             shared = str(body["shared_models"]) if "shared_models" in body else None
-            for key, kind in EDITABLE.items():
-                if key in body and key != "shared_models":
-                    setattr(app.settings, key, kind(body[key]))
+            if shared is not None:
+                # checked first, so a bad folder leaves every setting as it was
+                shared = app.check_shared_models(shared)
+            values = {key: kind(body[key]) for key, kind in EDITABLE.items() if key in body and key != "shared_models"}
+            for key, value in values.items():
+                setattr(app.settings, key, value)
             app.settings.save(app.paths.config)
             app.reload_settings()
-            if shared is not None and shared != app.settings.shared_models:
-                app.set_shared_models(shared)  # checks the folders, rescans, restarts the engine
+            if shared is not None and shared_models.parse(shared) != shared_models.parse(app.settings.shared_models):
+                app.set_shared_models(shared)  # saves, writes the yaml, rescans; the engine picks it up when idle
             return self.settings()
         if path == "/api/shared/find":
             from openfill import shared_models
 
             found = app.shared_suggestions()
-            text = shared_models.join([*shared_models.parse(str(body.get("text", ""))), *(str(c.path) for c in found)])
+            folders = [*shared_models.parse(str(body.get("text", ""))), *(str(c.path) for c in found)]
+            text = shared_models.display(shared_models.join(folders))
             return {"text": text, "found": [f"{c.source} ({c.path})" for c in found]}
         if path == "/api/comfy/setup":
             return {"task": svc.setup_comfy()}

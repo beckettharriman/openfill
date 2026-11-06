@@ -25,6 +25,7 @@ from tests.test_local_models import (
     SD15_PLAIN,
     SDXL,
     T5_GGUF,
+    T5_ST,
     write_gguf,
     write_safetensors,
 )
@@ -108,12 +109,52 @@ def snapshot(root: Path) -> dict:
 class SettingTests(unittest.TestCase):
     def test_parse_and_join(self):
         sep = os.pathsep
-        text = f' /a/b {sep}{sep}"/c d"\n/a/b{sep}/e '
-        self.assertEqual(sm.parse(text), ["/a/b", "/c d", "/e"])
+        # typed on one line: split on the list separator
+        self.assertEqual(sm.parse(f' /a/b {sep}{sep}"/c d"{sep}/a/b{sep}/e '), ["/a/b", "/c d", "/e"])
+        # stored: one folder per line, never split again
+        self.assertEqual(sm.parse(f"/a/b\n /c{sep}d \n\n/a/b\n"), ["/a/b", f"/c{sep}d"])
         self.assertEqual(sm.parse(""), [])
         self.assertEqual(sm.parse(None), [])
-        self.assertEqual(sm.join(["/a", "/a", " /b "]), f"/a{sep}/b")
+        self.assertEqual(sm.join(["/a", "/a", " /b "]), "/a\n/b\n")
+        self.assertEqual(sm.join([]), "")
         self.assertEqual(sm.parse(sm.join(["/x y", "/z"])), ["/x y", "/z"])
+        self.assertEqual(sm.display(sm.join(["/x y", "/z"])), f"/x y{sep}/z")
+
+    def test_a_folder_with_the_list_separator_survives_the_setting(self):
+        """Review B5: ':' (Linux, Mac) and ';' (Windows) are legal in folder names."""
+        folder = f"/media/me/Krita{os.pathsep} AI/server"
+        self.assertEqual(sm.parse(sm.join([folder])), [folder])
+        with tempfile.TemporaryDirectory() as tmp:
+            odd = Path(tmp) / f"Krita{os.pathsep} AI"
+            odd.mkdir()
+            other = Path(tmp) / "other"
+            other.mkdir()
+            typed = sm.display(sm.join([str(odd), str(other)]))  # what a one-line field shows
+            self.assertEqual(sm.parse(typed), [str(odd), str(other)])
+
+    def test_check_wants_full_paths_of_existing_folders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = make_krita(Path(tmp) / "server")
+            own = Path(tmp) / "own" / "models"
+            own.mkdir(parents=True)
+            self.assertEqual(sm.check(str(server), own), ([str(server)], ""))
+            self.assertEqual(sm.check("", own), ([], ""))
+            for text, words in (
+                ("relative/folder", "full path"),
+                (str(Path(tmp) / "missing"), "not found"),
+                (str(own), "OpenFill's own models folder"),
+            ):
+                folders, problem = sm.check(text, own)
+                self.assertEqual(folders, [], text)
+                self.assertIn(words, problem, text)
+            with mock.patch.dict(os.environ, {"HOME": tmp, "USERPROFILE": tmp}):
+                self.assertEqual(sm.check("~/server", own), ([str(server)], ""))
+            if os.name == "posix":  # OpenFill's own models folder linked to Krita's (review B1)
+                link = Path(tmp) / "linked" / "models"
+                link.parent.mkdir()
+                link.symlink_to(server / "models", target_is_directory=True)
+                _folders, problem = sm.check(str(server), link)
+                self.assertIn("link", problem)
 
     def test_settings_keep_the_list(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -648,7 +689,9 @@ class AppTests(unittest.TestCase):
         with self.assertRaises(BackendError):
             self.app.set_shared_models(str(Path(self.tmp.name) / "missing"))
         self.assertIn("read only", self.app.set_shared_models(str(self.server)))
-        self.assertEqual(Settings.load(self.app.paths.config).shared_models, str(self.server))
+        self.assertEqual(sm.parse(Settings.load(self.app.paths.config).shared_models), [str(self.server)])
+        # the yaml is there at once, for a ComfyUI started by hand too (review B8)
+        self.assertTrue((self.app.paths.base / sm.CONFIG_FILENAME).is_file())
         self.assertTrue(self.installed("realvisxl-v5"))
         queued = []
         with mock.patch.object(self.app.server, "queue_task", side_effect=lambda t: queued.append(t) or "id"):
@@ -656,6 +699,45 @@ class AppTests(unittest.TestCase):
         self.assertEqual(queued[0]["files"], [])  # nothing of the other install is ever named for deletion
         self.assertEqual(self.app.set_shared_models(""), "No other ComfyUI folders are used.")
         self.assertFalse(self.installed("realvisxl-v5"))
+        self.assertFalse((self.app.paths.base / sm.CONFIG_FILENAME).exists())
+
+    def test_changing_the_list_does_not_kill_a_running_job(self):
+        """Review B2: saving the list never stops the engine; the next job restarts it only
+        when nothing runs (no task, nothing queued in ComfyUI)."""
+        stale = {"server_pid": 1, "url": "http://127.0.0.1:9", "shared_models": ""}
+        busy = {"current": {"type": "download", "model_id": "flux1-fill-dev-gguf-q4"}}
+        with (
+            mock.patch.object(self.app.server, "read_state", return_value=stale),
+            mock.patch.object(self.app.server, "task_status", return_value=busy),
+            mock.patch.object(self.app.server, "pending_tasks", return_value=[]),
+            mock.patch.object(self.app.server, "request_stop", return_value=True) as stop,
+        ):
+            self.app.set_shared_models(str(self.server))
+            stop.assert_not_called()
+            self.app._restart_for_shared_models()  # the next job, while the download runs
+            stop.assert_not_called()
+        idle_queue = {"queue_running": [], "queue_pending": []}
+        busy_queue = {"queue_running": [["x"]], "queue_pending": []}
+        for queue, expect_stop in ((busy_queue, False), (idle_queue, True)):
+            with (
+                mock.patch.object(self.app.server, "read_state", side_effect=[stale, {}]),
+                mock.patch.object(self.app.server, "task_status", return_value={}),
+                mock.patch.object(self.app.server, "pending_tasks", return_value=[]),
+                mock.patch.object(self.app.server, "is_healthy", return_value=False),
+                mock.patch("openfill.app.ComfyClient") as client,
+                mock.patch.object(self.app.server, "request_stop", return_value=True) as stop,
+            ):
+                client.return_value.queue.return_value = queue
+                self.app._restart_for_shared_models()
+                self.assertEqual(stop.called, expect_stop, queue)
+        # started with the current list: nothing to do
+        current = {**stale, "shared_models": self.app.shared_config_text()}
+        with (
+            mock.patch.object(self.app.server, "read_state", return_value=current),
+            mock.patch.object(self.app.server, "request_stop", return_value=True) as stop,
+        ):
+            self.app._restart_for_shared_models()
+            stop.assert_not_called()
 
     def test_suggestions_skip_folders_already_used(self):
         cand = sm.Candidate(self.server, sm.KRITA)
@@ -663,6 +745,163 @@ class AppTests(unittest.TestCase):
             self.assertEqual(self.app.shared_suggestions(), [cand])
             self.app.settings.shared_models = str(self.server)
             self.assertEqual(self.app.shared_suggestions(), [])
+
+
+class ReviewFixesTests(WorkerFixture):
+    """The adversarial review's cases, kept (review-models.md, 2026-11-06)."""
+
+    @unittest.skipIf(os.name != "posix", "needs symlinks")
+    def test_own_models_folder_linked_to_the_shared_one_stays_read_only(self):
+        """B1: OpenFill's ComfyUI/models is a link to Krita's models (the old way to share);
+        with Krita named in the setting, neither Delete nor a download touches Krita's files."""
+        import shutil
+
+        shutil.rmtree(self.models_root)
+        self.models_root.symlink_to(self.server / "models", target_is_directory=True)
+        xl = catalog_file("realvisxl-v5", "checkpoint")
+        target = self.server / "models" / xl.dest
+        before = snapshot(self.server)
+        self.worker._remove(
+            {
+                "id": "t",
+                "model_id": "realvisxl-v5",
+                "type": "remove",
+                "models_root": str(self.models_root),
+                "files": [xl.dest],
+            }
+        )
+        self.assertTrue(target.is_file(), "Krita's RealVisXL was deleted")
+        lama = catalog_file("lama-big", "inpaint_model")
+        task = {
+            "type": "download",
+            "model_id": "lama-big",
+            "models_root": str(self.models_root),
+            "files": [{"url": lama.url, "dest": lama.dest, "size": lama.size}],
+        }
+        with self.assertRaises(ValueError) as cm:
+            self.worker.checked_download_files(task)
+        self.assertIn("only reads", str(cm.exception))
+        self.assertEqual(snapshot(self.server), before)
+
+    def test_a_shared_parent_folder_does_not_block_openfills_own_downloads(self):
+        """B3: a shared folder that contains OpenFill's own models folder (C:\\AI holding both
+        installs) guards only its own part: OpenFill still downloads and deletes its files."""
+        parent = self.comfy.parent  # holds krita/ and ComfyUI_windows_portable/
+        Settings(comfy_dir=str(self.comfy), shared_models=sm.join([str(parent)])).save(self.profile / "config.json")
+        lama = catalog_file("lama-big", "inpaint_model")
+        task = {
+            "type": "download",
+            "model_id": "lama-big",
+            "models_root": str(self.models_root),
+            "files": [{"url": lama.url, "dest": lama.dest, "size": lama.size}],
+        }
+        ((_spec, dest),) = self.worker.checked_download_files(task)
+        self.assertEqual(dest, self.models_root / lama.dest)
+        sized(dest, lama.size)
+        self.worker._remove(
+            {
+                "id": "t",
+                "model_id": "lama-big",
+                "type": "remove",
+                "models_root": str(self.models_root),
+                "files": [lama.dest],
+            }
+        )
+        self.assertFalse(dest.exists())
+        # what is outside OpenFill's folder in that parent stays guarded
+        self.assertTrue(self.worker._is_shared(parent / "krita" / "server" / "models" / "x"))
+        self.assertFalse(self.worker._is_shared(self.models_root / "inpaint" / "x"))
+
+
+class ReviewYamlAndScanTests(unittest.TestCase):
+    def test_no_surrogate_escapes_in_the_yaml(self):
+        """B4: a folder name outside the BMP (an emoji) is written as is, not as a UTF-16 pair
+        PyYAML would split into two lone surrogates."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Krita \U0001f3a8 é" / "models"
+            (root / "checkpoints").mkdir(parents=True)
+            text = sm.yaml_text([root])
+            self.assertNotIn("\\ud", text.lower())
+            self.assertIn("Krita \U0001f3a8 é", text)
+            try:
+                import yaml  # noqa: PLC0415 - only to check the text
+            except ImportError:
+                return
+            data = yaml.safe_load(text)
+            self.assertTrue(Path(data["openfill_shared_1"]["checkpoints"]).is_dir())
+
+    def test_first_shared_root_is_not_shadowed_by_itself(self):
+        """B6: with OpenFill's own models folder missing, the first shared folder's models are
+        listed (and a later folder is only checked against the ones before it)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = Path(tmp) / "a", Path(tmp) / "b"
+            write_safetensors(a / "checkpoints" / "myXL.safetensors", SDXL)
+            write_safetensors(b / "checkpoints" / "myXL.safetensors", SDXL)  # same name: a wins
+            write_safetensors(b / "checkpoints" / "otherXL.safetensors", SDXL)
+            base = Path(tmp) / "profile"
+            base.mkdir()
+            found, _ = lm.scan(Path(tmp) / "own-missing", ENTRIES, base, [a, b])
+            got = sorted((Path(e.files[0].root).name, e.files[0].dest) for e in found)
+            self.assertEqual(got, [("a", "checkpoints/myXL.safetensors"), ("b", "checkpoints/otherXL.safetensors")])
+
+    def test_one_file_one_row(self):
+        """B7: a catalog file in the alias folder (diffusion_models/ for unet/) is one model."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "models"
+            base = Path(tmp) / "p"
+            base.mkdir()
+            u = catalog_file("flux1-fill-dev-gguf-q4", "unet")
+            sized(write_gguf(root / "diffusion_models" / u.filename, FLUX_FILL), u.size)
+            merged, _found, _skipped = lm.build(ENTRIES, root, base, [])
+            users = [e.id for e in merged if any(f.dest == f"diffusion_models/{u.filename}" for f in e.files)]
+            self.assertEqual(users, ["flux1-fill-dev-gguf-q4"])
+
+
+class BundledSizeLimitTests(unittest.TestCase):
+    """A bundled FLUX entry takes a found T5 only up to 1.2 times its catalog file (it was sized
+    for it); the user's own FLUX file takes any compatible one, the closest in size first."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "models"
+        self.base = Path(self.tmp.name) / "profile"
+        self.base.mkdir()
+        write_safetensors(self.root / "text_encoders" / "clip_l.safetensors", CLIP_L)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def t5(self, name, size):
+        writer = write_gguf if name.endswith(".gguf") else write_safetensors
+        return sized(writer(self.root / "text_encoders" / name, T5_GGUF if name.endswith(".gguf") else T5_ST), size)
+
+    def build(self):
+        merged, found, _ = lm.build(ENTRIES, self.root, self.base, [])
+        return {e.id: e for e in merged}, found
+
+    def test_bundled_q4_keeps_its_gguf_t5_over_a_much_bigger_one(self):
+        q5 = catalog_file("flux1-fill-dev-gguf-q4", "clip1")
+        self.t5("t5xxl_fp16.safetensors", 9_787_841_024)
+        fp8 = self.t5("t5xxl_fp8_e4m3fn.safetensors", 4_893_934_904)  # 1.44x the Q5_K_M
+        entries, _found = self.build()
+        self.assertEqual(entries["flux1-fill-dev-gguf-q4"].file_by_role("clip1"), q5)  # downloaded as sized
+        # the safetensors FLUX entry was made for the fp8: it takes it
+        self.assertEqual(entries["flux1-fill-dev"].file_by_role("clip1").dest, "text_encoders/" + fp8.name)
+        # a variant within 1.2x is taken by the Q4 entry too
+        q6 = self.t5("t5-v1_1-xxl-encoder-Q6_K.gguf", int(q5.size * 1.15))
+        entries, _found = self.build()
+        self.assertEqual(entries["flux1-fill-dev-gguf-q4"].file_by_role("clip1").dest, "text_encoders/" + q6.name)
+
+    def test_your_own_flux_file_takes_any_compatible_t5(self):
+        self.t5("t5xxl_fp16.safetensors", 9_787_841_024)
+        write_gguf(self.root / "unet" / "my-fill.gguf", FLUX_FILL)
+        _entries, found = self.build()
+        (mine,) = [e for e in found if e.files[0].dest == "unet/my-fill.gguf"]
+        self.assertEqual(mine.file_by_role("clip1").dest, "text_encoders/t5xxl_fp16.safetensors")
+        self.t5("t5xxl_fp8_e4m3fn.safetensors", 4_893_934_904)
+        _entries, found = self.build()
+        (mine,) = [e for e in found if e.files[0].dest == "unet/my-fill.gguf"]
+        self.assertEqual(mine.file_by_role("clip1").dest, "text_encoders/t5xxl_fp8_e4m3fn.safetensors")  # closest
 
 
 if __name__ == "__main__":

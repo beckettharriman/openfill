@@ -308,7 +308,7 @@ def scan(
             rel = path.relative_to(root).as_posix()
             if rel.lower() in known:
                 continue
-            if tag and _shadowed(rel, [Path(models_root), *shared_roots[: index - 1]]):
+            if tag and _shadowed(rel, [r for r, _t in roots[:index]]):  # the folders ComfyUI reads first
                 continue
             try:
                 st = path.stat()
@@ -569,8 +569,10 @@ def build(
     broken folder; :func:`with_local` is the form that never raises."""
     entries = list(entries)
     shared = list(shared)
-    found, skipped = scan(models_root, entries, base, shared)
-    return cat.merge_entries(share(entries, models_root, shared), found), found, skipped
+    adopted = share(entries, models_root, shared)
+    # files a catalog entry already took (also from an alias folder) are not "your file" again
+    found, skipped = scan(models_root, adopted, base, shared)
+    return cat.merge_entries(adopted, found), found, skipped
 
 
 def with_local(

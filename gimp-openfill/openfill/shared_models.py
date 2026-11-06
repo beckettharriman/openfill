@@ -57,11 +57,31 @@ class Candidate:
 # ------------------------------------------------------------------- setting --
 
 
+def _split_typed(text: str) -> list[str]:
+    """Folders typed on one line, separated by the system's list separator (``;`` on Windows,
+    ``:`` elsewhere). A folder whose own name holds the separator is kept whole when it exists:
+    the longest run of pieces that is an existing folder wins."""
+    tokens = text.split(os.pathsep)
+    out, i = [], 0
+    while i < len(tokens):
+        take = i + 1
+        for j in range(len(tokens), i + 1, -1):
+            if Path(os.path.expanduser(os.pathsep.join(tokens[i:j]).strip().strip('"'))).is_dir():
+                take = j
+                break
+        out.append(os.pathsep.join(tokens[i:take]))
+        i = take
+    return out
+
+
 def parse(text: str | None) -> list[str]:
-    """The folders of the ``shared_models`` setting: separated by the system's path list
-    separator (``;`` on Windows, ``:`` elsewhere) or new lines; blanks and repeats dropped."""
+    """The folders of the ``shared_models`` setting, blanks and repeats dropped. The setting
+    keeps one folder per line (:func:`join`); a single typed line is split on the system's list
+    separator, keeping existing folders whole (:func:`_split_typed`)."""
+    text = text or ""
+    pieces = text.split("\n") if "\n" in text else _split_typed(text)
     out: list[str] = []
-    for part in re.split("[\n" + re.escape(os.pathsep) + "]", text or ""):
+    for part in pieces:
         part = part.strip().strip('"')
         if part and part not in out:
             out.append(part)
@@ -69,8 +89,44 @@ def parse(text: str | None) -> list[str]:
 
 
 def join(folders: Iterable[str]) -> str:
-    """The setting's text for ``folders`` (inverse of :func:`parse`)."""
-    return os.pathsep.join(parse("\n".join(str(f) for f in folders)))
+    """The setting's text for ``folders``: one per line (never split again, whatever is in a
+    folder's name). Empty for none."""
+    out: list[str] = []
+    for f in folders:
+        f = str(f).strip()
+        if f and f not in out:
+            out.append(f)
+    return "".join(f + "\n" for f in out)
+
+
+def display(text: str | None) -> str:
+    """The setting on one line, for a one-line text field (folders separated by ``;`` on
+    Windows, ``:`` elsewhere); :func:`parse` reads it back."""
+    return os.pathsep.join(parse(text))
+
+
+def check(text: str | None, own_models_root: Path | str | None = None) -> tuple[list[str], str]:
+    """(the folders, written out in full, "") or ([], the problem in plain words) for what the
+    user typed: every folder must be a full path to an existing folder (``~`` is expanded),
+    and none may be OpenFill's own models folder or a link to it."""
+    out = []
+    for raw in parse(text):
+        folder = os.path.expanduser(raw)
+        if not os.path.isabs(folder):
+            return [], f"Use the full path of the folder, not {raw!r}."
+        if not os.path.isdir(folder):
+            return [], f"Folder not found: {raw}"
+        folder = os.path.normpath(folder)
+        if own_models_root is not None:
+            own = Path(own_models_root)
+            for root in model_roots(folder) or [Path(folder)]:
+                if _same(root, own):
+                    return [], (
+                        f"{raw} is OpenFill's own models folder (or a link to it). "
+                        "Choose the folder of the other ComfyUI instead."
+                    )
+        out.append(folder)
+    return out, ""
 
 
 def _same(a: Path, b: Path) -> bool:
@@ -80,19 +136,48 @@ def _same(a: Path, b: Path) -> bool:
         return False
 
 
+def _real(path: Path | str) -> str:
+    return os.path.normcase(os.path.realpath(str(path)))
+
+
 def inside(path: Path | str, roots: Iterable[Path | str]) -> bool:
-    """True when ``path`` is one of ``roots`` or below one (links resolved)."""
+    """True when ``path`` is one of ``roots`` or below one, comparing real paths (links and
+    junctions resolved)."""
     try:
-        p = os.path.normcase(str(Path(path).resolve()))
+        p = _real(path)
     except OSError:
         return True  # cannot tell: treat as shared, so nothing is written there
     for root in roots:
         try:
-            r = os.path.normcase(str(Path(root).resolve()))
+            r = _real(root)
         except OSError:
             continue
         if p == r or p.startswith(r.rstrip(os.sep) + os.sep):
             return True
+    return False
+
+
+def blocked(path: Path | str, guard: Iterable[Path | str], own_models_root: Path | str | None) -> bool:
+    """True when OpenFill must not write or delete ``path``: it is (by its real path) in a
+    shared root of :func:`guard_roots`. OpenFill's own models folder is never blocked when a
+    shared folder merely contains it (a parent such as ``C:\\AI`` holding both installs);
+    it is when its real path IS a shared root (a link from OpenFill's folder to the other's)."""
+    own = None
+    if own_models_root is not None:
+        try:
+            own = _real(own_models_root)
+        except OSError:
+            own = None
+    for root in guard:
+        try:
+            r = _real(root)
+        except OSError:
+            continue
+        if not inside(path, [r]):
+            continue
+        if own is not None and own != r and inside(own, [r]) and inside(path, [own]):
+            continue  # OpenFill's own folder below a shared parent: only the rest is shared
+        return True
     return False
 
 
@@ -176,12 +261,23 @@ def model_roots(folder: Path | str) -> list[Path]:
     return unique
 
 
+def guard_roots(setting: str | None) -> list[Path]:
+    """Every root of the folders in the setting, OpenFill's own models folder included when a
+    link makes it one of them: the places the supervisor never writes to (:func:`blocked`)."""
+    out: list[Path] = []
+    for folder in parse(setting):
+        for root in model_roots(os.path.expanduser(folder)) or [Path(os.path.expanduser(folder))]:
+            if not any(_same(root, r) for r in out):
+                out.append(root)
+    return out
+
+
 def roots_for(setting: str | None, own_models_root: Path | str | None) -> list[Path]:
     """All roots of the folders in the setting, in order, without OpenFill's own models
     folder (that one is read and written as before)."""
     out: list[Path] = []
     for folder in parse(setting):
-        for root in model_roots(folder):
+        for root in model_roots(os.path.expanduser(folder)):
             if own_models_root is not None and _same(root, Path(own_models_root)):
                 continue
             if not any(_same(root, r) for r in out):
@@ -301,7 +397,7 @@ def yaml_text(roots: Iterable[Path], own_models_root: Path | str | None = None) 
         sections.insert(0, ("openfill_own", [(n, str(Path(own_models_root).resolve() / n)) for n in own]))
     for head, entries in sections:
         lines.append(f"{head}:")
-        lines += [f"  {name}: {json.dumps(path)}" for name, path in entries]
+        lines += [f"  {name}: {json.dumps(path, ensure_ascii=False)}" for name, path in entries]
         lines.append("")
     return "\n".join(lines)
 

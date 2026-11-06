@@ -961,6 +961,16 @@ def run_settings(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig, _data:
     shared_before = settings.shared_models
     for key in SETTINGS_KEYS:
         setattr(settings, key, config.get_property(key.replace("_", "-")))
+    from openfill import catalog as cat
+    from openfill import shared_models
+
+    own = cat.default_models_root(settings.comfy_dir) if settings.comfy_dir else None
+    folders, problem = shared_models.check(settings.shared_models, own)
+    if problem:
+        Gimp.message(f"Models from another ComfyUI were not changed: {problem}")
+        settings.shared_models = shared_before
+    else:
+        settings.shared_models = shared_models.join(folders)
     try:
         settings.save(paths.config)
     except OSError as err:
@@ -968,12 +978,12 @@ def run_settings(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig, _data:
         Gimp.message(text)
         return procedure.new_return_values(Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error(text))
     if settings.shared_models != shared_before:
-        # ComfyUI reads its model folders when it starts: stop it, the next job starts it again
-        from openfill.server import ServerManager
-
-        manager = ServerManager(settings, paths)
-        if manager.read_state():
-            manager.request_stop()
+        # the yaml for ComfyUI (also when you start it yourself); a running engine is started
+        # again with it at the next job, once nothing is running (App.backend)
+        try:
+            shared_models.write_config(paths.base, shared_models.roots_for(settings.shared_models, own), own)
+        except OSError as err:
+            Gimp.message(f"The list of other ComfyUI folders could not be written: {err}")
     if config.get_property("check-backend"):
         from openfill.app import App
 

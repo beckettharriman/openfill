@@ -100,7 +100,9 @@ class GearView(tk.Frame):
         self.engine.autostart.set(bool(settings.autostart))
         self.engine.idle.set(str(settings.idle_timeout_minutes))
         self.engine.extra.set(str(settings.extra_server_args or ""))
-        self.engine.shared.set(str(settings.shared_models or ""))
+        from openfill import shared_models
+
+        self.engine.shared.set(shared_models.display(settings.shared_models))
         for key, entry in self.generation.fields.items():
             entry.set(str(getattr(settings, key)))
 
@@ -127,6 +129,14 @@ class GearView(tk.Frame):
             self.say(str(err), BAD)
             return
         folder = self.engine.folder.get().strip()
+        from openfill import shared_models
+
+        typed = self.engine.shared.get().strip()
+        try:
+            shared = app.check_shared_models(typed)  # first: a bad folder changes nothing
+        except Exception as err:  # noqa: BLE001 - says what is wrong
+            self.say(str(err), BAD)
+            return
         try:
             if folder != (app.settings.comfy_dir or ""):
                 app.use_comfy_dir(folder)
@@ -136,9 +146,8 @@ class GearView(tk.Frame):
                 setattr(app.settings, key, value)
             app.settings.save(app.paths.config)
             app.reload_settings()
-            shared = self.engine.shared.get().strip()
-            if shared != (app.settings.shared_models or ""):
-                app.set_shared_models(shared)  # checks the folders, rescans, restarts the engine
+            if shared_models.parse(shared) != shared_models.parse(app.settings.shared_models):
+                app.set_shared_models(shared)  # saves, writes the yaml, rescans; the engine picks it up when idle
         except Exception as err:  # noqa: BLE001 - says what is wrong
             self.say(str(err), BAD)
             return
@@ -443,7 +452,8 @@ class EngineView(tk.Frame):
             parent=self.bar.root, title="Choose the folder of another ComfyUI", mustexist=True
         )
         if folder:
-            self.shared.set(shared_models.join([*shared_models.parse(self.shared.get()), folder]))
+            folders = [*shared_models.parse(self.shared.get()), folder]
+            self.shared.set(shared_models.display(shared_models.join(folders)))
 
     def _find_shared(self) -> None:
         from openfill import shared_models
@@ -452,7 +462,8 @@ class EngineView(tk.Frame):
         if not found:
             self.say("No other ComfyUI was found. Use Add to pick its folder.", DIM)
             return
-        self.shared.set(shared_models.join([*shared_models.parse(self.shared.get()), *(str(c.path) for c in found)]))
+        folders = [*shared_models.parse(self.shared.get()), *(str(c.path) for c in found)]
+        self.shared.set(shared_models.display(shared_models.join(folders)))
         self.say("Added " + ", ".join(f"{c.source} ({c.path})" for c in found) + ". Save to use its models.", OK)
 
     def check(self) -> None:

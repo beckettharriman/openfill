@@ -1439,6 +1439,17 @@ class SharedModelsPageTests(unittest.TestCase):
         app.paths.config = Path(tmp.name) / "config.json"
         app.reload_settings = lambda: None
         app.shared_suggestions.return_value = [Candidate(Path(tmp.name) / "krita" / "server", "Krita AI Diffusion")]
+
+        def check(text):
+            from openfill import shared_models
+            from openfill.backend import BackendError
+
+            folders = shared_models.parse(text)
+            if any(not f.startswith("/") for f in folders):
+                raise BackendError("Use the full path of the folder")
+            return shared_models.join(folders)
+
+        app.check_shared_models.side_effect = check
         api = web.Api.__new__(web.Api)
         api.service = mock.Mock(app=app)
         return api, app, Path(tmp.name)
@@ -1450,7 +1461,23 @@ class SharedModelsPageTests(unittest.TestCase):
         app.set_shared_models.assert_not_called()
         self.assertEqual(app.settings.steps, 30)
         api.post("/api/settings", {"shared_models": "/k/server"})
-        app.set_shared_models.assert_called_once_with("/k/server")
+        app.set_shared_models.assert_called_once_with("/k/server\n")
+
+    def test_a_bad_folder_changes_no_setting(self):
+        """Review B8: the folders are checked before anything is saved."""
+        from openfill.backend import BackendError
+
+        api, app, _tmp = self.api()
+        with self.assertRaises(BackendError):
+            api.post("/api/settings", {"steps": 31, "shared_models": "relative/folder"})
+        self.assertEqual(app.settings.steps, 25)
+        self.assertFalse(app.paths.config.exists())
+        app.set_shared_models.assert_not_called()
+
+    def test_the_field_shows_one_line(self):
+        api, app, _tmp = self.api()
+        app.settings.shared_models = "/a\n/b\n"
+        self.assertEqual(api.settings()["shared_models"], os.pathsep.join(["/a", "/b"]))
 
     def test_find_adds_what_is_found(self):
         api, _app, tmp = self.api()

@@ -1079,6 +1079,9 @@ class SettingsDialog(Gtk.Dialog):
             box.pack_start(browse, False, False, 0)
             return box
         if key == "shared_models":
+            from . import shared_models
+
+            entry.set_text(shared_models.display(str(value)))
             column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             row.pack_start(entry, True, True, 0)
@@ -1104,7 +1107,8 @@ class SettingsDialog(Gtk.Dialog):
         )
         chooser.add_buttons("_Cancel", CANCEL, "_Select", OK)
         if chooser.run() == OK and chooser.get_filename():
-            entry.set_text(shared_models.join([*shared_models.parse(entry.get_text()), chooser.get_filename()]))
+            folders = [*shared_models.parse(entry.get_text()), chooser.get_filename()]
+            entry.set_text(shared_models.display(shared_models.join(folders)))
         chooser.destroy()
 
     def _find_shared(self, _button: Gtk.Button, entry: Gtk.Entry, note: Gtk.Label) -> None:
@@ -1121,7 +1125,7 @@ class SettingsDialog(Gtk.Dialog):
         if not found:
             note.set_text(ui_text.SHARED_NOTHING_FOUND)
             return
-        entry.set_text(shared_models.join([*have, *(str(c.path) for c in found)]))
+        entry.set_text(shared_models.display(shared_models.join([*have, *(str(c.path) for c in found)])))
         note.set_text(ui_text.SHARED_FOUND.format(what=", ".join(f"{c.source} ({c.path})" for c in found)))
 
     def _browse(self, _button: Gtk.Button, entry: Gtk.Entry) -> None:

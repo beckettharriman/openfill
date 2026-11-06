@@ -517,11 +517,20 @@ class TaskWorker:
         own = catalog.default_models_root(settings.comfy_dir) if settings.comfy_dir else None
         return shared_models.roots_for(settings.shared_models, own)
 
+    def _is_shared(self, path: Path) -> bool:
+        """``path`` (by its real path) is in a folder of another install named in config.json,
+        also when OpenFill's own models folder is a link into it (shared_models.blocked)."""
+        settings = Settings.load(self.config_path, backup=False)
+        own = catalog.default_models_root(settings.comfy_dir) if settings.comfy_dir else None
+        return shared_models.blocked(path, shared_models.guard_roots(settings.shared_models), own)
+
     def _refuse_shared(self, path: Path) -> None:
         """Raise ``ValueError`` when ``path`` is in a shared folder of another install."""
-        roots = self._shared_roots()
-        if roots and shared_models.inside(path, roots):
-            raise ValueError(f"{path} is in another ComfyUI's models folder, which OpenFill only reads")
+        if self._is_shared(path):
+            raise ValueError(
+                f"{path} is in another ComfyUI's models folder, which OpenFill only reads "
+                "(OpenFill's own models folder may be a link to it)"
+            )
 
     def _catalog(self) -> list[catalog.ModelEntry]:
         """The shipped catalog plus the live (hub) entries the user chose in the
@@ -764,7 +773,6 @@ class TaskWorker:
         root = self._checked_models_root(task)
         known = self._catalog_files(task)
         main = catalog.live_main_file(catalog.by_id(self._catalog(), str(task.get("model_id") or "")))
-        shared = self._shared_roots()
         removed = []
         for rel in task["files"]:
             try:
@@ -779,7 +787,8 @@ class TaskWorker:
                 continue  # a file of another ComfyUI install (shared_models.py) is only ever read
             if not spec.url and spec != main:
                 continue  # a companion found in place (your own text encoder or VAE) is never deleted
-            if shared_models.inside(path, shared):
+            if self._is_shared(path):
+                self.log(f"not deleting {path}: it is in another ComfyUI's models folder", "WARNING")
                 continue
             for p in (path, downloads.part_path(path)):
                 if p.is_file():
@@ -1041,6 +1050,9 @@ def _run_backend(
         "watch_pid": args.watch_pid,
         "idle_minutes": args.idle_minutes,
         "command": cmd,
+        # the shared folders (yaml text) this ComfyUI was started with: App starts it again,
+        # when idle, after the setting changed (ComfyUI reads model folders only when it starts)
+        "shared_models": shared_yaml.read_text(encoding="utf-8") if shared_yaml is not None else "",
         "status": "starting",
     }
     write_json(state_path, state)

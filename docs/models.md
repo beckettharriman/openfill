@@ -409,7 +409,8 @@ Put that folder in **Models from another ComfyUI** (GIMP: Settings > General;
 PhotoCraft: the gear, Engine). **Find Krita AI Diffusion** looks for Krita AI
 Diffusion's server and other ComfyUI folders on this computer; **Add folder...**
 lets you pick one. Separate several folders with `;` on Windows and `:` on Mac
-and Linux.
+and Linux. Use full paths (`~` works); a folder that is not there, or that is
+OpenFill's own models folder (or a link to it), is refused with a message.
 
 You can give Krita AI Diffusion's `server` folder (by default
 `%APPDATA%\krita\ai_diffusion\server` on Windows,
@@ -425,10 +426,18 @@ left as they are. Models found there show "uses files from another ComfyUI
 (read only)" in the Models tab, and anything still missing (for example the
 FLUX.1 Fill model itself, which Krita AI Diffusion does not have) is
 downloaded into OpenFill's own models folder. A file with the same name in
-OpenFill's own folder comes first. Changing the list restarts the AI engine
-the next time you use it.
+OpenFill's own folder comes first. A new list is used from the next job: if
+the AI engine is running, OpenFill starts it again just before that job, but
+never while it is generating or downloading.
+
+If OpenFill's own models folder sits inside a folder you list (say `C:\AI`
+holds both installs), OpenFill still downloads and deletes its own files as
+before; only the rest of that folder is read only. If OpenFill's models folder
+is a link to the other install's models, OpenFill treats all of it as read only
+and does not download or delete anything there.
 
 If you start ComfyUI yourself instead of letting OpenFill start it, ComfyUI
 only sees these folders when you add
 `--extra-model-paths-config <OpenFill settings folder>/shared-model-paths.yaml`
-to its command line. OpenFill writes that file when it starts the engine.
+to its command line. OpenFill writes that file when you save the setting, and
+again each time it starts the engine.
