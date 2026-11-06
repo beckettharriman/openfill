@@ -7,7 +7,7 @@ The short steps are in the [README](../README.md#install). This page has the res
 - **A graphics card with 8 GB or more** for the SDXL and FLUX models: NVIDIA, or AMD Radeon RX 7000 or newer (see [AMD graphics cards](#amd-graphics-cards)). LaMa (Remove) and the SD 1.5 models run on less. Without a card ComfyUI can use, it runs on the processor, which takes minutes per fill.
 - **ComfyUI.** On Windows, OpenFill downloads it for you the first time (about 2 GB, about 7 GB unpacked). On Linux and macOS you set it up once (steps below). If you already have ComfyUI, point OpenFill at it.
 - **Disk space** for the models: from 0.2 GB (LaMa) to about 13 GB (FLUX.1 Fill Q6).
-- **For PhotoCraft:** PhotoCraft 0.12 to 0.16, Windows 10 or 11 or Linux, and Python 3.10 or newer with Pillow. ComfyUI's existing Python works; Tk is optional. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. PhotoCraft 0.2.3 adds Apple Silicon support, tested on an M3. See [PhotoCraft on macOS](#photocraft-on-macos).
+- **For PhotoCraft:** OpenFill for PhotoCraft 0.2.4 works with PhotoCraft 0.12 to 0.20, on Windows 10 or 11 or Linux, and Python 3.10 or newer with Pillow. ComfyUI's existing Python works; Tk is optional. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. OpenFill for PhotoCraft 0.2.3 added Apple Silicon support, tested on an M3. See [PhotoCraft on macOS](#photocraft-on-macos).
 - **For GIMP:** GIMP 3.2 or newer on Windows, Linux or macOS. OpenFill uses GIMP's own Python and needs no extra packages.
 
 The steps below mention the **model manager**: that's where you get models and see what fits your graphics card. In PhotoCraft it's the gear icon in the OpenFill panel, Models section (the **Open model manager** button on the first run goes there too). In GIMP it's `Filters > OpenFill > Generative Fill...`, Models tab.
@@ -176,7 +176,7 @@ OpenFill checks the projected dependency path before downloading or starting Com
 
 ## AMD graphics cards
 
-New in OpenFill for PhotoCraft 0.2.2 and OpenFill for GIMP 2.0.0-beta.6. A user [tested PhotoCraft 0.2.2 on an RX 7800 XT](https://github.com/beckettharriman/openfill/issues/3): Create, Fill, Remove and Expand worked with DreamShaper and LaMa after shortening the engine path. Other AMD cards and models still need testing. If you try it, please tell me how it went on [Issues](https://github.com/beckettharriman/openfill/issues), good or bad.
+New in OpenFill for PhotoCraft 0.2.2 and OpenFill for GIMP 2.0.0-beta.6. A user [tested OpenFill for PhotoCraft 0.2.2 on an RX 7800 XT](https://github.com/beckettharriman/openfill/issues/3): Create, Fill, Remove and Expand worked with DreamShaper and LaMa after shortening the engine path. Other AMD cards and models still need testing. If you try it, please tell me how it went on [Issues](https://github.com/beckettharriman/openfill/issues), good or bad.
 
 ComfyUI runs on AMD cards through ROCm, AMD's version of CUDA. LaMa, MAT, the SD 1.5 and SDXL models and the Fooocus inpaint patch are plain PyTorch, so they should work the same as on NVIDIA. The GGUF versions of FLUX.1 Fill and Qwen Image Edit go through ComfyUI-GGUF, which has an open report of noise-only images on an RX 7900 with ROCm ([issue 300](https://github.com/city96/ComfyUI-GGUF/issues/300)). On an AMD card the model manager says so next to them and leaves them out of Recommended for this PC. OpenFill reads the card's name and graphics memory without AMD's tools (from DXGI or the driver's registry key on Windows, `/sys/class/drm` on Linux), so Recommended for this PC fits AMD cards too.
 
@@ -244,6 +244,6 @@ Every error message ends with what to do next, and in GIMP the same advice shows
 - **PhotoCraft was opened another way:** open it with "PhotoCraft with OpenFill" (or the menu entry the installer set up on Linux). A PhotoCraft opened another way has no control channel; OpenFill notices and asks you to close it and open it again.
 - **Where things are kept:** `%APPDATA%\OpenFill for PhotoCraft` on Windows and `~/.config/openfill-photocraft` on Linux for the PhotoCraft version, `<GIMP profile>/openfill` for the GIMP plug-in. Settings in the GIMP plug-in are created the first time you change one; until then the defaults are used.
 
-### One-click uninstall (PhotoCraft 0.2.3)
+### One-click uninstall (OpenFill for PhotoCraft 0.2.3 and newer)
 
 Close OpenFill, open **Uninstall OpenFill for PhotoCraft**, then confirm. On Windows it is in the Start menu; on Linux it is in the app menu; on macOS it is in `~/Applications`. PhotoCraft, settings and models stay in place. The command-line uninstall steps above still work for older installations. The Mac command-line uninstall and reinstall passed on the M3; the confirmation dialog still needs a hands-on check.

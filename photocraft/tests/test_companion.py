@@ -1422,6 +1422,42 @@ class PageTests(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_about_names_openfill_and_the_photocraft_range(self):
+        """A Reddit user read OpenFill 0.2.4 as PhotoCraft 0.2.4: the About line says both."""
+        import openfill_photocraft as pkg
+
+        oldest, newest = pkg.PHOTOCRAFT_TESTED
+        self.assertEqual(
+            pkg.about(), f"OpenFill for PhotoCraft {pkg.__version__} · works with PhotoCraft {oldest} to {newest}"
+        )
+        self.assertNotIn(f"PhotoCraft {pkg.__version__} to", pkg.about())
+        self.assertLess(tuple(map(int, oldest.split("."))), tuple(map(int, newest.split("."))))
+
+    def test_state_and_page_show_the_about_line(self):
+        from types import SimpleNamespace
+
+        import openfill_photocraft as pkg
+        from openfill_photocraft import web
+
+        app = SimpleNamespace(
+            active_model_id=lambda: "lama-big",
+            settings=SimpleNamespace(comfy_dir=""),
+        )
+        service = SimpleNamespace(
+            app=app,
+            state=SimpleNamespace(snapshot=lambda: {}),
+            photocraft=lambda: {"connected": False},
+            busy=lambda: False,
+            setup_progress=lambda: None,
+        )
+        api = web.Api(service)
+        state = api.state()
+        self.assertEqual(state["about"], pkg.about())
+        self.assertEqual(state["version"], pkg.__version__)
+        page = (Path(web.__file__).with_name("static") / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="about"', page)
+        self.assertIn("s.about", page)
+
 
 class LaunchTests(unittest.TestCase):
     """How the launcher starts PhotoCraft, which refuses unknown, repeated and conflicting options."""

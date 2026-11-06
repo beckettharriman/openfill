@@ -181,6 +181,8 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="field"><span class="label">Extra ComfyUI options</span><input id="s-extra_server_args" type="text" placeholder="for example --lowvram" aria-label="Extra ComfyUI options"></div>
       <div class="divider"></div>
       <div class="stack"><div class="label">Engine</div><div style="display:flex;gap:8px"><button class="btn" id="check">Check</button><button class="btn" id="stop">Stop engine</button><button class="btn" id="logs">Logs</button></div><div class="note dim" id="check-out" hidden></div></div>
+      <div class="divider"></div>
+      <div class="stack"><div class="label">About</div><div class="small" id="about"></div></div>
     </div>
     <div class="stack" id="sec-generation" style="gap:12px" hidden>
       <div class="grid2"><div class="field"><span class="label">Steps</span><input id="s-steps" type="number"></div><div class="field"><span class="label">Prompt strictness (CFG)</span><input id="s-cfg" type="number" step="0.5"></div></div>
@@ -308,6 +310,7 @@ async function tick(){
   let s;try{s=await get("/api/state")}catch(e){$("status").textContent="OpenFill stopped";return}
   if(s.pick){if(lastPick<0)lastPick=s.pick.seq;else if(s.pick.seq!==lastPick){lastPick=s.pick.seq;
     location.hash="#"+(s.pick.action==="panel"?"fill":s.pick.action);window.focus();if(s.pick.action!=="remove")$("prompt").focus();if(s.pick.action==="remove"&&!s.busy)$("go").click()}}
+  if(s.about&&$("about").textContent!==s.about)$("about").textContent=s.about;
   pc=s.photocraft||{};doc=pc.document||null;sel=pc.selection||null;comfy=s.comfyReady;
   if(s.activeModel!==activeId){activeId=s.activeModel||"";fillSelect()}
   const st=!comfy?["Not set up","warn"]:["Ready","ok"];$("status").textContent=st[0];$("dot").style.background=C[st[1]];
