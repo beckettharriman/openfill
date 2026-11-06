@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlparse
 from openfill import catalog as cat
 from openfill.backend import describe_error
 
-from . import __version__
+from . import __version__, about
 from .service import Service
 
 STATIC = Path(__file__).with_name("static")
@@ -54,6 +54,7 @@ class Api:
         app = self.service.app
         return {
             "version": __version__,
+            "about": about(),
             "job": self.service.state.snapshot(),
             "photocraft": self.service.photocraft(),
             "busy": self.service.busy(),

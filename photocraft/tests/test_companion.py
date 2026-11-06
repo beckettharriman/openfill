@@ -743,6 +743,31 @@ class InstallTests(unittest.TestCase):
         "[Desktop Action new]\nName=New Window\nExec=photocraft --new-instance\n"
     )
 
+    def test_checksums_never_the_signature(self):
+        """PhotoCraft 0.20.2 added SHA256SUMS.txt.asc; whatever order GitHub lists the assets in,
+        the installer checks the tarball against the list, not the signature."""
+        from unittest import mock
+
+        from openfill_photocraft import install
+
+        base = "https://example.invalid/"
+        tar = "photocraft-0.20.2-linux-x86_64.tar.gz"
+        for names in (
+            ["SHA256SUMS.txt.asc", "SHA256SUMS.txt", tar],  # signature listed first (0.20.2 style)
+            [tar, "SHA256SUMS.txt", "SHA256SUMS.txt.asc"],
+            [tar, "SHA256SUMS.txt"],  # 0.12 to 0.20.1
+            ["SHA256SUMS.sig", "SHA256SUMS", tar],
+        ):
+            release = {"tag_name": "v0.20.2", "assets": [{"name": n, "browser_download_url": base + n} for n in names]}
+            with mock.patch.object(install.platform, "machine", return_value="x86_64"):
+                name, url, sums = install.linux_asset(release)
+            self.assertEqual((name, url), (tar, base + tar))
+            self.assertFalse(sums.endswith((".asc", ".sig")), names)
+            self.assertTrue(sums.startswith(base + "SHA256SUMS"), names)
+        self.assertEqual(install.checksums_url({"SHA256SUMS.txt.asc": "x"}), "")
+        with self.assertRaises(RuntimeError):
+            install.linux_asset({"tag_name": "v0.20.2", "assets": [{"name": tar, "browser_download_url": "u"}]})
+
     def test_entry_starts_openfill(self):
         from openfill_photocraft import install
 
@@ -1421,6 +1446,42 @@ class PageTests(unittest.TestCase):
             self.assertTrue(url.endswith("?key=secret-key"))
         finally:
             server.shutdown()
+
+    def test_about_names_openfill_and_the_photocraft_range(self):
+        """A Reddit user read OpenFill 0.2.4 as PhotoCraft 0.2.4: the About line says both."""
+        import openfill_photocraft as pkg
+
+        oldest, newest = pkg.PHOTOCRAFT_TESTED
+        self.assertEqual(
+            pkg.about(), f"OpenFill for PhotoCraft {pkg.__version__} · works with PhotoCraft {oldest} to {newest}"
+        )
+        self.assertNotIn(f"PhotoCraft {pkg.__version__} to", pkg.about())
+        self.assertLess(tuple(map(int, oldest.split("."))), tuple(map(int, newest.split("."))))
+
+    def test_state_and_page_show_the_about_line(self):
+        from types import SimpleNamespace
+
+        import openfill_photocraft as pkg
+        from openfill_photocraft import web
+
+        app = SimpleNamespace(
+            active_model_id=lambda: "lama-big",
+            settings=SimpleNamespace(comfy_dir=""),
+        )
+        service = SimpleNamespace(
+            app=app,
+            state=SimpleNamespace(snapshot=lambda: {}),
+            photocraft=lambda: {"connected": False},
+            busy=lambda: False,
+            setup_progress=lambda: None,
+        )
+        api = web.Api(service)
+        state = api.state()
+        self.assertEqual(state["about"], pkg.about())
+        self.assertEqual(state["version"], pkg.__version__)
+        page = (Path(web.__file__).with_name("static") / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="about"', page)
+        self.assertIn("s.about", page)
 
 
 class LaunchTests(unittest.TestCase):

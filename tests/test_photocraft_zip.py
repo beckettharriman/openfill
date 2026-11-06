@@ -93,5 +93,28 @@ class PhotoCraftZipTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
 
+class ReleaseTitleTests(unittest.TestCase):
+    """OpenFill's 0.2.x was read as a PhotoCraft version: the title names both."""
+
+    def test_title_names_openfill_and_the_photocraft_range(self):
+        sys.path.insert(0, str(ROOT / "photocraft"))
+        from openfill_photocraft import PHOTOCRAFT_TESTED, __version__
+
+        title = make_photocraft_zip.release_title()
+        oldest, newest = PHOTOCRAFT_TESTED
+        self.assertEqual(title, f"OpenFill for PhotoCraft {__version__} (works with PhotoCraft {oldest} to {newest})")
+        self.assertEqual(make_photocraft_zip.photocraft_range(), PHOTOCRAFT_TESTED)
+
+    def test_title_reads_a_tree_of_its_own(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            init = Path(tmp) / "photocraft" / "openfill_photocraft" / "__init__.py"
+            init.parent.mkdir(parents=True)
+            init.write_text('__version__ = "9.8.7"\nPHOTOCRAFT_TESTED = ("0.30", "0.41")\n', encoding="utf-8")
+            self.assertEqual(
+                make_photocraft_zip.release_title(Path(tmp)),
+                "OpenFill for PhotoCraft 9.8.7 (works with PhotoCraft 0.30 to 0.41)",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

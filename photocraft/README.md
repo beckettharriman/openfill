@@ -6,11 +6,11 @@ It uses the same engine as [OpenFill for GIMP](https://github.com/beckettharrima
 
 <img src="../docs/screenshots/photocraft-demo.gif" width="720" alt="OpenFill in PhotoCraft: a fill from a prompt, an object removed and the canvas expanded">
 
-> **Version 0.2.4** fixes Mac prompt typing and model-menu focus, and lets you reuse ComfyUI's Python with the fallback panel in your default browser. It works with PhotoCraft 0.12 to 0.16. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. The Mac version passed Fill, Remove, Expand and Create on an M3 MacBook Air; see [the test results](../docs/evidence/macos-photocraft-2026-10-26/).
+> **OpenFill for PhotoCraft 0.2.4 · works with PhotoCraft 0.12 to 0.20.** 0.2.4 is OpenFill's own version, not a PhotoCraft version. It fixes Mac prompt typing and model-menu focus, and lets you reuse ComfyUI's Python with the fallback panel in your default browser. I tested it end to end on Windows 11 with PhotoCraft 0.12.0 and an RTX 4070 Laptop GPU (8 GB), and on Linux (Fedora 44, RTX 2070 Max-Q) with PhotoCraft 0.16.0, with a shorter check on 0.12.0, 0.13.0, 0.14.0 and 0.15.1. On 2026-11-06 it passed install, Fill, Remove, Expand and Create on Linux with PhotoCraft 0.16.0, 0.17.0, 0.18.0, 0.19.0, 0.20.1 and 0.20.2, with ComfyUI on an RTX 4070 Laptop GPU. The Mac version passed Fill, Remove, Expand and Create on an M3 MacBook Air; see [the test results](../docs/evidence/macos-photocraft-2026-10-26/).
 
 ## What you need
 
-- **PhotoCraft 0.12 to 0.16** (the Windows `.msi` or the Linux build from its [releases page](https://github.com/storytold/photocraft/releases)). The newest, 0.16.0, is fine.
+- **PhotoCraft 0.12 to 0.20** (the Windows `.msi` or the Linux build from its [releases page](https://github.com/storytold/photocraft/releases)). The newest, 0.20.2, is fine.
 - **Windows 10 or 11, Linux, or macOS on Apple Silicon.**
 - **An NVIDIA graphics card, or an AMD Radeon RX 7000 or newer**, 8 GB or more for the SDXL and FLUX models. LaMa (Remove) and the SD 1.5 models are fine on less. AMD support is new and I haven't been able to test it on an AMD card yet ([AMD graphics cards](../docs/install.md#amd-graphics-cards)). Without a card ComfyUI can use, it runs on the processor, which is very slow.
 - **ComfyUI.** On Windows the OpenFill panel downloads it for you the first time (a 1.9 GB download, 6.7 GB unpacked; the version for AMD cards is 1.6 GB). If you use OpenFill for GIMP, the same ComfyUI is found by itself.

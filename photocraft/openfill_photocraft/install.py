@@ -129,6 +129,21 @@ def latest_release() -> dict:
         return json.loads(r.read())
 
 
+SIGNATURE_SUFFIXES = (".asc", ".sig", ".minisig")
+
+
+def checksums_url(assets: dict[str, str]) -> str:
+    """The release's SHA-256 list, never its signature: from PhotoCraft 0.20.2 on a release also
+    has SHA256SUMS.txt.asc, and the asset order GitHub returns is not a promise."""
+    for exact in ("SHA256SUMS.txt", "SHA256SUMS"):
+        if exact in assets:
+            return assets[exact]
+    return next(
+        (url for n, url in assets.items() if n.startswith("SHA256SUMS") and not n.endswith(SIGNATURE_SUFFIXES)),
+        "",
+    )
+
+
 def linux_asset(release: dict) -> tuple[str, str, str]:
     """(tarball name, its URL, SHA256SUMS URL) for this machine."""
     arch = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}.get(
@@ -136,7 +151,7 @@ def linux_asset(release: dict) -> tuple[str, str, str]:
     )
     name = f"photocraft-{release['tag_name'].lstrip('v')}-linux-{arch}.tar.gz"
     assets = {a["name"]: a["browser_download_url"] for a in release.get("assets") or []}
-    sums = next((url for n, url in assets.items() if n.startswith("SHA256SUMS")), "")
+    sums = checksums_url(assets)
     if name not in assets or not sums:
         raise RuntimeError(f"PhotoCraft {release['tag_name']} has no Linux build for {arch}.")
     return name, assets[name], sums

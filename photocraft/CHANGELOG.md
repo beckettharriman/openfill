@@ -5,6 +5,16 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+The version numbers below (0.2.x) are OpenFill for PhotoCraft's own, not PhotoCraft's.
+Each entry from now on says which PhotoCraft versions it works with.
+
+## [Unreleased] - OpenFill for PhotoCraft · works with PhotoCraft 0.12 to 0.20
+
+- Tested on PhotoCraft 0.17.0, 0.18.0, 0.19.0, 0.20.1 and 0.20.2 (install, Fill, Remove, Expand and Create). No changes were needed, so the supported range is now PhotoCraft 0.12 to 0.20.
+- The Engine section of the panel shows an About line: "OpenFill for PhotoCraft 0.2.x · works with PhotoCraft 0.12 to 0.20".
+- READMEs, badges and install docs name OpenFill's version and the PhotoCraft range separately, so 0.2.x can't be read as a PhotoCraft version.
+- Linux: when the installer downloads PhotoCraft for you, it checks the download against PhotoCraft's checksum list, never the signature file that releases carry from 0.20.2 on.
+
 ## [0.2.4] - 2026-10-26
 
 - Fix Mac prompt typing by keeping the expanded panel keyboard-focusable.

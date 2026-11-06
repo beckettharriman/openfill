@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build the PhotoCraft companion's release zip.
 
-    python tools/make_photocraft_zip.py [--out dist]
+    python tools/make_photocraft_zip.py [--out dist] [--title]
 
 ``openfill-photocraft-<version>.zip`` holds one folder with the companion package,
-the shared OpenFill core, the model catalog and the launchers.
+the shared OpenFill core, the model catalog and the launchers. ``--title`` prints the
+release title instead: "OpenFill for PhotoCraft <version> (works with PhotoCraft A to B)".
 """
 
 from __future__ import annotations
@@ -36,6 +37,19 @@ EXECUTABLE = {"openfill-photocraft.sh", "install.sh"}
 def version(root: Path = ROOT) -> str:
     text = (root / "photocraft" / "openfill_photocraft" / "__init__.py").read_text(encoding="utf-8")
     return re.search(r'__version__\s*=\s*"([^"]+)"', text).group(1)
+
+
+def photocraft_range(root: Path = ROOT) -> tuple[str, str]:
+    """The oldest and newest PhotoCraft versions this release was tested on."""
+    text = (root / "photocraft" / "openfill_photocraft" / "__init__.py").read_text(encoding="utf-8")
+    oldest, newest = re.search(r'PHOTOCRAFT_TESTED\s*=\s*\("([^"]+)",\s*"([^"]+)"\)', text).groups()
+    return oldest, newest
+
+
+def release_title(root: Path = ROOT) -> str:
+    """The GitHub release title: OpenFill's version and the PhotoCraft range, never a bare 0.2.x."""
+    oldest, newest = photocraft_range(root)
+    return f"OpenFill for PhotoCraft {version(root)} (works with PhotoCraft {oldest} to {newest})"
 
 
 def files(root: Path = ROOT) -> list[tuple[Path, str]]:
@@ -85,4 +99,6 @@ def build(out_dir: Path, root: Path = ROOT) -> Path:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--out", default=str(ROOT / "dist"))
-    print(build(Path(parser.parse_args().out)))
+    parser.add_argument("--title", action="store_true", help="print the release title and build nothing")
+    args = parser.parse_args()
+    print(release_title() if args.title else build(Path(args.out)))

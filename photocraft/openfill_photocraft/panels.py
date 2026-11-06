@@ -19,7 +19,7 @@ import threading
 import tkinter as tk
 from typing import TYPE_CHECKING, Any
 
-from . import ui
+from . import about, ui
 from .ui import BAD, BG, CW, DIM, OK
 
 if TYPE_CHECKING:
@@ -395,6 +395,11 @@ class EngineView(tk.Frame):
         for i, (label, command) in enumerate((("Check", self.check), ("Stop engine", self.stop), ("Logs", self.logs))):
             ui.Button(row, label, command).pack(side="left", padx=(8 if i else 0, 0))
         self.result = ui.small(tools, "")
+        ui.divider(self).pack(fill="x", pady=(12, 0))
+        info = ui.frame(self)
+        info.pack(fill="x", pady=(12, 0))
+        ui.caption(info, "About").pack(anchor="w")
+        ui.small(info, about().replace(" · works", "\nWorks")).pack(fill="x", pady=(8, 0))  # one line each
 
     def say(self, text: str, color: str = OK) -> None:
         if not text:
