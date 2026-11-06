@@ -35,7 +35,7 @@ Generation runs in ComfyUI on your machine, listening on `127.0.0.1` only. The n
 
 ## Install
 
-You need an NVIDIA graphics card or an AMD Radeon RX 7000 or newer (8 GB for the best models; Remove and SD 1.5 run on less) and Windows 10/11 or Linux. Apple Silicon Macs are also supported; see [Mac setup](docs/install.md#photocraft-on-macos). On Windows, OpenFill can download ComfyUI for you, including ComfyUI's version for AMD cards. AMD support is new, with one RX 7800 XT user report; see [AMD graphics cards](docs/install.md#amd-graphics-cards).
+You need an NVIDIA graphics card or an AMD Radeon RX 7000 or newer (8 GB for the best models; Remove and SD 1.5 run on less) and Windows 10/11 or Linux. Apple Silicon Macs are also supported; see [Mac setup](docs/install.md#photocraft-on-macos). On Windows, OpenFill can download ComfyUI for you, including ComfyUI's version for AMD cards. AMD support is new, with one RX 7800 XT user report; see [AMD graphics cards](docs/install.md#amd-graphics-cards). Older Radeons and Intel Arc are set up the way ComfyUI documents but untested; see [Graphics cards](docs/gpus.md).
 
 The model manager in the steps below is where you get models: in PhotoCraft it's the gear icon in the OpenFill panel, Models section (the **Open model manager** button on the first run goes there too); in GIMP it's `Filters > OpenFill > Generative Fill...`, Models tab.
 

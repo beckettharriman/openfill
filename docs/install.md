@@ -4,7 +4,7 @@ The short steps are in the [README](../README.md#install). This page has the res
 
 ## What you need
 
-- **A graphics card with 8 GB or more** for the SDXL and FLUX models: NVIDIA, or AMD Radeon RX 7000 or newer (see [AMD graphics cards](#amd-graphics-cards)). LaMa (Remove) and the SD 1.5 models run on less. Without a card ComfyUI can use, it runs on the processor, which takes minutes per fill.
+- **A graphics card with 8 GB or more** for the SDXL and FLUX models: NVIDIA, or AMD Radeon RX 7000 or newer (see [AMD graphics cards](#amd-graphics-cards)). Older Radeons and Intel Arc can work too but are untested; [Graphics cards](gpus.md) says which cards work how. LaMa (Remove) and the SD 1.5 models run on less. Without a card ComfyUI can use, it runs on the processor, which takes minutes per fill.
 - **ComfyUI.** On Windows, OpenFill downloads it for you the first time (about 2 GB, about 7 GB unpacked). On Linux and macOS you set it up once (steps below). If you already have ComfyUI, point OpenFill at it.
 - **Disk space** for the models: from 0.2 GB (LaMa) to about 13 GB (FLUX.1 Fill Q6).
 - **For PhotoCraft:** PhotoCraft 0.12 to 0.16, Windows 10 or 11 or Linux, and Python 3.10 or newer with Pillow. ComfyUI's existing Python works; Tk is optional. The Python from python.org has Tk, and the Windows installer adds Pillow if it is missing. PhotoCraft 0.2.3 adds Apple Silicon support, tested on an M3. See [PhotoCraft on macOS](#photocraft-on-macos).
@@ -164,7 +164,7 @@ A newer Desktop installation that has `main.py` and `.venv` together inside its 
 
 It checks your graphics card, free disk space and port 8188 first, then fetches the official Windows portable build (about 2 GB, about 7 GB unpacked) into `%LOCALAPPDATA%\OpenFill\ComfyUI`, checks it against a published SHA-256, unpacks it with Windows' own `tar.exe`, adds the inpaint nodes at a pinned commit and OpenCV, and remembers the folder. Git is not needed. OpenFill for PhotoCraft and OpenFill for GIMP use the same folder.
 
-With an AMD Radeon RX 7000 or newer it fetches ComfyUI's version for AMD cards instead, from the same release and checked the same way (see [AMD graphics cards](#amd-graphics-cards)). For an older Radeon it points to ComfyUI's AMD instructions, after which you choose "I already have ComfyUI". Without a card it can use, it says so and offers the download only as "very slow" (the processor does the work).
+With an AMD Radeon RX 7000 or newer it fetches ComfyUI's version for AMD cards instead, and with Intel Arc graphics ComfyUI's version for Intel (untested, see [Intel Arc and Core Ultra](gpus.md#intel-arc-and-core-ultra)), from the same release and checked the same way (see [AMD graphics cards](#amd-graphics-cards)). For an older Radeon it points to ComfyUI's AMD instructions, after which you choose "I already have ComfyUI". Without a card it can use, it says so and offers the download only as "very slow" (the processor does the work).
 
 The download includes ComfyUI and its own Python with the packages needed to run it. You do not need to install the ComfyUI Desktop app separately. It does not include image models. Open the model manager afterwards and choose what to download: LaMa is about 0.2 GB and DreamShaper 8 Inpainting about 2 GB. Larger models and their extra files are listed in [Models](models.md#models-and-their-licenses).
 
@@ -196,6 +196,8 @@ venv\Scripts\pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ 
 venv\Scripts\pip install -r requirements.txt opencv-python-headless
 ```
 
+To download less, replace both `device-all` with your card's: `device-gfx1031` for an RX 6700 or 6750, `device-gfx1032` for an RX 6600, `device-gfx1030` for an RX 6800 or 6900. This is untested with OpenFill; [Graphics cards](gpus.md#amd) lists the problems people have reported.
+
 Then press **Choose folder** (PhotoCraft) or **I already have ComfyUI** (GIMP) and pick that `ComfyUI` folder. DirectML and ZLUDA are not supported: ComfyUI itself warns that DirectML "barely works", and ZLUDA is a separate, unofficial fork.
 
 ### AMD on Linux
@@ -212,7 +214,7 @@ venv/bin/pip install -r requirements.txt opencv-python-headless
 
 Your user needs to be in the `render` and `video` groups (`sudo usermod -aG render,video $USER`, then log out and in). Then choose `~/ComfyUI` in the panel (PhotoCraft) or run `sh install.sh --comfy-dir ~/ComfyUI` (GIMP).
 
-ROCm officially supports the RX 7700 and up and the RX 9000 series on Linux. The RX 6700 and 6600 (and other RDNA 2 cards except the 6800 and 6900) need `HSA_OVERRIDE_GFX_VERSION=10.3.0`, and the Radeon 780M and 760M `11.0.0`, as ComfyUI's README says. OpenFill sets that by itself when it starts ComfyUI for one of those cards (unless you set it already) and writes it in its log.
+ROCm officially supports the RX 7700 and up and the RX 9000 series on Linux. The RX 6700 and 6600 (and other RDNA 2 cards except the 6800 and 6900) need `HSA_OVERRIDE_GFX_VERSION=10.3.0`, and the Radeon 780M and 760M `11.0.0`, as ComfyUI's README says. OpenFill sets that by itself when it starts ComfyUI for one of those cards (unless you set it already) and writes it in its log. If you installed AMD's own PyTorch with your card's kernels (`device-gfx1031`, say), OpenFill leaves it off. All of this is untested on a real RX 6000 so far.
 
 ## Install script options (GIMP)
 

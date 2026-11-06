@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix Finder Python architecture, Aqua panel startup and PhotoCraft discovery on macOS.
 - Add uninstall launchers on Windows, Linux and macOS, preserving settings and models.
 - Document downloads, model sizes, existing-engine limits and tested Mac setup.
+- Intel Arc graphics, untested: I don't have an Intel card. On Windows,
+  Download ComfyUI gets ComfyUI's own version for Intel
+  (`ComfyUI_windows_portable_intel.7z`, PyTorch 2.14 for Intel XPU) for an
+  Arc A or B series card or a Core Ultra chip with Arc graphics, including
+  Panther Lake. It comes from the same ComfyUI release and is checked
+  against its size and SHA-256. Older Intel graphics (UHD, Iris Xe) still
+  get the slow processor route. On Linux the setup message gives the
+  PyTorch line for Intel.
+- On Linux the setup message for an AMD card gives the PyTorch for ROCm
+  line from ComfyUI's README.
+- On Linux, OpenFill no longer sets `HSA_OVERRIDE_GFX_VERSION` for an RX
+  6700 or 6600 when ComfyUI's venv has AMD's own PyTorch with that card's
+  kernels; the override would point it at kernels that may not be there.
+- New docs/gpus.md: which cards work how, and what is tested and what is not.
 
 ## [2.0.0-beta.6] - 2026-10-25
 

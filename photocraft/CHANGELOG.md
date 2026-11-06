@@ -5,6 +5,11 @@ All notable changes to OpenFill for PhotoCraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Intel Arc graphics, untested: on Windows the Download ComfyUI card gets ComfyUI's version for Intel for an Arc card or a Core Ultra chip with Arc graphics, and says it is untested. On Linux the card points to the PyTorch for Intel steps.
+- The setup card's help link goes to the Intel steps on Intel graphics.
+
 ## [0.2.4] - 2026-10-26
 
 - Fix Mac prompt typing by keeping the expanded panel keyboard-focusable.
