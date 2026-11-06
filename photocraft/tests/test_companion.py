@@ -1640,6 +1640,24 @@ class WindowsInstallerTextTests(unittest.TestCase):
 
     def test_no_python_says_what_to_do_and_opens_the_page(self):
         self.assertIn("Install Python from python.org", self.TEXT)
+        # The zip has README.md (with "Use ComfyUI's Python"), not docs\install.md.
+        self.assertIn("Use ComfyUI's Python in README.md", self.TEXT)
+        self.assertNotIn("docs\\install.md", self.TEXT)
+
+    def test_py_never_waits_for_an_answer_or_installs(self):
+        self.assertIn('set "PYTHON_MANAGER_AUTOMATIC_INSTALL=false"', self.TEXT)
+        calls = [line for line in self.TEXT.splitlines() if "'py -3" in line]
+        self.assertEqual(len(calls), 2)
+        for line in calls:
+            self.assertIn("^<nul", line)
+
+    def test_the_folder_reaches_python_through_the_environment(self):
+        # Built into Python source, an apostrophe in the path was a SyntaxError, and a ! was lost
+        # to delayed expansion.
+        lines = self.TEXT.splitlines()
+        self.assertNotIn("%DIR", self.TEXT)
+        self.assertLess(lines.index('set "OPENFILL_SRC=%~dp0"'), lines.index("setlocal EnableDelayedExpansion"))
+        self.assertIn("os.environ['OPENFILL_SRC']", self.TEXT)
         self.assertIn("double-click Install OpenFill for PhotoCraft.cmd again", self.TEXT)
         self.assertIn('start "" "https://www.python.org/downloads/windows/"', self.TEXT)
         self.assertIn("\r\n", self.TEXT)
