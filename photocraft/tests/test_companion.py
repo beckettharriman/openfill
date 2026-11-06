@@ -1455,7 +1455,8 @@ class EngineFeedbackTests(unittest.TestCase):
         )
         service.app = SimpleNamespace(
             generative_fill=generate,
-            settings=SimpleNamespace(autostart=autostart),
+            settings=SimpleNamespace(autostart=autostart, uses_remote=False, uses_cloud=False),
+            uses_cloud=False,
             server=server,
             log=SimpleNamespace(warning=lambda *a: None, info=lambda *a: None),
         )
@@ -1736,6 +1737,93 @@ class ServiceSetupTests(unittest.TestCase):
             self.assertTrue(info["url"].startswith("https://github.com/comfyanonymous/ComfyUI/releases/download/"))
 
 
+class RemoteGpuTests(unittest.TestCase):
+    """The Remote GPU choice in the page's settings, the gear and the warm-up."""
+
+    def _api(self, settings):
+        from types import SimpleNamespace
+
+        from openfill_photocraft import web
+
+        saved = []
+        app = SimpleNamespace(
+            settings=settings,
+            paths=SimpleNamespace(config="cfg"),
+            reload_settings=lambda: None,
+            uses_cloud=False,
+        )
+        settings.save = lambda path: saved.append(path)
+        api = web.Api.__new__(web.Api)
+        api.service = SimpleNamespace(app=app, warm_up=lambda: None)
+        return api, saved
+
+    def test_the_page_picks_the_remote_gpu_and_keeps_the_code_out_of_sight(self):
+        from openfill.config import Settings
+
+        code = "A" * 32
+        api, saved = self._api(Settings())
+        out = api.post(
+            "/api/settings",
+            {"backend": "remote", "remote_url": f"ofgpu://{code}@100.101.102.103:8390", "remote_ssh": ""},
+        )
+        settings = api.service.app.settings
+        self.assertEqual(settings.backend, "remote")
+        self.assertEqual((settings.remote_token, settings.remote_paired), (code, "http://100.101.102.103:8390"))
+        self.assertEqual(out["remote_url"], "http://100.101.102.103:8390")
+        self.assertEqual(out["backend"], "remote")
+        self.assertNotIn(code, json.dumps(out))
+        self.assertEqual(saved, ["cfg"])
+        out = api.post("/api/settings", {"backend": "comfyui"})
+        self.assertEqual(settings.backend, "comfyui")
+        self.assertEqual(settings.remote_token, code)  # kept for switching back
+
+    def test_the_gear_switch_moves_a_pasted_code_out_of_the_field(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.panels import GearView
+
+        from openfill.config import Settings
+
+        class Var:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        code = "B" * 32
+        gear = GearView.__new__(GearView)
+        gear.engine = SimpleNamespace(remote_url=Var(f" ofgpu://{code}@gpu-pc:8390 "), remote_ssh=Var(" becke@gpu-pc "))
+        settings = Settings()
+        gear._apply_remote(settings)
+        self.assertEqual(settings.remote_token, code)
+        self.assertEqual(gear.engine.remote_url.get(), "http://gpu-pc:8390")
+        self.assertEqual(settings.remote_ssh, "becke@gpu-pc")
+
+    def test_warm_up_connects_to_the_remote_gpu_without_a_local_comfyui(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.service import Service
+
+        checked = []
+        service = Service.__new__(Service)
+        service.app = SimpleNamespace(
+            uses_cloud=False,
+            settings=SimpleNamespace(uses_remote=True, comfy_dir="", autostart=False),
+            check_backend=lambda: checked.append(1) or SimpleNamespace(ok=True, detail="ComfyUI 0.39.0"),
+            has_model_for=lambda _op: False,
+            log=SimpleNamespace(info=lambda *a: None),
+        )
+        service.engine = ""
+        service.warm_up()
+        service._warm.join(5)
+        self.assertEqual(checked, [1])
+        self.assertEqual(service.engine, "ready")
+
+
 class PageTests(unittest.TestCase):
     def test_key_is_required(self):
         from openfill_photocraft import web
@@ -1777,7 +1865,8 @@ class PageTests(unittest.TestCase):
 
         app = SimpleNamespace(
             active_model_id=lambda: "lama-big",
-            settings=SimpleNamespace(comfy_dir=""),
+            settings=SimpleNamespace(comfy_dir="", uses_remote=False, uses_cloud=False),
+            uses_cloud=False,
         )
         service = SimpleNamespace(
             app=app,
@@ -1862,6 +1951,228 @@ class SharedModelsPageTests(unittest.TestCase):
         self.assertIn('id="s-shared_models"', page)
         self.assertIn('id="shared-find"', page)
         self.assertIn("never downloads, deletes or installs anything there", page)
+
+
+class CloudCompanionTests(unittest.TestCase):
+    """The optional cloud backend in the companion: settings never hand out the key, every
+    tool offers the cloud model, and nothing local starts while the cloud is picked."""
+
+    KEY = "sk-or-v1-" + "fedcba9876543210" * 4
+
+    def setUp(self):
+        from types import SimpleNamespace
+
+        from openfill.app import App
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        profile = Path(self.tmp.name)
+        (profile / "openfill").mkdir()
+        (profile / "openfill" / "config.json").write_text(
+            json.dumps({"comfy_dir": str(profile / "none"), "url": "http://127.0.0.1:9"}), encoding="utf-8"
+        )
+        self.app = App(
+            interactive=False,
+            io=SimpleNamespace(profile_dir=lambda: str(profile), message=lambda _t: None),
+            runner_cls=object,
+        )
+        self.addCleanup(self._close_log)
+        self.config = profile / "openfill" / "config.json"
+
+    def _close_log(self):
+        for handler in list(self.app.log.handlers):
+            handler.close()
+            self.app.log.removeHandler(handler)
+
+    def api(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft import web
+
+        warmed = []
+        service = SimpleNamespace(
+            app=self.app,
+            warm_up=lambda: warmed.append(True),
+            state=SimpleNamespace(snapshot=lambda: {}),
+            photocraft=lambda: {},
+            busy=lambda: False,
+            setup_progress=lambda: None,
+        )
+        return web.Api(service), warmed
+
+    def test_page_settings_save_the_key_but_never_return_it(self):
+        api, warmed = self.api()
+        with self.assertRaises(ValueError):  # no key yet: the cloud cannot be picked
+            api.post("/api/settings", {"backend": "cloud"})
+        with self.assertRaises(ValueError):
+            api.post("/api/settings", {"backend": "a1111"})  # not offered here
+        out = api.post("/api/settings", {"backend": "cloud", "cloud_api_key": self.KEY, "cloud_model": "x/y"})
+        self.assertNotIn(self.KEY, json.dumps(out))
+        self.assertTrue(out["cloud_key_saved"])
+        self.assertEqual(self.app.settings.cloud_api_key, self.KEY)
+        if os.name == "posix":
+            self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
+        api.post("/api/settings", {"backend": "cloud", "cloud_api_key": ""})  # empty keeps the saved key
+        self.assertEqual(self.app.settings.cloud_api_key, self.KEY)
+        state = api.state()
+        self.assertNotIn(self.KEY, json.dumps(state))
+        self.assertEqual(state["cloud"]["note"], "Cloud: your image is sent to OpenRouter.")
+        self.assertEqual(state["activeModel"], "cloud")
+        self.assertTrue(state["comfyReady"])
+        self.assertEqual(warmed, [])
+        api.post("/api/settings", {"backend": "comfyui"})
+        self.assertIsNone(api.state()["cloud"])
+        self.assertEqual(warmed, [True])  # back to local: ComfyUI may warm up again
+
+    def test_every_tool_offers_the_cloud_model(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.bar import Refresher, fill_choices, removal_choices, status_color
+        from openfill_photocraft.ui import WARN
+
+        self.app.settings.backend = "cloud"
+        self.app.settings.set_cloud("openrouter", "", "", self.KEY)
+        refresher = Refresher.__new__(Refresher)  # no lookup thread
+        refresher.service = SimpleNamespace(app=self.app)
+        refresher._vendor = "none"
+        facts = refresher.look()
+        self.assertTrue(facts["cloud"] and facts["cloud_key"])
+        name = "google/gemini-2.5-flash-image (OpenRouter)"
+        for tool in ("fill", "remove", "expand", "txt2img"):
+            self.assertEqual(facts["models"][tool], [("cloud", name)])
+        self.assertEqual(removal_choices(facts), {"google/gemini-2.5-flash-image": "cloud"})
+        self.assertEqual(fill_choices(facts), {name: "cloud"})
+        self.assertEqual(status_color("Cloud: OpenRouter"), WARN)
+        self.assertNotIn(self.KEY, json.dumps(facts))
+
+    def test_bridge_reads_a_jpeg_from_the_service(self):
+        buf = io.BytesIO()
+        Image.new("RGB", (6, 4), (200, 10, 20)).save(buf, "JPEG")
+        width, height, rgba = PhotoCraftBridge.decode_image(None, buf.getvalue())
+        self.assertEqual((width, height, len(rgba)), (6, 4, 6 * 4 * 4))
+        self.assertEqual(rgba[3], 255)
+
+    def test_switching_service_does_not_send_the_old_key_elsewhere(self):
+        if str(ROOT) not in sys.path:
+            sys.path.append(str(ROOT))  # the fake service of the engine's tests
+        from tests.test_cloud import FakeService
+
+        fake = FakeService()
+        self.addCleanup(fake.close)
+        fake.json_route("/v1/models", {"data": [{"id": "m"}]})
+        api, _warmed = self.api()
+        api.post("/api/settings", {"backend": "cloud", "cloud_api_key": self.KEY})  # an OpenRouter key
+        # later: OpenAI-compatible at a LiteLLM address, key field left empty
+        change = {"backend": "cloud", "cloud_provider": "openai", "cloud_url": fake.url + "/v1", "cloud_model": "m"}
+        with self.assertRaises(ValueError) as caught:
+            api.post("/api/settings", change)
+        self.assertIn("another service or address", str(caught.exception))
+        self.assertEqual(self.app.settings.cloud_provider, "openrouter")  # a refused save changes nothing
+        # even if the settings say so (edited by hand), the key is not sent there
+        self.app.settings.cloud_provider, self.app.settings.cloud_url = "openai", fake.url + "/v1"
+        self.app.settings.cloud_model = "m"
+        health = self.app.check_backend()
+        self.assertFalse(health.ok)
+        self.assertEqual(fake.requests, [])
+        state = api.state()
+        self.assertIn("another service or address", state["cloud"]["keyProblem"])
+        self.assertFalse(state["cloud"]["key"])
+        self.assertNotIn(self.KEY, json.dumps(state) + json.dumps(api.settings()))
+        self.assertTrue(api.settings()["cloud_key_elsewhere"])
+        api.post("/api/settings", {**change, "cloud_api_key": "sk-litellm-0123456789abcdef"})  # a key for it
+        self.assertTrue(self.app.check_backend().ok)
+        self.assertEqual(fake.requests[-1]["headers"]["Authorization"], "Bearer sk-litellm-0123456789abcdef")
+
+    def test_service_answer_never_reaches_ghostscript(self):
+        from PIL import EpsImagePlugin
+
+        eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 4 4\nnewpath 0 0 moveto 4 4 lineto stroke\nshowpage\n"
+        calls = []
+
+        def fake_gs(*a, **k):
+            calls.append(True)
+            raise OSError("ghostscript blocked by the test")
+
+        with mock.patch.object(EpsImagePlugin, "Ghostscript", fake_gs):
+            for data in (eps, b"\xff\xd8\xff" + eps, b"RIFF\0\0\0\0WEBP" + eps):  # EPS behind JPEG/WebP magic too
+                with self.assertRaises(Exception):  # noqa: B017 - refused in any way, never run
+                    PhotoCraftBridge.decode_image(None, data)
+        self.assertEqual(calls, [])
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_page_note_uses_the_exact_host_rule(self):
+        """The settings page's note before saving: the same rule as the panel and GIMP."""
+        from openfill.backends.cloud import cloud_note
+
+        page = ROOT / "photocraft" / "openfill_photocraft" / "static" / "index.html"
+        script = r"""
+const fs=require("fs");const html=fs.readFileSync(process.argv[1],"utf8");
+const src=html.slice(html.indexOf("function cloudFields"),html.indexOf('["s-backend","s-cloud_provider"'));
+const out=[];for(const [p,u] of JSON.parse(process.argv[2])){
+  const els={"s-backend":{value:"cloud"},"cloud-fields":{},"s-cloud_provider":{value:p},
+    "s-cloud_url":{value:u,placeholder:""},"s-cloud_model":{},"cloud-note":{}};
+  const $=id=>els[id];eval(src);cloudFields();out.push(els["cloud-note"].textContent)}
+console.log(JSON.stringify(out));
+"""
+        cases = [
+            ["openrouter", ""],
+            ["openrouter", "https://evilopenrouter.ai/api/v1"],
+            ["openrouter", "https://eu.openrouter.ai/api/v1"],
+            ["openai", "https://user:hunter2@LLM.example.com:8443/v1"],
+            ["openai", "http://localhost:4000/v1"],
+        ]
+        run = subprocess.run(
+            ["node", "-e", script, str(page), json.dumps(cases)], capture_output=True, text=True, timeout=30
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), [cloud_note(p, u) for p, u in cases])
+
+    def test_no_comfyui_warm_up_while_the_cloud_is_picked(self):
+        from openfill_photocraft.service import Service
+
+        self.app.settings.backend = "cloud"
+        service = Service.__new__(Service)
+        service.app = self.app
+        service._warm = None
+        service.warm_up()
+        self.assertIsNone(service._warm)
+
+    def test_engine_view_switches_and_never_shows_the_key(self):
+        try:
+            import tkinter as tk
+
+            root = tk.Tk()
+        except Exception:  # noqa: BLE001 - no Tk or no display
+            self.skipTest("no display")
+        from types import SimpleNamespace
+
+        from openfill_photocraft.panels import EngineView
+
+        try:
+            bar = SimpleNamespace(
+                root=root, host="PhotoCraft", service=SimpleNamespace(app=self.app), call_soon=lambda fn, *a: fn(*a)
+            )
+            view = EngineView(bar, root)
+            view.pack()
+            self.app.settings.backend = "cloud"
+            self.app.settings.set_cloud("openrouter", "", "", self.KEY)
+            view.load_backend(self.app.settings)
+            root.update()
+            self.assertTrue(view.cloud.winfo_ismapped())
+            self.assertFalse(view.local.winfo_ismapped())
+            self.assertEqual(view.key.get(), "")
+            self.assertIn("Saved", view.key.placeholder)
+            self.assertEqual(view.note.cget("text"), "Cloud: your image is sent to OpenRouter.")
+            view._show_backend("comfyui")
+            root.update()
+            self.assertTrue(view.local.winfo_ismapped())
+            self.assertFalse(view.cloud.winfo_ismapped())
+            self.assertEqual(view.backend_values()[0], "comfyui")
+        finally:
+            root.destroy()
+            from openfill_photocraft import ui
+
+            ui.FONTS = None  # the fonts belonged to this root; the next test makes its own
 
 
 class LaunchTests(unittest.TestCase):

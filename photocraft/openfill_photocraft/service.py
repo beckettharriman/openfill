@@ -192,7 +192,7 @@ class Service:
         from openfill.comfy_setup import detect_comfy
         from openfill.config import comfy_layout
 
-        if comfy_layout(self.app.settings.comfy_dir) is not None:
+        if self.app.settings.uses_remote or comfy_layout(self.app.settings.comfy_dir) is not None:
             return
         for folder in gimp_comfy_dirs():
             if comfy_layout(folder) is not None:
@@ -227,9 +227,13 @@ class Service:
         from openfill.config import comfy_layout
 
         app = self.app
-        if comfy_layout(app.settings.comfy_dir) is None or not app.settings.autostart:
+        if app.uses_cloud:  # nothing to start, and no request to the service until the user generates
             return
-        if not (app.has_model_for("fill") or app.has_model_for("remove")):
+        # A Remote GPU is only connected to (and its SSH tunnel opened), so the bar says if it answers.
+        local = not app.settings.uses_remote
+        if local and (comfy_layout(app.settings.comfy_dir) is None or not app.settings.autostart):
+            return
+        if local and not (app.has_model_for("fill") or app.has_model_for("remove")):
             return
 
         def run() -> None:
@@ -346,6 +350,8 @@ class Service:
     def cancel(self) -> None:
         with self.state.lock:
             self.state.cancel_requested = True
+        if self.app.uses_cloud:  # the cloud job polls the cancel flag itself; ComfyUI is not involved
+            return
         try:
             self.app.server.request_cancel()
         except Exception:  # noqa: BLE001

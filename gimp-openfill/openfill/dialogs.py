@@ -386,6 +386,7 @@ class GenerationDialog(Gtk.Dialog):
         show_advanced: bool = False,
         thumbnail: object | None = None,
         flux_models: frozenset = frozenset(),
+        cloud_note: str = "",
     ) -> None:
         super().__init__(title=self.TITLES[kind], modal=True)
         self.kind = kind
@@ -412,6 +413,13 @@ class GenerationDialog(Gtk.Dialog):
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         body.set_border_width(8)
         area.pack_start(body, False, False, 0)
+
+        self.cloud_note: Gtk.Label | None = None
+        if cloud_note:  # always shown while the cloud is the backend: the picture leaves this computer
+            self.cloud_note = Gtk.Label(label=cloud_note, xalign=0)
+            self.cloud_note.set_line_wrap(True)
+            self.cloud_note.get_style_context().add_class("sb-warning")
+            body.pack_start(self.cloud_note, False, False, 0)
 
         self.remove_radio: Gtk.RadioButton | None = None
         if kind == "fill":
@@ -924,6 +932,73 @@ ADVANCED_FIELDS = ui_text.ADVANCED_FIELDS
 CONNECTION_FIELDS = ui_text.CONNECTION_FIELDS
 
 
+class CloudForm(Gtk.Box):
+    """The cloud service's settings: service, API key, model and address, with the note
+    saying where pictures go. The key field never shows a saved key, only that one is saved."""
+
+    def __init__(self, values: dict) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        from .backends.cloud import provider
+
+        self._provider_info = provider
+        grid = Gtk.Grid(column_spacing=12, row_spacing=4)
+        self.provider = Gtk.ComboBoxText()
+        for nick, label in ui_text.CLOUD_PROVIDERS:
+            self.provider.append(nick, label)
+        if not self.provider.set_active_id(str(values.get("cloud_provider") or "openrouter")):
+            self.provider.set_active_id("openrouter")
+        self.provider.set_halign(Gtk.Align.START)
+        self.key = Gtk.Entry()
+        self.key.set_visibility(False)
+        self.key.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+        self._has_key, self._key_for = bool(values.get("has_key")), str(values.get("key_for") or "")
+        self.key.set_hexpand(True)
+        self.model = Gtk.Entry()
+        self.model.set_text(str(values.get("cloud_model") or ""))
+        self.url = Gtk.Entry()
+        self.url.set_text(str(values.get("cloud_url") or ""))
+        rows = (
+            ("Service", self.provider, ""),
+            ("API key", self.key, ui_text.CLOUD_KEY_HINT),
+            ("Model", self.model, "Empty uses the service's default image model."),
+            ("Address", self.url, "Empty uses the service's own. For LiteLLM, its /v1 address."),
+        )
+        for row, (label, widget, hint) in enumerate(rows):
+            grid.attach(_right(label), 0, 2 * row, 1, 1)
+            grid.attach(widget, 1, 2 * row, 1, 1)
+            if hint:
+                grid.attach(_dim(hint), 1, 2 * row + 1, 1, 1)
+        self.pack_start(grid, False, False, 0)
+        self.note = Gtk.Label(xalign=0)
+        self.note.set_line_wrap(True)
+        self.note.get_style_context().add_class("sb-warning")
+        self.pack_start(self.note, False, False, 0)
+        self.pack_start(_dim(ui_text.CLOUD_COST), False, False, 0)
+        self.provider.connect("changed", lambda *_: self._refresh())
+        self.url.connect("changed", lambda *_: self._refresh())
+        self._refresh()
+
+    def _refresh(self) -> None:
+        from .backends.cloud import cloud_note
+
+        info = self._provider_info(self.provider.get_active_id() or "openrouter")
+        self.model.set_placeholder_text(info.default_model or "the model name your service uses")
+        self.url.set_placeholder_text(info.base_url)
+        url = self.url.get_text().strip()
+        self.key.set_placeholder_text(ui_text.cloud_key_placeholder(self._key_for, info.id, url, self._has_key))
+        self.note.set_text(cloud_note(info.id, url))
+
+    def collect(self) -> dict:
+        """The values on screen; ``cloud_api_key`` is "" unless a new key was typed (apply them
+        with ``Settings.set_cloud``, which never moves a saved key to another service)."""
+        return {
+            "cloud_provider": self.provider.get_active_id() or "openrouter",
+            "cloud_url": self.url.get_text().strip(),
+            "cloud_model": self.model.get_text().strip(),
+            "cloud_api_key": self.key.get_text().strip(),
+        }
+
+
 class SettingsDialog(Gtk.Dialog):
     """General (only what a user needs, the rest behind expanders) and Models.
 
@@ -941,9 +1016,13 @@ class SettingsDialog(Gtk.Dialog):
         models_panel_factory: Callable[[], Gtk.Widget] | None = None,
         test_backend: Callable[[dict, Callable[[str], None]], str] | None = None,
         open_logs: Callable[[], None] | None = None,
+        cloud: dict | None = None,
     ) -> None:
         super().__init__(title=ui_text.SETTINGS_TITLE, modal=True)
         self.values = dict(values)
+        self.cloud = cloud  # the saved cloud settings (has_key instead of the key); None: no Cloud section
+        self.cloud_form: CloudForm | None = None
+        self.cloud_box: Gtk.Widget | None = None
         self.choices = choices
         self.ranges = ranges
         self.widgets: dict[str, Gtk.Widget] = {}
@@ -974,6 +1053,7 @@ class SettingsDialog(Gtk.Dialog):
                     Gtk.Label(label=ui_text.SETTINGS_MODELS),
                 )
         self.get_content_area().show_all()  # shown by run(), after placement
+        self._backend_changed()
 
     # building ------------------------------------------------------------
 
@@ -982,6 +1062,19 @@ class SettingsDialog(Gtk.Dialog):
         box.set_border_width(14)
         grid = self._grid(GENERAL_FIELDS)
         box.pack_start(grid, False, False, 0)
+        if self.cloud is not None:
+            frame = Gtk.Frame(label=ui_text.CLOUD_TITLE)
+            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            inner.set_border_width(10)
+            inner.pack_start(_dim(f"{ui_text.CLOUD_INTRO} {ui_text.CLOUD_WHEN}"), False, False, 0)
+            self.cloud_form = CloudForm(self.cloud)
+            inner.pack_start(self.cloud_form, False, False, 0)
+            frame.add(inner)
+            self.cloud_box = frame
+            box.pack_start(frame, False, False, 0)
+            combo = self.widgets.get("backend")
+            if isinstance(combo, Gtk.ComboBoxText):
+                combo.connect("changed", lambda *_: self._backend_changed())
 
         test_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.test_button = Gtk.Button(label=ui_text.CHECK_BACKEND)
@@ -1128,6 +1221,15 @@ class SettingsDialog(Gtk.Dialog):
         entry.set_text(shared_models.display(shared_models.join([*have, *(str(c.path) for c in found)])))
         note.set_text(ui_text.SHARED_FOUND.format(what=", ".join(f"{c.source} ({c.path})" for c in found)))
 
+    def _backend_changed(self) -> None:
+        """The Cloud section shows only while the cloud is picked; the local folder rows then
+        stay as they are (they keep working once you switch back)."""
+        if self.cloud_box is None:
+            return
+        combo = self.widgets.get("backend")
+        picked = combo.get_active_id() if isinstance(combo, Gtk.ComboBoxText) else ""
+        self.cloud_box.set_visible(picked == "cloud")
+
     def _browse(self, _button: Gtk.Button, entry: Gtk.Entry) -> None:
         chooser = Gtk.FileChooserDialog(
             title=ui_text.CHOOSE_FOLDER, transient_for=self, action=Gtk.FileChooserAction.SELECT_FOLDER
@@ -1155,6 +1257,8 @@ class SettingsDialog(Gtk.Dialog):
                 out[key] = widget.get_active_id() or old
             else:
                 out[key] = widget.get_text().strip()
+        if self.cloud_form is not None:
+            out["_cloud"] = self.cloud_form.collect()  # saved to config.json only, never a procedure argument
         return out
 
     # test backend --------------------------------------------------------
@@ -1245,6 +1349,7 @@ def run_settings_dialog(
     test_steps: list | None = None,
     test_out: str = "",
     open_logs: Callable[[], None] | None = None,
+    cloud: dict | None = None,
 ) -> dict | None:
     """Show the Settings dialog; the collected values, or None when cancelled.
 
@@ -1254,7 +1359,7 @@ def run_settings_dialog(
     appends the backend label and the model rows (in list order) to the JSON
     lines file ``test_out``.
     """
-    dialog = SettingsDialog(values, choices, ranges, models_panel_factory, test_backend, open_logs)
+    dialog = SettingsDialog(values, choices, ranges, models_panel_factory, test_backend, open_logs, cloud)
     set_transient(dialog)
     for expander in dialog.expanders[:1] if show_advanced else []:
         expander.set_expanded(True)

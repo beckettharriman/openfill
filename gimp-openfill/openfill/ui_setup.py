@@ -27,6 +27,7 @@ from .backend import BackendError  # noqa: E402
 RESP_DOWNLOAD = 1
 RESP_HAVE = 2
 RESP_USE_FOUND = 3
+RESP_CLOUD = 4
 
 STATE_TEXT = {
     "verifying": "Checking the download...",
@@ -143,11 +144,17 @@ class _Notice(Gtk.Dialog):
         self.checks.set_line_wrap(True)
         self.checks.set_selectable(True)
         box.pack_start(self.checks, False, False, 0)
+        # Offered, not pushed: one plain line and the last button before Cancel.
+        cloud_line = Gtk.Label(label=ui_text.CLOUD_SETUP_LINE, xalign=0)
+        cloud_line.set_line_wrap(True)
+        cloud_line.get_style_context().add_class("dim-label")
+        box.pack_start(cloud_line, False, False, 0)
         if self.found:
             first = self.found[0]
             self.add_button(f"Use the ComfyUI found in {first.path}", RESP_USE_FOUND)
         self.download = self.add_button("Download ComfyUI", RESP_DOWNLOAD)
         self.add_button("I already have ComfyUI...", RESP_HAVE)
+        self.add_button(ui_text.CLOUD_SETUP_BUTTON, RESP_CLOUD)
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         self.set_default_response(RESP_DOWNLOAD if sys.platform == "win32" else RESP_HAVE)
         self.refresh()
@@ -263,6 +270,10 @@ def ensure_comfy(app: App, message: str = "", parent: Gtk.Window | None = None) 
             except BackendError as err:
                 gi_message(parent, str(err))
                 continue
+        if answer == RESP_CLOUD:
+            if setup_cloud(app, parent):
+                return True
+            continue
         if answer == RESP_HAVE:
             picked = _choose_folder(parent, "Choose your ComfyUI folder", app.settings.comfy_dir)
             if not picked:
@@ -274,6 +285,61 @@ def ensure_comfy(app: App, message: str = "", parent: Gtk.Window | None = None) 
                 gi_message(parent, ui_text.with_next_step(str(err)))
                 continue
         return False
+
+
+def setup_cloud(app: App, parent: Gtk.Window | None = None) -> bool:
+    """Ask for the cloud service's settings and make it the backend; True when saved.
+    Nothing is sent anywhere here: the first picture goes out when the user generates."""
+    from .dialogs import CloudForm
+
+    s = app.settings
+    dialog = Gtk.Dialog(title=ui_text.CLOUD_TITLE, transient_for=parent, modal=True)
+    dialog.set_default_size(560, -1)
+    box = dialog.get_content_area()
+    box.set_spacing(8)
+    box.set_border_width(14)
+    intro = Gtk.Label(label=f"{ui_text.CLOUD_INTRO} {ui_text.CLOUD_WHEN}", xalign=0)
+    intro.set_line_wrap(True)
+    box.pack_start(intro, False, False, 0)
+    form = CloudForm(
+        {
+            "cloud_provider": s.cloud_provider,
+            "cloud_url": s.cloud_url,
+            "cloud_model": s.cloud_model,
+            "has_key": bool(s.cloud_api_key),
+            "key_for": s.cloud_key_for,
+        }
+    )
+    box.pack_start(form, False, False, 0)
+    dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+    dialog.add_button("Use the cloud service", Gtk.ResponseType.OK)
+    dialog.set_default_response(Gtk.ResponseType.OK)
+    dialog.show_all()
+    try:
+        while dialog.run() == Gtk.ResponseType.OK:
+            from dataclasses import replace
+
+            v = form.collect()
+            trial = replace(s)  # checked on a copy: Cancel leaves the settings as they were
+            trial.set_cloud(v["cloud_provider"], v["cloud_url"], v["cloud_model"], v["cloud_api_key"])
+            if not trial.cloud_key_usable:
+                gi_message(
+                    dialog,
+                    trial.cloud_key_problem() or "Paste your API key first. You make one on the service's website.",
+                )
+                continue
+            s.set_cloud(v["cloud_provider"], v["cloud_url"], v["cloud_model"], v["cloud_api_key"])
+            s.backend = "cloud"
+            try:
+                app._save_settings()
+            except BackendError as err:
+                gi_message(dialog, str(err))
+                continue
+            app.log.info("backend set to the cloud service (%s)", s.cloud_provider)
+            return True
+        return False
+    finally:
+        dialog.destroy()
 
 
 def gi_message(parent: Gtk.Window | None, text: str) -> None:

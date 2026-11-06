@@ -61,7 +61,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from openfill import __version__, ui_text  # noqa: E402
 from openfill.backend import BackendError, GenerationCancelled, describe_error  # noqa: E402
-from openfill.config import Paths, Settings  # noqa: E402
+from openfill.config import BACKENDS, Paths, Settings  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -247,6 +247,12 @@ def _model_options(
 
     from openfill import catalog as cat
 
+    if settings.uses_cloud:  # one cloud model does every operation; the catalog is not used
+        from openfill.backends.cloud import destination, provider
+
+        name = settings.cloud_model or provider(settings.cloud_provider).default_model or "cloud model"
+        label = f"{name} (cloud, {destination(settings.cloud_provider, settings.cloud_url)})"
+        return [("active", label)], label, False, frozenset()
     nicks = [n for n, _ in (_choice_options(config, "model") or [("active", "Active model")])]
     active_name, prompt_free = settings.active_model, False
     installed_rows, other_rows = [], []
@@ -363,6 +369,11 @@ def _generation_dialog(
         test_dump=hooks.get("dialog_dump"),
         test_out=str(hooks.get("dialog_out") or ""),
         thumbnail=thumbnail,
+        cloud_note=(
+            f"{settings.cloud_note('prompt' if kind == 'txt2img' else 'image')} {ui_text.CLOUD_VARIATIONS}"
+            if settings.uses_cloud
+            else ""
+        ),
     )
     if result is None:
         return False
@@ -851,6 +862,8 @@ SETTINGS_KEYS = [
     "shared_models",
     "url",
     "a1111_url",
+    "remote_url",
+    "remote_ssh",
     "autostart",
     "idle_timeout_minutes",
     "quality",
@@ -881,8 +894,18 @@ SETTINGS_KEYS = [
 def _settings_test_backend(app: App, values: dict, report: Callable[[str], None]) -> str:
     """Runs in the Settings dialog's worker thread (no GIMP calls): apply the
     values on screen to a private App, start the backend if needed, check it."""
+    cloud = values.get("_cloud")
     for key, value in values.items():
-        setattr(app.settings, key, value)
+        if key != "_cloud":
+            setattr(app.settings, key, value)
+    app.settings.take_pairing_code()
+    if cloud:  # the cloud fields on screen, not yet saved; a key typed now is tried, else the saved one
+        app.settings.set_cloud(
+            cloud["cloud_provider"], cloud["cloud_url"], cloud["cloud_model"], cloud["cloud_api_key"]
+        )
+    if app.uses_cloud:
+        health = app.check_backend()  # checks the key only: no picture is sent
+        return ui_text.cloud_health_text(health.ok, health.detail)
     try:
         backend = app.backend(lambda _f, text: report(ui_text.plain_step_text(text)))
         health = backend.health()
@@ -897,6 +920,21 @@ def _settings_test_backend(app: App, values: dict, report: Callable[[str], None]
     return ui_text.health_text(
         True, health.detail, len(health.checkpoints), health.inpaint_nodes, health.device, health.device_kind
     )
+
+
+# A Remote GPU pairing code pasted in the Settings dialog: saved to config.json only, never into
+# the procedure's arguments (GIMP keeps those as last-used values in its own files).
+_PAIRED: dict[str, str] = {}
+
+
+def _take_pairing_code(values: dict) -> None:
+    """Split ``ofgpu://CODE@HOST:PORT`` in ``values["remote_url"]`` into the address (kept there)
+    and the code (remembered for run_settings)."""
+    probe = Settings(remote_url=str(values.get("remote_url") or ""))
+    probe.take_pairing_code()
+    if probe.remote_token:
+        values["remote_url"] = probe.remote_url
+        _PAIRED["token"] = probe.remote_token
 
 
 def _settings_dialog(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig) -> bool:
@@ -923,6 +961,14 @@ def _settings_dialog(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig) ->
             except AttributeError:
                 pass
     test_app = App()  # created here: App() reads the profile path through GIMP (main thread only)
+    saved = test_app.settings
+    cloud = {
+        "cloud_provider": saved.cloud_provider,
+        "cloud_url": saved.cloud_url,
+        "cloud_model": saved.cloud_model,
+        "has_key": bool(saved.cloud_api_key),  # the key itself never goes into the dialog
+        "key_for": saved.cloud_key_for,
+    }
     result = dialogs.run_settings_dialog(
         values,
         choices,
@@ -936,9 +982,25 @@ def _settings_dialog(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig) ->
         select_model=str(hooks.get("select_model") or ""),
         test_steps=hooks.get("settings_steps"),
         test_out=str(hooks.get("settings_out") or ""),
+        cloud=cloud,
     )
     if result is None:
         return False
+    cloud_result = result.pop("_cloud", None)
+    if cloud_result is not None:
+        # Straight into config.json (owner-only): never a procedure argument, which GIMP would
+        # keep in its own plug-in settings file.
+        paths = Paths.for_profile(Gimp.directory()).ensure()
+        fresh = Settings.load(paths.config)
+        c = cloud_result
+        fresh.set_cloud(c["cloud_provider"], c["cloud_url"], c["cloud_model"], c["cloud_api_key"])
+        try:
+            fresh.save(paths.config)
+        except OSError as err:
+            Gimp.message(ui_text.save_failed(str(paths.config), str(err)))
+        if result.get("backend") == "cloud" and fresh.cloud_key_problem():
+            Gimp.message(fresh.cloud_key_problem())  # saved, but the old key is not sent to the new address
+    _take_pairing_code(result)
     for key, value in result.items():
         config.set_property(key.replace("_", "-"), value)
     config.set_property("check-backend", False)  # the dialog has its own Check backend button
@@ -975,6 +1037,10 @@ def run_settings(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig, _data:
             settings.shared_models = shared_before
         else:
             settings.shared_models = shared_models.join(folders)
+    if _PAIRED.get("token"):
+        settings.remote_token = _PAIRED.pop("token")
+        settings.remote_paired = settings.remote_url  # the code is sent to this address only
+    settings.take_pairing_code()  # a code passed to the procedure by a script
     try:
         settings.save(paths.config)
     except OSError as err:
@@ -1184,13 +1250,17 @@ class OpenFill(Gimp.PlugIn):
             "backend",
             "_Backend",
             "Generation server",
-            _choice([("comfyui", "ComfyUI (managed, recommended)"), ("a1111", "AUTOMATIC1111 WebUI (external)")]),
+            _choice([(b.id, b.label) for b in BACKENDS]),
             s.backend,
             RW,
         )
         p.add_string_argument("comfy-dir", "Co_mfyUI folder", "Folder of the ComfyUI portable build", s.comfy_dir, RW)
         p.add_string_argument("url", "Com_fyUI URL", "Base URL of ComfyUI", s.url, RW)
         p.add_string_argument("a1111-url", "_A1111 URL", "Base URL of the WebUI API", s.a1111_url, RW)
+        p.add_string_argument(
+            "remote-url", "Remote GPU pairing code", "ofgpu:// line from the OpenFill GPU server", s.remote_url, RW
+        )
+        p.add_string_argument("remote-ssh", "Remote GPU over SSH", "user@computer, empty = direct", s.remote_ssh, RW)
         p.add_boolean_argument("autostart", "S_tart backend automatically", "", s.autostart, RW)
         p.add_int_argument(
             "idle-timeout-minutes",

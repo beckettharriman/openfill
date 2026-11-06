@@ -473,7 +473,7 @@ class PatchyBridge:
         layers: list[PatchyLayer] = []
         for index, data in enumerate(images):
             name = base_name if len(images) == 1 else f"{base_name} ({index + 1})"
-            with Image.open(_io.BytesIO(data)) as im:
+            with Image.open(_io.BytesIO(data), formats=["PNG"]) as im:  # results are PNGs OpenFill made
                 rgba = im.convert("RGBA")
             if scale_to_origin and rgba.size != (origin.width, origin.height):
                 rgba = rgba.resize((origin.width, origin.height), Image.LANCZOS)
@@ -783,7 +783,7 @@ class PatchyBridge:
         rows = []
         try:
             for number, data in enumerate(images, start=1):
-                with Image.open(_io.BytesIO(data)) as im:
+                with Image.open(_io.BytesIO(data), formats=["PNG"]) as im:  # results are PNGs OpenFill made
                     files.append(self._write(im.convert("RGBA"), "image"))
                 name = base_name if len(images) == 1 else f"{base_name} ({number})"
                 rows.append({"name": name, "pixels": str(files[-1])})

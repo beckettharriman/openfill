@@ -888,11 +888,30 @@ def gpu_from_comfyui(
     if not url:
         return None
     try:
-        req = Request(url.rstrip("/") + "/system_stats", headers={"User-Agent": "gimp-openfill"})
+        from .comfy_api import auth_headers  # a Remote GPU's pairing code
+
+        headers = {"User-Agent": "gimp-openfill", **auth_headers(url)}
+        req = Request(url.rstrip("/") + "/system_stats", headers=headers)
         with opener(req, timeout=timeout) as resp:
             return parse_system_stats(json.loads(resp.read(1 << 20).decode("utf-8")))
     except Exception:  # noqa: BLE001 - a backend that is down or answers garbage is "unknown"
         return None
+
+
+def detect_remote(comfy_url: str, comfy: Callable[[str], Any] | None = None) -> Hardware:
+    """The Remote GPU's card and memory, as its ComfyUI reports them (this computer's cards do
+    not run the models). Never raises; unknown fields stay None."""
+    try:
+        stats = (comfy or (lambda url: gpu_from_comfyui(url, timeout=PROBE_REMOTE_S)))(comfy_url)
+    except Exception:  # noqa: BLE001
+        stats = None
+    if not stats:
+        return Hardware(os_name=os_name())
+    name, vram, ram = stats
+    return Hardware(name, vram, ram, None, os_name(), "comfyui", None, vendor_from_name(name))
+
+
+PROBE_REMOTE_S = 5.0  # a computer across the network
 
 
 def system_ram() -> int | None:

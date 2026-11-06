@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from openfill import catalog as cat
+from openfill.config import BACKENDS
 
 from . import __version__, about
 from .service import Service, describe
@@ -30,11 +31,22 @@ EDITABLE = {
     "idle_timeout_minutes": int,
     "extra_server_args": str,
     "shared_models": str,  # folders of another ComfyUI, read only (App.set_shared_models)
+    "remote_url": str,  # Remote GPU address (a pasted pairing code is moved into remote_token)
+    "remote_ssh": str,
     "steps": int,
     "cfg": float,
     "grow_percent": float,
     "feather_percent": float,
     "debug": bool,
+    "backend": str,
+    "cloud_provider": str,
+    "cloud_model": str,
+    "cloud_url": str,
+}
+# Values a choice setting may take here (anything else is refused, not saved).
+CHOICES = {
+    "backend": lambda: {b.id for b in BACKENDS if b.photocraft},
+    "cloud_provider": lambda: {"openrouter", "openai"},
 }
 
 
@@ -58,11 +70,12 @@ class Api:
             "job": self.service.state.snapshot(),
             "photocraft": self.service.photocraft(),
             "busy": self.service.busy(),
-            "activeModel": app.active_model_id(),
-            "comfyReady": _comfy_set(app),
-            "comfyProblem": "" if _comfy_set(app) else _comfy_problem(app),
-            "setup": None if _comfy_set(app) else self.service.setup_progress(),
+            "activeModel": "cloud" if app.uses_cloud else app.active_model_id(),
+            "comfyReady": _comfy_set(app) or app.uses_cloud,
+            "comfyProblem": "" if _comfy_set(app) or app.uses_cloud else _comfy_problem(app),
+            "setup": None if _comfy_set(app) or app.uses_cloud else self.service.setup_progress(),
             "pick": self._pick,
+            "cloud": _cloud_state(app),
         }
 
     def models(self) -> dict[str, Any]:
@@ -82,9 +95,7 @@ class Api:
                 row["neededBy"] = needed_by(list(app.catalog), row["id"])
         hw = None
         try:
-            from openfill import hardware
-
-            detected = hardware.detect(app.models_root, app.server.url())
+            detected = app.hardware()  # this computer's card, or the Remote GPU's
             hw = hardware_line(detected)
             if detected.is_amd:
                 cat.add_amd_notes(rows, app.catalog)  # what may not work on an AMD card
@@ -114,6 +125,10 @@ class Api:
         s = self.service.app.settings
         out = {k: getattr(s, k) for k in EDITABLE}
         out["shared_models"] = shared_models.display(s.shared_models)  # one line for the text field
+        # the key itself never leaves the settings file: only whether one is saved, and for what
+        out["cloud_key_saved"] = s.cloud_key_usable
+        out["cloud_key_elsewhere"] = bool(s.cloud_api_key) and not s.cloud_key_usable
+        out["cloud_key_for"] = s.cloud_key_for
         return out
 
     # POST -----------------------------------------------------------------------------
@@ -153,19 +168,35 @@ class Api:
             app.save_token(str(body.get("token", "")))
             return {"ok": True}
         if path == "/api/settings":
+            from dataclasses import replace
+
             from openfill import catalog as cat
             from openfill import shared_models
 
+            for key, allowed in CHOICES.items():
+                if key in body and str(body[key]) not in allowed():
+                    raise ValueError(f"'{body[key]}' is not a choice for {key}.")
+            was_cloud = app.uses_cloud
             shared = str(body["shared_models"]) if "shared_models" in body else None
-            values = {key: kind(body[key]) for key, kind in EDITABLE.items() if key in body and key != "shared_models"}
-            new_comfy = "comfy_dir" in values and values["comfy_dir"] != app.settings.comfy_dir
+            # checked on a copy first: a refused save changes nothing
+            trial = replace(app.settings)
+            for key, kind in EDITABLE.items():
+                if key in body and key != "shared_models":
+                    setattr(trial, key, kind(body[key]))
+            new_comfy = trial.comfy_dir != app.settings.comfy_dir
+            # a new key is bound to this service and address; an empty field never moves the saved one
+            trial.set_cloud(
+                trial.cloud_provider, trial.cloud_url, trial.cloud_model, str(body.get("cloud_api_key") or "")
+            )
+            if trial.uses_cloud and not trial.cloud_key_usable:
+                raise ValueError(trial.cloud_key_problem() or "Paste your API key for the cloud service first.")
             if shared is not None:
                 # checked first, against the ComfyUI folder being saved, so a bad folder leaves
                 # every setting as it was (an unchanged list is not checked again)
-                new_root = cat.default_models_root(values["comfy_dir"]) if new_comfy and values["comfy_dir"] else None
+                new_root = cat.default_models_root(trial.comfy_dir) if new_comfy and trial.comfy_dir else None
                 shared = app.check_shared_models(shared, new_root)
-            for key, value in values.items():
-                setattr(app.settings, key, value)
+            trial.take_pairing_code()  # a pasted Remote GPU pairing line: the code goes into remote_token
+            app.settings.__dict__.update(trial.__dict__)
             app.settings.save(app.paths.config)
             app.reload_settings()
             if shared is not None and shared_models.parse(shared) != shared_models.parse(app.settings.shared_models):
@@ -173,6 +204,8 @@ class Api:
             elif new_comfy:
                 app.write_shared_config()  # the yaml names OpenFill's own models folder first
                 app.rescan()
+            if was_cloud and not app.uses_cloud:
+                svc.warm_up()
             return self.settings()
         if path == "/api/shared/find":
             from openfill import shared_models
@@ -192,6 +225,23 @@ class Api:
             app.open_log_folder()
             return {"ok": True}
         raise KeyError(path)
+
+
+def _cloud_state(app) -> dict[str, Any] | None:
+    """What the page shows while the cloud is the backend (None otherwise); never the key."""
+    if not app.uses_cloud:
+        return None
+    from openfill.backends.cloud import destination
+
+    s = app.settings
+    return {
+        "status": f"Cloud: {destination(s.cloud_provider, s.cloud_url)}",
+        "note": s.cloud_note(),
+        "promptNote": s.cloud_note("prompt"),
+        "model": app.cloud_model_name(),
+        "key": s.cloud_key_usable,
+        "keyProblem": s.cloud_key_problem(),
+    }
 
 
 def _comfy_set(app) -> bool:

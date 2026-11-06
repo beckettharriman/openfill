@@ -36,6 +36,7 @@ from .backend import (
     Txt2ImgRequest,
 )
 from .backends.a1111 import A1111Backend
+from .backends.cloud import CloudBackend
 from .backends.comfy import ComfyBackend
 from .comfy_api import ComfyApiError, ComfyClient, unsupported_gpu_line
 from .config import Paths, Settings, comfy_layout, comfy_problem
@@ -60,6 +61,7 @@ NO_OPENCV_MANUAL = (
 
 # Model ids the old "fast"/"quality" choices meant without a catalog; with
 # one they resolve to the tier's installed default (catalog.TIER_PREFERENCE).
+REMOTE_DIRNAME = "remote-gpu"  # folder names for the Remote GPU's model list (never created on disk)
 LEGACY_CHOICES = {"fast": "sd15-inpainting", "quality": "sdxl-base"}
 MODEL_LIST_NODES = (
     ("CheckpointLoaderSimple", "ckpt_name"),
@@ -125,7 +127,9 @@ class App:
         except cat.CatalogError as err:
             self.log.warning("catalog unavailable: %s", err)
             self.catalog = []
-        if self.catalog and self.settings.comfy_dir:
+        self._remote_checked = 0.0  # Remote GPU: when the remote model and node list was last read
+        self._remote_failed = 0.0
+        if self.catalog and self.settings.comfy_dir and not self.settings.uses_remote:
             # The user's own SD 1.5 inpainting, SDXL and FLUX.1 Fill files in ComfyUI's folders,
             # and the models of other installs in the shared folders (read only).
             try:
@@ -144,6 +148,9 @@ class App:
 
     @property
     def models_root(self) -> Path:
+        if self.settings.uses_remote:
+            self.refresh_remote_tree()
+            return self.paths.base / REMOTE_DIRNAME / "models"
         return cat.default_models_root(self.settings.comfy_dir)
 
     @property
@@ -294,7 +301,7 @@ class App:
         """Load the catalog again with the files on disk (own and shared folders)."""
         try:
             entries = cat.load_merged(plugin_dir=self.plugin_dir, base=self.paths.base)
-            if self.settings.comfy_dir:
+            if self.settings.comfy_dir and not self.settings.uses_remote:  # Remote GPU: its own list
                 entries, _found, _skipped = local_models.build(
                     entries, self.models_root, self.paths.base, self.shared_roots
                 )
@@ -304,23 +311,96 @@ class App:
 
     @property
     def custom_nodes_dir(self) -> Path:
+        if self.settings.uses_remote:
+            self.refresh_remote_tree()
+            return self.paths.base / REMOTE_DIRNAME / "custom_nodes"
         return cat.default_custom_nodes_dir(self.settings.comfy_dir)
+
+    def refresh_remote_tree(self, force: bool = False) -> bool:
+        """Remote GPU: read which models and node packs the GPU computer's ComfyUI has (at most
+        every 15 s, or now with ``force``) and let the catalog's status checks use that list for
+        :attr:`models_root` and :attr:`custom_nodes_dir`. False when it could not be read; the
+        last list read stays in use then (none at all: nothing counts as installed)."""
+        from . import remote
+
+        now = time.monotonic()
+        if not force and (
+            now - self._remote_checked < remote.TREE_TTL or now - self._remote_failed < remote.RETRY_AFTER_FAILURE
+        ):
+            return True
+        self._remote_checked = now
+        base = self.paths.base / REMOTE_DIRNAME
+        if cat.remote_tree(base / "models") is None:
+            cat.register_remote_tree(cat.RemoteTree(base / "models", base / "custom_nodes"))
+        try:
+            url = self.server.url()
+            tree = remote.fetch_tree(
+                ComfyClient(url, timeout=4),
+                remote.catalog_folders(self.catalog),
+                base / "models",
+                base / "custom_nodes",
+            )
+        except (ComfyApiError, OSError, ValueError) as err:
+            self._remote_failed = now
+            self.log.info("remote GPU: model list not read: %s", err)
+            return False
+        cat.register_remote_tree(tree)
+        self._remote_failed = 0.0
+        self.log.debug(
+            "remote GPU: %d model files, node packs %s",
+            sum(len(v) for v in tree.files.values()),
+            ", ".join(sorted(tree.nodes)) or "none",
+        )
+        return True
 
     # backend -------------------------------------------------------------
 
+    @property
+    def uses_cloud(self) -> bool:
+        """The user picked the cloud service: pictures go to it, and ComfyUI is never used."""
+        return self.settings.backend == "cloud"
+
+    def cloud_backend(self) -> CloudBackend:
+        s = self.settings
+        return CloudBackend(
+            s.cloud_provider,
+            s.cloud_api_key if s.cloud_key_usable else "",  # never sent to a service it was not entered for
+            s.cloud_model,
+            s.cloud_url,
+            s.cloud_api,
+            float(s.request_timeout or 0),
+            self.log,
+            decode=getattr(self.io, "decode_image", None),
+            key_problem=s.cloud_key_problem(),
+        )
+
     def backend(self, progress=None, cancel=None) -> Backend:
+        # Exactly the backend the user picked: the cloud is never a stand-in for a ComfyUI
+        # that fails to start, and ComfyUI never runs a job meant for the cloud.
+        if self.uses_cloud:
+            return self.cloud_backend()
         self._restart_for_shared_models()
         url = self.server.ensure_running(progress, cancel)
         timeout = float(self.settings.request_timeout or 0)
         if self.settings.backend == "a1111":
             return A1111Backend(url, timeout, self.log)
         self._check_device(url)
+        # Remote GPU: no local model folder (the timeout estimate then allows for a model load).
+        if not self.settings.uses_remote:
+            return ComfyBackend(
+                url,
+                request_timeout=timeout,
+                logger=self.log,
+                models_root=self.models_root,
+                server_gone=self.server.death_watch(),
+            )
         return ComfyBackend(
             url,
             request_timeout=timeout,
             logger=self.log,
-            models_root=self.models_root,
-            server_gone=self.server.death_watch(),
+            connection_lost=ui_text.remote_connection_lost(self.server.remote.host),
+            # checked every few seconds while a job runs: a drop shows within about 15 s
+            link_path="/openfill/ping" if self.server.remote.kind == "gpu-server" else "/system_stats",
         )
 
     def _check_device(self, url: str) -> None:
@@ -335,7 +415,7 @@ class App:
             self.log.info("backend device: unknown (%s)", err)
             return
         self.log.info("backend device: %s", desc or "none listed")
-        if kind == "gpu":
+        if kind == "gpu" and not self.settings.uses_remote:  # ComfyUI's log is on the GPU computer
             # PyTorch warns at start-up when it has no code for the card ("... with CUDA capability
             # sm_61 is not compatible with the current PyTorch installation"); every job would then
             # fail with a CUDA error. Say so before the first one.
@@ -345,6 +425,10 @@ class App:
                 self._warn_once("gpu-warned", warning, ui_text.unsupported_gpu_message(warning))
             return
         if kind != "cpu":
+            return
+        if self.settings.uses_remote:
+            self.log.warning("the GPU computer's ComfyUI runs on its processor, not a graphics card")
+            self._warn_once("cpu-warned", desc, ui_text.remote_message("cpu"))
             return
         flags = " ".join(a for a in self.settings.extra_server_args.split() if a in ui_text.CPU_FLAGS)
         self.log.warning("ComfyUI runs on the processor, not a graphics card (%s)", flags or "its PyTorch has no GPU")
@@ -380,7 +464,7 @@ class App:
 
     def server_model_files(self) -> list[str] | None:
         """Model files the running server lists (None when it is not up)."""
-        if self.settings.backend != "comfyui":
+        if self.settings.backend not in ("comfyui", "remote"):
             return None
         client = ComfyClient(self.server.url(), timeout=5)
         if not client.is_alive(timeout=2.0):
@@ -396,7 +480,10 @@ class App:
     # models --------------------------------------------------------------
 
     def resolve_model(self, choice: str | None) -> tuple[cat.ModelEntry | None, ModelSpec]:
-        """Map a dialog choice ('active', a legacy tier or a catalog id) to a model."""
+        """Map a dialog choice ('active', a legacy tier or a catalog id) to a model.
+        With the cloud backend every choice means the cloud model (no catalog entry)."""
+        if self.uses_cloud:
+            return None, self.cloud_model_spec()
         self.require_backend_install()
         self._restart_for_shared_models()
         choice = (choice or "active").strip()
@@ -445,6 +532,19 @@ class App:
             )
         self._fetch_missing_previews(entry)
         return entry, cat.model_spec_for(entry, self.catalog, self.models_root)
+
+    def cloud_model_spec(self) -> ModelSpec:
+        from .backends.cloud import provider
+
+        name = self.settings.cloud_model or provider(self.settings.cloud_provider).default_model
+        return ModelSpec(checkpoint=name or "cloud model", arch="cloud", template="cloud")
+
+    def cloud_model_name(self) -> str:
+        """The cloud model in words, e.g. "google/gemini-2.5-flash-image (OpenRouter)"."""
+        from .backends.cloud import destination
+
+        where = destination(self.settings.cloud_provider, self.settings.cloud_url)
+        return f"{self.cloud_model_spec().checkpoint} ({where})"
 
     def _put_bundled_nodes(self, entry: cat.ModelEntry) -> bool:
         """Copy OpenFill's own node pack (it ships with the plug-in) into ComfyUI when ``entry``
@@ -540,7 +640,12 @@ class App:
     def require_backend_install(self) -> None:
         """With the managed ComfyUI backend, a missing ComfyUI folder is the real
         problem; report it before any model check (which would otherwise say a
-        model is missing). A server that answers anyway (started by hand) is fine."""
+        model is missing). A server that answers anyway (started by hand) is fine.
+        Remote GPU: the GPU computer must answer (else its own message), and its model list is read."""
+        if self.settings.uses_remote:
+            self.server.ensure_running()
+            self.refresh_remote_tree(force=True)
+            return
         if self.settings.backend != "comfyui" or comfy_layout(self.settings.comfy_dir) is not None:
             return
         if ComfyClient(self.server.url(), timeout=3).is_alive(timeout=2.0):
@@ -551,7 +656,8 @@ class App:
         )
 
     def model_rows(self, server_files: list[str] | None = None) -> list[dict]:
-        self.require_backend_install()
+        if not self.settings.uses_remote:  # remote: the rows show what the last list read says
+            self.require_backend_install()
         active = self.active_model_id()
         rows = []
         for e in self.catalog:
@@ -609,7 +715,10 @@ class App:
             raise BackendError(f"The settings could not be saved: {err}") from err
 
     def has_model_for(self, operation: str) -> bool:
-        """True when a downloaded model can run ``operation`` (fill, expand, txt2img, remove, edit)."""
+        """True when a downloaded model can run ``operation`` (fill, expand, txt2img, remove, edit).
+        The cloud service runs every operation."""
+        if self.uses_cloud:
+            return True
         return bool(cat.runnable_installed(self.catalog, self.models_root, self.custom_nodes_dir, operation))
 
     def installed_models(self, operation: str = "remove") -> list[cat.ModelEntry]:
@@ -638,6 +747,8 @@ class App:
 
     def queue_download(self, model_id: str, include_dependencies: bool = True) -> list[str]:
         entry = cat.by_id(self.catalog, model_id)
+        if self.settings.uses_remote:
+            raise ModelMissing(ui_text.remote_download_message(model_display_name(entry.name), entry.id))
         if cat.gated_files_missing(entry, self.models_root) and not self.settings.hf_token:
             pages = ", ".join(cat.login_pages(entry, self.models_root)) or entry.page
             raise ModelMissing(
@@ -679,6 +790,17 @@ class App:
 
     def queue_node_install(self, model_id: str) -> str | None:
         entry = cat.by_id(self.catalog, model_id)
+        if self.settings.uses_remote:
+            # The GPU server installs the packs its own catalog names for this model, on its computer.
+            from . import remote
+
+            if not [n for n in entry.requires_nodes if cat.node_missing(self.custom_nodes_dir, n)]:
+                return None
+            answer = remote.install_nodes(ComfyClient(self.server.ensure_running(), timeout=30), entry.id)
+            self._remote_checked = 0.0  # read the list again once the GPU server is done
+            self.server._remote_status = (0.0, {})
+            self.log.info("remote GPU: node install for %s: %s", entry.id, answer.get("message", ""))
+            return str(answer.get("task_id") or "remote")
         layout = comfy_layout(self.settings.comfy_dir)
         if layout is None:
             raise ModelMissing(f"ComfyUI was not found at '{self.settings.comfy_dir}'")
@@ -697,6 +819,8 @@ class App:
 
     def queue_opencv_install(self) -> str | None:
         """Queue the pinned OpenCV for ComfyUI's interpreter, unless it is already queued or running."""
+        if self.settings.uses_remote:
+            return None  # ComfyUI's Python is on the GPU computer
         layout = comfy_layout(self.settings.comfy_dir) if self.settings.comfy_dir else None
         packages = list(comfy_setup.load_manifest().pip)
         if layout is None or not packages:
@@ -726,6 +850,8 @@ class App:
 
     def remove_model(self, model_id: str) -> str:
         entry = cat.by_id(self.catalog, model_id)
+        if self.settings.uses_remote:
+            raise BackendError(ui_text.remote_message("remove"))
         shared = {
             f.dest
             for e in self.catalog
@@ -739,6 +865,8 @@ class App:
         return self.server.queue_task(task)
 
     def open_models_folder(self) -> None:
+        if self.settings.uses_remote:
+            raise BackendError(ui_text.remote_message("folder"))
         _open_folder(self.models_root)
 
     def open_log_folder(self) -> None:
@@ -846,6 +974,8 @@ class App:
         """(picked, better) when the Expand default is installed and is not the
         model picked; None otherwise. The pick is always respected unless the
         user agrees to the switch."""
+        if self.uses_cloud:
+            return None
         entry, _model = self.resolve_model(model_choice)
         try:
             installed = cat.runnable_installed(self.catalog, self.models_root, self.custom_nodes_dir, "expand")
@@ -896,7 +1026,9 @@ class App:
         if selection is None:
             self.log.info("fill: refused, nothing selected")
             raise NothingSelected(NO_SELECTION_MESSAGE)
-        if (remove or not prompt.strip()) and not as_picked and self._is_default_choice(model_choice):
+        if self.uses_cloud:
+            pass  # one model does everything; LaMa and the catalog are not involved
+        elif (remove or not prompt.strip()) and not as_picked and self._is_default_choice(model_choice):
             # Remove object, or an empty prompt, with the default model: LaMa (then MAT)
             # whenever one is installed; generation checkpoints (SDXL in 10 of 13 judged
             # cases) repaint the object they were asked to remove. A model picked by
@@ -954,7 +1086,11 @@ class App:
         layer_grow = geometry.layer_mask_grow(mp, removal_intent)
         color_match = geometry.color_match_strength(target, ctx, full, removal_intent)
         prefill_style, prefill_mode = geometry.prefill_for(removal_intent, strength, model.arch)
-        if model.prompt_free:
+        if self.uses_cloud:
+            # The cloud backend words its own instruction for a removal ("remove what is there").
+            prompt = "" if removal_intent else prompt
+            strength = 1.0
+        elif model.prompt_free:
             prompt, negative = "", ""
         elif model.eraser:
             # Erase-trained: their own prompt (what the user typed is not used).
@@ -1019,7 +1155,7 @@ class App:
             negative=negative,
             model=model,
             sampling=self.sampling(model, variations, seed, strength),
-            mode="fill",
+            mode="remove" if self.uses_cloud and removal_intent else "fill",
             grow=mp.grow_work,
             feather=mp.blur_work,
             prefill=self.settings.prefill,
@@ -1048,21 +1184,25 @@ class App:
             self.server.touch()
             self._after_generation(result)
             self._debug_dump("fill", request, result, ctx)
+            # A cloud result is a layer that is transparent outside the selection with its own soft
+            # edge inside it; its layer mask is the selection itself, never grown past it.
             layers = self.io.insert_results(
                 image,
                 result.images,
                 ctx,
                 name,
-                float(mp.feather_image),
+                0.0 if self.uses_cloud else float(mp.feather_image),
                 self.paths.temp,
-                grow=layer_grow,
+                grow=0 if self.uses_cloud else layer_grow,
             )
         except BaseException as err:
             runner.fail(err)
             raise
-        if self.settings.seam_correction and not model.prompt_free:
+        # A cloud result is already blended inside the selection on this computer, and these two
+        # rewrite the layer where its mask reaches past the selection: skipped, so no pixel there changes.
+        if self.settings.seam_correction and not model.prompt_free and not self.uses_cloud:
             self._correct_seams(image, layers, ctx, image_rgba, mask_raw, layer_grow)
-        if self.settings.grain_match and not model.prompt_free:
+        if self.settings.grain_match and not model.prompt_free and not self.uses_cloud:
             self._match_grain(image, layers, ctx, image_rgba, mask_raw, result.seed)
         if len(layers) > 1 and self.settings.rank_variations:
             layers = self._rank_variations(
@@ -1284,7 +1424,7 @@ class App:
         )
         if model.prompt_free:
             prompt, negative = "", ""
-        else:
+        elif not self.uses_cloud:  # the cloud backend asks to continue the scene itself
             prompt, negative = workflow.expand_prompts(prompt, negative)
         sampling = self.sampling(model, variations, seed, 1.0)
         sampling = replace(sampling, cfg=workflow.expand_cfg(model.arch, sampling.cfg))
@@ -1362,13 +1502,13 @@ class App:
                 result.images,
                 plan.context,
                 _layer_name("Generative Expand", prompt),
-                float(mp.feather_image),
+                0.0 if self.uses_cloud else float(mp.feather_image),
                 self.paths.temp,
                 mask_pixels=mask_pixels,
             )
         finally:
             image.undo_group_end()
-        if self.settings.seam_correction and not model.prompt_free:
+        if self.settings.seam_correction and not model.prompt_free and not self.uses_cloud:
             # Where the old image's pixels are, in context coordinates (the crop is not part of it).
             old_rect = (
                 crop[0] - source_rect.x,
@@ -1485,6 +1625,8 @@ class App:
             self.log.warning("debug dump failed: %s", err)
 
     def check_backend(self) -> HealthStatus:
+        if self.uses_cloud:  # checks the key; sends no picture
+            return self.cloud_backend().health()
         try:
             backend = self.backend(self.io.GimpProgress("Checking the AI backend"))
         except BackendError as err:
@@ -1493,7 +1635,16 @@ class App:
         self.refresh_models_cache(health)
         return health
 
+    def hardware(self) -> hardware.Hardware:
+        """The graphics card the models run on: this computer's, or the Remote GPU's (as its
+        ComfyUI reports it)."""
+        if self.settings.uses_remote:
+            return hardware.detect_remote(self.server.url())
+        return hardware.detect(self.models_root, self.server.url())
+
     def stop_backend(self) -> str:
+        if self.settings.uses_remote:
+            return ui_text.remote_message("stop")
         state = self.server.read_state()
         if not state:
             return "No managed backend is running."

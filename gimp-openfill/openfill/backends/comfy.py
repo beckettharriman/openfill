@@ -32,7 +32,7 @@ from ..backend import (
     UnsupportedGpu,
     WorkflowRejected,
 )
-from ..comfy_api import ComfyApiError, ComfyClient, ComfyExecutionError
+from ..comfy_api import DEADLINE_MESSAGE, ComfyApiError, ComfyClient, ComfyExecutionError, LinkLost
 from ..geometry import estimate_timeout, seed_or_random
 
 # While the server keeps sending progress, previews or node events, the
@@ -106,13 +106,16 @@ class ComfyBackend(Backend):
         logger=None,
         models_root: Path | str | None = None,
         server_gone: Callable[[], bool] | None = None,
+        connection_lost: str = "",
+        link_path: str = "",
     ) -> None:
         self.url = url
         # Tells whether the managed ComfyUI process has exited (ServerManager.death_watch);
         # a lost connection then fails the job at once instead of after a grace period.
         self.server_gone = server_gone
+        self.connection_lost = connection_lost or CONNECTION_LOST  # what to say when ComfyUI goes away mid-job
         self.models_root = Path(models_root) if models_root else None
-        self.client = client or ComfyClient(url)
+        self.client = client or ComfyClient(url, link_path=link_path)
         self.request_timeout = request_timeout  # 0 = estimate per request
         self.log = logger
         self._caps: workflow.Capabilities | None = None
@@ -305,6 +308,10 @@ class ComfyBackend(Backend):
                 activity_extension=0.0 if self.request_timeout else ACTIVITY_EXTENSION,
                 server_gone=self.server_gone,
             )
+        except LinkLost as err:
+            if self.log:
+                self.log.warning("connection lost mid-job: %s", err)
+            raise BackendUnavailable(self.connection_lost) from err
         except ComfyExecutionError as err:
             if err.is_unsupported_gpu:
                 raise UnsupportedGpu(str(err)) from err
@@ -315,11 +322,16 @@ class ComfyBackend(Backend):
             text = str(err)
             if "cancelled" in text or "interrupted" in text:
                 raise GenerationCancelled(text) from err
+            if text == DEADLINE_MESSAGE:  # the job ran past its time: stop it on the server too
+                self.cancel()
+                raise GenerationTimeout(f"no result after {time.monotonic() - started:.0f} s") from err
+            # A request that failed because the server no longer answers at all: it stopped, or
+            # (Remote GPU) the network dropped. That is not a slow generation.
+            if self._connection_lost(err):
+                raise BackendUnavailable(self.connection_lost) from err
             if "timed out" in text:
                 self.cancel()
                 raise GenerationTimeout(f"no result after {time.monotonic() - started:.0f} s") from err
-            if self._connection_lost(err):
-                raise BackendUnavailable(CONNECTION_LOST) from err
             raise BackendUnavailable(text) from err
         finally:
             self._progress = Progress(1.0, "done", False)
@@ -329,7 +341,7 @@ class ComfyBackend(Backend):
             images = self.client.output_images(entry, workflow.OUTPUT_NODE)
         except ComfyApiError as err:
             if self._connection_lost(err):
-                raise BackendUnavailable(CONNECTION_LOST) from err
+                raise BackendUnavailable(self.connection_lost) from err
             raise BackendUnavailable(f"could not download the result: {err}") from err
         if self.log:
             first = self._first_step or finished
@@ -385,6 +397,8 @@ class ComfyBackend(Backend):
 
     @staticmethod
     def _translate_queue_error(err: ComfyApiError, graph: dict) -> Exception:
+        if err.status == 403 and (err.payload or {}).get("error"):  # the OpenFill GPU server refused the job
+            return WorkflowRejected(str(err.payload["error"]))
         if err.node_errors:
             text = workflow.describe_node_errors(err.node_errors, graph)
             lowered = text.lower()

@@ -92,6 +92,63 @@ class CatalogError(ValueError):
     """The catalog file is missing, malformed or names an unknown model."""
 
 
+# ------------------------------------------------------------ remote GPU ----
+# With a Remote GPU the models and node packs are on another computer. The App then uses two
+# folder names that do not exist on this disk (``RemoteTree.models_root`` and ``nodes_root``) and
+# registers what the remote ComfyUI lists for them here; every status check below asks the tree
+# instead of the disk for paths under those roots.
+
+
+@dataclass
+class RemoteTree:
+    """What a ComfyUI on another computer has: model names per folder and its node packs.
+
+    ``files`` maps a ComfyUI model folder (``checkpoints``, ``unet``, ...) to the names its
+    loaders list (``/`` separators). ``nodes`` maps a node pack folder to its OpenFill VERSION,
+    "" when it has none and ``None`` when the folder is unknown but the pack's nodes are loaded."""
+
+    models_root: Path
+    nodes_root: Path
+    files: dict[str, set[str]] = field(default_factory=dict)
+    nodes: dict[str, str | None] = field(default_factory=dict)
+
+    def has_file(self, dest: str) -> bool:
+        folder, _, rest = dest.replace("\\", "/").partition("/")
+        return bool(rest) and rest in self.files.get(folder, set())
+
+    def names(self, folder: str) -> set[str]:
+        return self.files.get(folder.replace("\\", "/").strip("/"), set())
+
+    def node_missing(self, node: NodeSpec) -> bool:
+        if node.folder not in self.nodes:
+            return True
+        version = self.nodes[node.folder]
+        return node.bundled and version is not None and version != node.commit
+
+
+_REMOTE_TREES: list[RemoteTree] = []
+
+
+def register_remote_tree(tree: RemoteTree | None, models_root: Path | None = None) -> None:
+    """Make ``tree`` answer for its roots (replacing an older one); ``None`` with ``models_root``
+    forgets the tree registered for that root."""
+    root = tree.models_root if tree is not None else models_root
+    _REMOTE_TREES[:] = [t for t in _REMOTE_TREES if t.models_root != root]
+    if tree is not None:
+        _REMOTE_TREES.append(tree)
+
+
+def remote_tree(path: Path | str | None, nodes: bool = False) -> RemoteTree | None:
+    """The registered tree whose models (or, with ``nodes``, node) root is ``path``."""
+    if path is None:
+        return None
+    path = Path(path)
+    for tree in _REMOTE_TREES:
+        if path == (tree.nodes_root if nodes else tree.models_root):
+            return tree
+    return None
+
+
 # Role of the small TAESD decoder ComfyUI draws the live preview with (models/vae_approx). Downloaded
 # with the model, but a model without it is still installed: only the preview is missing.
 PREVIEW_ROLE = "preview"
@@ -102,11 +159,16 @@ def missing_previews(entry: ModelEntry, models_root: Path) -> list[FileSpec]:
     ``<decoder>.<ext>`` in the folder (newer ComfyUI builds ship ``taesd_decoder.safetensors``),
     so one under another extension counts too."""
     out = []
+    tree = remote_tree(models_root)
     for f in entry.files:
         if f.role != PREVIEW_ROLE or file_installed(models_root, f):
             continue
-        folder = spec_path(models_root, f).parent
         stem = f.filename.rsplit(".", 1)[0] + "."
+        if tree is not None:
+            if not any(n.startswith(stem) for n in tree.names(f.subfolder)):
+                out.append(f)
+            continue
+        folder = spec_path(models_root, f).parent
         try:
             if any(p.name.startswith(stem) and p.stat().st_size > 0 for p in folder.iterdir()):
                 continue
@@ -174,7 +236,11 @@ class NodeSpec:
 
 def node_missing(custom_nodes_dir: Path | str, node: NodeSpec) -> bool:
     """True when ``node`` is not installed in ``custom_nodes_dir``: its folder is
-    missing, or (OpenFill's own pack) it holds another version."""
+    missing, or (OpenFill's own pack) it holds another version. On a Remote GPU: what its
+    ComfyUI (and the OpenFill GPU server) reports."""
+    tree = remote_tree(custom_nodes_dir, nodes=True)
+    if tree is not None:
+        return tree.node_missing(node)
     folder = Path(custom_nodes_dir) / node.folder
     if not folder.is_dir():
         return True
@@ -633,7 +699,11 @@ def spec_path(models_root: Path, spec: FileSpec) -> Path:
 
 def file_installed(models_root: Path, spec: FileSpec) -> bool:
     """True when ``spec.dest`` exists under ``models_root`` (or the spec's own read-only
-    ``root``) with the catalog size."""
+    ``root``) with the catalog size (on a Remote GPU: when its ComfyUI lists the file; it does
+    not say the size)."""
+    tree = remote_tree(models_root)
+    if tree is not None:
+        return tree.has_file(spec.dest)
     path = spec_path(models_root, spec)
     if not path.is_file():
         return False
@@ -658,7 +728,7 @@ def install_status(
         if f.role == PREVIEW_ROLE or file_installed(models_root, f):
             continue  # a missing live-preview decoder only costs the preview
         missing.append(f.dest)
-        if not f.root and (Path(models_root) / (f.dest + ".part")).exists():
+        if not f.root and remote_tree(models_root) is None and (Path(models_root) / (f.dest + ".part")).exists():
             partial.append(f.dest)
     missing_nodes = []
     if custom_nodes_dir is not None:

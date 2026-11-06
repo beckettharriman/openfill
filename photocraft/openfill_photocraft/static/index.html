@@ -175,6 +175,21 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div style="height:4px"></div>
     </div>
     <div class="stack" id="sec-engine" style="gap:12px" hidden>
+      <div class="field"><span class="label">Where images are made</span><select id="s-backend" aria-label="Where images are made"><option value="comfyui">This computer</option><option value="remote">Remote GPU</option><option value="cloud">Cloud service (paid, sends your image online)</option></select></div>
+      <div class="stack" id="cloud-fields" style="gap:12px" hidden>
+        <div class="small">Optional. Runs Fill, Remove, Expand and Create on a paid online service instead of this computer. Nothing is sent until you press Generate, and nothing is ever sent while This computer is picked.</div>
+        <div class="field"><span class="label">Service</span><select id="s-cloud_provider" aria-label="Cloud service"><option value="openrouter">OpenRouter</option><option value="openai">OpenAI-compatible (OpenAI, LiteLLM, ...)</option></select></div>
+        <div class="field"><span class="label">API key</span><input id="cloud-key" type="password" autocomplete="off" aria-label="API key"><span class="small">Kept only in OpenFill's settings file on this computer, readable by you alone.</span></div>
+        <div class="field"><span class="label">Model</span><input id="s-cloud_model" type="text" aria-label="Cloud model"></div>
+        <div class="field"><span class="label">Address</span><input id="s-cloud_url" type="text" aria-label="Cloud address"><span class="small">Empty model or address: the service's own. For LiteLLM, its /v1 address.</span></div>
+        <div class="note" id="cloud-note" style="color:#e8a33c"></div>
+        <div class="small">Each picture is billed to your account with the service.</div>
+      </div>
+      <div class="stack" id="remote-fields" style="gap:12px" hidden>
+        <div class="field"><span class="label">Remote GPU pairing code</span><input id="s-remote_url" type="text" placeholder="ofgpu://... from the OpenFill GPU server" aria-label="Remote GPU pairing code"></div>
+        <div class="field"><span class="label">Over SSH (optional)</span><input id="s-remote_ssh" type="text" placeholder="user@computer, empty = connect directly" aria-label="Remote GPU over SSH"></div>
+        <div class="small">ComfyUI runs on another computer of yours. See docs/remote-gpu.md.</div>
+      </div>
       <div class="field"><span class="label">ComfyUI folder</span><input id="s-comfy_dir" type="text" aria-label="ComfyUI folder"></div>
       <label class="check"><input type="checkbox" id="s-autostart"><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span>Start the AI engine with PhotoCraft</span></label>
       <div class="field"><span class="label">Stop after idle</span><div style="display:flex;gap:8px;align-items:center"><input id="s-idle_timeout_minutes" type="number" style="width:72px" aria-label="Stop after idle, minutes"><span class="small">minutes, 0 = never</span></div></div>
@@ -221,7 +236,7 @@ const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0
 const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create"};
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
-let mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
+let cloud=null, loaded={}, mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
 
 function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
 $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
@@ -288,7 +303,8 @@ function removalChoices(){const inst=usable(),rem=inst.filter(r=>(r.capabilities
   rem.concat(painters).forEach(r=>{if(r.id!==def)out.push([short(r.name),r.id])});
   return out}
 function fillSelect(){const s=$("model");let opts;
-  if(mode==="remove")opts=removalChoices();
+  if(cloud)opts=[[cloud.model,"cloud"]];
+  else if(mode==="remove")opts=removalChoices();
   else{const inst=usable();opts=inst.filter(r=>(r.capabilities||[]).includes(mode)).map(r=>[r.name,r.id]);
     // Fill also offers the removal models: with an empty prompt they remove (LaMa and MAT ignore a prompt, erasers use their own)
     if(mode==="fill")inst.filter(r=>(r.capabilities||[]).includes("remove")&&!(r.capabilities||[]).includes("fill")).forEach(r=>opts.push([r.name,r.id]))}
@@ -300,11 +316,13 @@ function fillSelect(){const s=$("model");let opts;
   s.value=want||"";$("go").disabled=busy||!opts.length}
 
 function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.statusText||"").startsWith("Downloading"))||models.find(r=>r.statusText==="Waiting");
-  if(!s.comfyReady)html=`<div class="head">${svg("warn",C.warn)}<span class="t">AI engine not found</span></div><div class="small">OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it.</div><div style="display:flex;gap:8px"><button class="btn accent flex" id="setup-folder">Choose folder</button><button class="btn flex" id="setup-help">How to install</button></div>`;
+  if(cloud&&!cloud.key)html=`<div class="head">${svg("warn",C.warn)}<span class="t">The cloud service needs your key</span></div><div class="small">${esc(cloud.keyProblem||"Paste your API key under Engine in the settings. Nothing is sent until you generate.")}</div><div style="display:flex"><button class="btn accent flex" id="setup-cloud">Open settings</button></div>`;
+  else if(cloud)html="";
+  else if(!s.comfyReady)html=`<div class="head">${svg("warn",C.warn)}<span class="t">AI engine not found</span></div><div class="small">OpenFill runs on ComfyUI. Choose its folder (the one with main.py), or install it. No suitable graphics card? A paid cloud service can do the work instead (settings, Engine). Your images are then sent to it.</div><div style="display:flex;gap:8px"><button class="btn accent flex" id="setup-folder">Choose folder</button><button class="btn flex" id="setup-help">How to install</button></div>`;
   else if(dl){const pct=dl.statusText.startsWith("Downloading")?parseInt(dl.statusText.split(" ").pop()):0;html=`<div class="head">${svg("download",C.accent)}<span class="t">Downloading ${esc(short(dl.name))}</span><span class="r">${pct}%</span></div><div class="bar"><i style="width:${pct}%"></i></div><div class="small">You can keep working.</div>`}
   else if(models.length&&!models.some(r=>r.installed&&r.runnable&&(r.capabilities||[]).includes("fill")))html=`<div class="head">${svg("warn",C.warn)}<span class="t">No models installed</span></div><div class="small">Install at least one model to start. LaMa and DreamShaper 8 (2.2 GB) cover every tool.</div><div style="display:flex"><button class="btn accent flex" id="setup-models">Open model manager</button></div>`;
   if(c.dataset.html!==html){c.dataset.html=html;c.innerHTML=html;c.hidden=!html;
-    if($("setup-folder"))$("setup-folder").onclick=()=>{showGear("engine");$("s-comfy_dir").focus()};if($("setup-help"))$("setup-help").onclick=()=>window.open("https://github.com/beckettharriman/openfill/blob/main/docs/install.md#openfill-for-photocraft");if($("setup-models"))$("setup-models").onclick=()=>showGear("models")}}
+    if($("setup-folder"))$("setup-folder").onclick=()=>{showGear("engine");$("s-comfy_dir").focus()};if($("setup-help"))$("setup-help").onclick=()=>window.open("https://github.com/beckettharriman/openfill/blob/main/docs/install.md#openfill-for-photocraft");if($("setup-models"))$("setup-models").onclick=()=>showGear("models");if($("setup-cloud"))$("setup-cloud").onclick=()=>showGear("engine")}}
 
 function fmt(s){s=Math.round(s);return Math.floor(s/60)+":"+String(s%60).padStart(2,"0")}
 async function tick(){
@@ -313,8 +331,9 @@ async function tick(){
     location.hash="#"+(s.pick.action==="panel"?"fill":s.pick.action);window.focus();if(s.pick.action!=="remove")$("prompt").focus();if(s.pick.action==="remove"&&!s.busy)$("go").click()}}
   if(s.about&&$("about").textContent!==s.about)$("about").textContent=s.about;
   pc=s.photocraft||{};doc=pc.document||null;sel=pc.selection||null;comfy=s.comfyReady;
-  if(s.activeModel!==activeId){activeId=s.activeModel||"";fillSelect()}
-  const st=!comfy?["Not set up","warn"]:["Ready","ok"];$("status").textContent=st[0];$("dot").style.background=C[st[1]];
+  const was=JSON.stringify(cloud);cloud=s.cloud||null;
+  if(s.activeModel!==activeId||JSON.stringify(cloud)!==was){activeId=s.activeModel||"";fillSelect()}
+  const st=cloud?[cloud.status,"warn"]:!comfy?["Not set up","warn"]:["Ready","ok"];$("status").textContent=st[0];$("dot").style.background=C[st[1]];
   context();if(mode==="expand"){presets();expSize()}setupCard(s);
   const j=s.job;busy=s.busy;jobState=j.state;
   $("go").disabled=busy||$("model").value==="";
@@ -335,7 +354,8 @@ async function tick(){
           fetch(`/api/thumb?i=${i}&key=${encodeURIComponent(KEY)}&t=${Date.now()}`,{headers:H}).then(r=>r.status===200?r.blob():null).then(bl=>{if(bl)x.querySelector("img").src=URL.createObjectURL(bl)})}}
       [...$("thumbs").children].forEach((x,i)=>x.classList.toggle("on",i===j.shown));void k}
     else thumbsFor=""}
-  $("notices").innerHTML=(j.notices||[]).map(n=>`<div class="context" style="color:${C.warn}">${svg("warn",C.warn,14)}<span>${esc(n)}</span></div>`).join("");
+  const always=cloud?[(mode==="txt2img"?cloud.promptNote:cloud.note)+" Up to 4 variations per run, each billed by the service."]:[];
+  $("notices").innerHTML=always.concat(j.notices||[]).map(n=>`<div class="context" style="color:${C.warn}">${svg("warn",C.warn,14)}<span>${esc(n)}</span></div>`).join("");
 }
 
 // What a model can run, as catalog.job_hint says it: any fill model can also remove; erasers are marked.
@@ -363,10 +383,28 @@ async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return
   document.querySelectorAll("[data-remove]").forEach(b=>b.onclick=()=>{const r=models.find(x=>x.id===b.dataset.remove);if(confirm(`Uninstall ${short(r.name)}? Its files (${r.size}) are deleted. Files other models use are kept.`))act(()=>post("/api/models/remove",{id:r.id}))})}
 $("save-token").onclick=async()=>{try{await post("/api/models/token",{token:$("token").value});$("token").value="";mnote("Hugging Face key saved.","ok")}catch(e){mnote(e.message,"bad")}};
 
-async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el)continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}}
+async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el)continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}
+  $("cloud-key").value="";$("cloud-key").placeholder=s.cloud_key_saved?"Saved. Paste a new key to replace it.":(s.cloud_key_elsewhere?"Paste the key for this service. The saved key is for another one.":"Paste your API key");
+  loaded={backend:s.backend,cloud_provider:s.cloud_provider,cloud_url:s.cloud_url,cloud_model:s.cloud_model};cloudFields()}
+// The cloud fields show only while the cloud is picked; the note says where pictures go.
+function cloudFields(){const on=$("s-backend").value==="cloud";$("cloud-fields").hidden=!on;const rf=$("remote-fields");if(rf)rf.hidden=$("s-backend").value!=="remote";
+  const p=$("s-cloud_provider").value,u=$("s-cloud_url").value.trim();
+  $("s-cloud_model").placeholder=p==="openrouter"?"google/gemini-2.5-flash-image":"the model name your service uses";
+  $("s-cloud_url").placeholder=p==="openrouter"?"https://openrouter.ai/api/v1":"https://api.openai.com/v1";
+  // the same rule as the panel and GIMP: "OpenRouter" only for openrouter.ai itself or its subdomains,
+  // otherwise the host and port, never a user name or password written into the address
+  let where="an address that is not valid";
+  try{const a=new URL(u||$("s-cloud_url").placeholder),h=a.hostname.toLowerCase();
+    where=p==="openrouter"&&(h==="openrouter.ai"||h.endsWith(".openrouter.ai"))?"OpenRouter":a.host.toLowerCase()}catch(e){}
+  $("cloud-note").textContent=`Cloud: your image is sent to ${where}.`}
+["s-backend","s-cloud_provider","s-cloud_url"].forEach(id=>$(id).addEventListener("input",cloudFields));
 function settingsNote(t,kind){const n=section==="generation"?$("gen-out"):$("check-out");n.hidden=!t;n.textContent=t;n.className="note "+(kind||"dim")}
 $("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.type==="checkbox"?el.checked:(el.type==="number"?+el.value:el.value)});
-  try{await post("/api/settings",b);settingsNote("Settings saved.","ok")}catch(e){settingsNote(e.message,"bad")}};
+  // what was not changed in this form is not sent: a page opened earlier never writes back an old
+  // backend, service, address or model that was changed elsewhere since
+  for(const k of ["backend","cloud_provider","cloud_url","cloud_model"])if(b[k]===loaded[k])delete b[k];
+  const key=$("cloud-key").value.trim();if(key)b.cloud_api_key=key;
+  try{await post("/api/settings",b);await loadSettings();settingsNote("Settings saved.","ok")}catch(e){settingsNote(e.message,"bad")}};
 $("check").onclick=async()=>{settingsNote("Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:"."),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};
 $("stop").onclick=async()=>{const r=await post("/api/backend/stop");settingsNote(r.message,"dim")};
 $("logs").onclick=()=>post("/api/logs");

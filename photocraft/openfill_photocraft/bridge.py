@@ -328,6 +328,23 @@ class PhotoCraftBridge:
     def mask_png_from_bytes(self, rect: Rect, pixels: bytes) -> bytes:
         return png.encode(rect.width, rect.height, pixels, 1)
 
+    def decode_image(self, data: bytes) -> tuple[int, int, bytes]:
+        """A JPEG or WebP picture from the cloud service as (width, height, RGBA bytes).
+
+        Only those two formats, recognised by their first bytes and opened with only Pillow's
+        reader for that format: an answer is never handed to any other reader (Ghostscript for
+        EPS, ...). Its size is checked before the pixels are decoded."""
+        from openfill import imaging
+
+        kind = imaging.sniff(data)
+        if kind not in ("jpeg", "webp"):
+            raise ValueError("not a JPEG or WebP picture")
+        with Image.open(_io.BytesIO(data), formats=["JPEG" if kind == "jpeg" else "WEBP"]) as im:
+            if im.width * im.height > imaging.MAX_RESULT_PIXELS:
+                raise ValueError(f"{im.width} x {im.height} pixels is larger than OpenFill accepts")
+            rgba = im.convert("RGBA")
+            return rgba.width, rgba.height, rgba.tobytes()
+
     # writing ------------------------------------------------------------------------
 
     def insert_results(
@@ -351,7 +368,7 @@ class PhotoCraftBridge:
         layers: list[PCLayer] = []
         for index, data in enumerate(images):
             name = base_name if len(images) == 1 else f"{base_name} ({index + 1})"
-            with Image.open(_io.BytesIO(data)) as im:
+            with Image.open(_io.BytesIO(data), formats=["PNG"]) as im:  # results are always PNGs OpenFill made
                 rgba = im.convert("RGBA")
             if scale_to_origin and rgba.size != (origin.width, origin.height):
                 rgba = rgba.resize((origin.width, origin.height), Image.LANCZOS)
@@ -696,7 +713,7 @@ class PhotoCraftBridge:
 
     def new_image_from_pngs(self, images: list[bytes], base_name: str, temp_dir: Path | None) -> PCImage:
         """A new document from the first image; further variations become hidden layers."""
-        with Image.open(_io.BytesIO(images[0])) as im:
+        with Image.open(_io.BytesIO(images[0]), formats=["PNG"]) as im:  # results are PNGs OpenFill made
             first = im.convert("RGBA")
         # The document takes the file's name: make it the prompt's, not a temporary one.
         stem = re.sub(r"[^A-Za-z0-9 ,._-]+", "", base_name).strip()[:60] or "Text to Image"
@@ -714,7 +731,7 @@ class PhotoCraftBridge:
         if base is not None:
             self.client.run("layer.setProps", layer=base, name=base_name if len(images) == 1 else f"{base_name} (1)")
         for number, data in enumerate(images[1:], start=2):
-            with Image.open(_io.BytesIO(data)) as im:
+            with Image.open(_io.BytesIO(data), formats=["PNG"]) as im:
                 rgba = im.convert("RGBA")
             extra = PCLayer(
                 None, f"{base_name} ({number})", Rect(0, 0, rgba.width, rgba.height), rgba.tobytes(), visible=False

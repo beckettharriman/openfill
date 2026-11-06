@@ -129,6 +129,7 @@ def shared_models_hint(sep: str) -> str:
 
 # (key, label, one-line hint)
 GENERAL_FIELDS = (
+    ("backend", "Where images are made", "A cloud service costs money and gets your image. Local stays the default."),
     ("comfy_dir", "AI backend folder", "Where ComfyUI (portable build) is installed."),
     ("shared_models", "Models from another ComfyUI", ""),  # hint: SHARED_MODELS_HINT (needs os.pathsep)
     ("autostart", "Start backend automatically", "Starts ComfyUI hidden when you generate."),
@@ -155,8 +156,17 @@ ADVANCED_FIELDS = (
     ("txt2img_height", "Text to Image default height (px)", ""),
 )
 CONNECTION_FIELDS = (
-    ("backend", "Backend", "ComfyUI is managed for you. AUTOMATIC1111 must be started by you with --api."),
     ("url", "ComfyUI address", ""),
+    (
+        "remote_url",
+        "Remote GPU pairing code",
+        "Paste the ofgpu:// line the OpenFill GPU server showed. See docs/remote-gpu.md.",
+    ),
+    (
+        "remote_ssh",
+        "Remote GPU over SSH",
+        "Optional: user@computer to go through SSH with your SSH key. Empty connects directly.",
+    ),
     ("a1111_url", "AUTOMATIC1111 address", ""),
     ("startup_timeout", "Startup time limit (s)", "How long to wait for the backend to start."),
     ("request_timeout", "Generation time limit (s)", "0 estimates a limit for each request."),
@@ -490,6 +500,36 @@ def health_text(
     return f"Could not reach the backend: {reason.rstrip('.')}. {step}"
 
 
+CLOUD_TITLE = "Cloud service"
+CLOUD_INTRO = "Optional and paid: every tool runs on an online service instead of on this computer."
+CLOUD_WHEN = "Nothing is sent until you press Generate, and never while This computer is picked."
+CLOUD_KEY_SAVED = "Saved. Paste a new key to replace it."
+CLOUD_KEY_EMPTY = "Paste your API key"
+CLOUD_KEY_OTHER = "Paste the key for this service. The saved key is for another one."
+CLOUD_VARIATIONS = "Up to 4 variations per run, each billed by the service."
+CLOUD_KEY_HINT = "Kept only in OpenFill's settings file on this computer, readable by you alone."
+CLOUD_COST = "Each picture is billed to your account with the service."
+CLOUD_SETUP_BUTTON = "Use a cloud service instead..."
+CLOUD_SETUP_LINE = "No suitable graphics card? A paid cloud service can do the work. Your images are then sent to it."
+CLOUD_PROVIDERS = (("openrouter", "OpenRouter"), ("openai", "OpenAI-compatible (OpenAI, LiteLLM, ...)"))
+
+
+def cloud_key_placeholder(key_for: str, provider: str, url: str, has_key: bool) -> str:
+    """The key field's grey text: saved for exactly this service and address, saved for
+    another (it will not be sent here), or none."""
+    from .backends.cloud import key_scope
+
+    if has_key and key_for == key_scope(provider, url):
+        return CLOUD_KEY_SAVED
+    return CLOUD_KEY_OTHER if has_key else CLOUD_KEY_EMPTY
+
+
+def cloud_health_text(ok: bool, detail: str) -> str:
+    """Result line of Check backend when the cloud service is the backend (no picture is sent)."""
+    detail = " ".join((detail or "no answer").split())
+    return f"Cloud OK: {detail}" if ok else f"Cloud check failed: {detail}"
+
+
 # ------------------------------------------------------------ models -----
 
 
@@ -570,6 +610,40 @@ def model_option_label(name: str, installed: bool, active: bool) -> str:
 
 # ComfyUI options that force the processor.
 CPU_FLAGS = ("--cpu",)
+
+
+# Remote GPU (backend "remote"): ComfyUI runs on another computer.
+REMOTE_GPU_SERVER = "python openfill/gpu_server.py"  # how docs/remote-gpu.md starts it
+
+
+def remote_message(kind: str) -> str:
+    """Plain words for what a Remote GPU cannot do from this computer."""
+    return {
+        "cpu": "The GPU computer's ComfyUI runs on its processor, not its graphics card, so every result "
+        "takes many times longer. Check the graphics card driver on that computer and how ComfyUI is started there.",
+        "remove": "Remote GPU is chosen: the models are on the GPU computer. Delete model files there, in "
+        "ComfyUI's models folder.",
+        "folder": "Remote GPU is chosen: the models folder is on the GPU computer, in its ComfyUI folder.",
+        "stop": "Remote GPU is chosen: ComfyUI runs on the GPU computer. Stop the OpenFill GPU server there "
+        "(Ctrl+C in its window) to free that graphics card.",
+    }[kind]
+
+
+def remote_connection_lost(host: str) -> str:
+    """A Remote GPU job whose connection broke off (network drop, the computer went to sleep)."""
+    return (
+        f"The connection to the GPU computer {host} was lost while it was generating, so the image was not "
+        "changed. Check that it is awake and connected (Tailscale or your network), then run the command again."
+    )
+
+
+def remote_download_message(name: str, model_id: str) -> str:
+    """Downloads go to the GPU computer, which has the models."""
+    return (
+        f"Remote GPU is chosen, so '{name}' has to be on the GPU computer. Download it there: run "
+        f"'{REMOTE_GPU_SERVER} download {model_id}' on that computer (or put the file in its ComfyUI "
+        "models folder), then press Check backend."
+    )
 
 
 def cpu_backend_message(flags: str) -> str:

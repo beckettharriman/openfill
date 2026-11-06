@@ -81,7 +81,16 @@ QWEN = ModelProfile("qwen_image", min_side=768, max_side=1024, min_context=256, 
 # than 512 px is thrown away there with aliasing; the graph downscales with
 # lanczos to 512 instead and the node then works 1:1.
 INPAINT_MODEL = ModelProfile("inpaint_model", min_side=256, max_side=512, min_context=512)
-PROFILES = {"sd15": SD15, "sdxl": SDXL, "flux": FLUX, "qwen_image": QWEN, "inpaint_model": INPAINT_MODEL}
+# Cloud models: the service picks its own resolution; this only sizes the context.
+CLOUD = ModelProfile("cloud", min_side=512, max_side=1024, min_context=256)
+PROFILES = {
+    "sd15": SD15,
+    "sdxl": SDXL,
+    "flux": FLUX,
+    "qwen_image": QWEN,
+    "inpaint_model": INPAINT_MODEL,
+    "cloud": CLOUD,
+}
 
 
 def round_to_multiple(value: int, multiple: int) -> int:

@@ -90,6 +90,25 @@ To remove the token, clear the field in the Models tab and save, or delete the
 `hf_token` value from `config.json`. Revoke it at
 https://huggingface.co/settings/tokens if you think it leaked.
 
+## The cloud API key
+
+The optional cloud service (see [cloud.md](cloud.md)) has its own key,
+`cloud_api_key`, kept like the Hugging Face token: only in `config.json`
+(created with mode 0600 on Linux and macOS), out of `repr()`, removed from
+logs by the same filter (`sk-...`, `Bearer ...`, `"cloud_api_key": ...`), and
+removed from any error text a service sends back. It is bound to the service
+and address (scheme, host, port) it was entered for (`cloud_key_for`) and
+goes only into the `Authorization` header of requests there: changing the
+service or address needs the key again. Plain http is refused except for
+loopback or private addresses (a name must resolve only to such addresses,
+checked before each request), addresses with a user name or password are
+refused, and redirects are refused. In GIMP it's never a procedure argument,
+and PhotoCraft's settings page never sends it back. While the backend is not
+the cloud, the cloud service is never contacted. Answers are capped at 64 MB
+and 25 megapixels, and only PNG, JPEG and WebP are decoded, each by a reader
+limited to that format (OpenFill's own PNG reader inflates no more than the
+header allows). On Windows the file's protection is that of its folder.
+
 ## What is stored where
 
 All plug-in state lives in `<GIMP profile>/openfill/` (for example
@@ -98,7 +117,7 @@ Linux):
 
 | File | Contents |
 | --- | --- |
-| `config.json` | settings, including the Hugging Face token |
+| `config.json` | settings, including the Hugging Face token and the cloud API key |
 | `openfill.log` (+ `.1`, `.2`) | plug-in and supervisor log, rotated at 2 MB; prompts and file paths appear here, tokens do not |
 | `comfyui.log` | ComfyUI's output |
 | `server-state.json` | supervisor and ComfyUI pids, URL, status |
@@ -136,6 +155,55 @@ that network can queue work and read your generated images. The supervisor
 logs a warning when the listen address is not a loopback address. The
 plug-in's own HTTP and WebSocket clients connect to the configured URL, plus the
 model hosts listed under "Live model search" and the download hosts.
+
+### Remote GPU
+
+With the Remote GPU backend ([remote-gpu.md](remote-gpu.md)) the picture and mask go to
+another computer of yours, and the results come back. OpenFill never talks to an open ComfyUI
+on another computer: it goes through the OpenFill GPU server (`gpu_server.py`) or an SSH tunnel
+it opens with the system's `ssh` (key login only, `BatchMode=yes`, the login checked so it
+cannot be read as an ssh option).
+
+The GPU server:
+
+- starts ComfyUI on `127.0.0.1` only and listens on one address itself: the Tailscale address
+  by default. It refuses `0.0.0.0`, `::` and public addresses, and warns that a home network
+  address is not encrypted;
+- requires the pairing code (`Authorization: Bearer`) on every request, the progress
+  websocket included. The code is 24 random bytes, shown once; only its SHA-256 is stored
+  (owner-only file) and compared with `hmac.compare_digest`. `pair` makes a new code, and a
+  running server stops accepting the old one with the next request (it reads the file again
+  when it changes). A wrong code costs 0.25 s, and after 8 wrong codes from one address within a
+  minute that address gets HTTP 429 for wrong codes for the rest of the minute. Requests with no
+  code are refused but not counted, and the right code always gets in, so another program on a
+  shared address (everything is 127.0.0.1 over SSH) cannot lock out the editor or end its job.
+  The table of wrong codes forgets addresses after a minute and holds at most 1024. The code is
+  never logged and never passed on to ComfyUI;
+- passes only the endpoints OpenFill uses (`/system_stats`, `/object_info`, `/models`,
+  `/upload/image`, `/prompt`, `/queue`, `/history`, `/view`, `/interrupt`, `/free`, `/ws`) and
+  answers 404 to everything else, so ComfyUI's settings and user files, and any node pack's
+  own web routes (for example a manager that installs from URLs) stay private. `Origin`,
+  `Referer` and cookies are dropped. Uploads need a `Content-Length` and are capped at 256 MB,
+  other requests at 32 MB;
+- runs only OpenFill's own jobs: a `/prompt` whose graph uses a node type OpenFill's workflows
+  do not use (`workflow.NODE_CLASSES`) gets HTTP 403. The pairing code therefore cannot run, for
+  example, a node pack's "run Python" or "save to any path" node;
+- takes at most 64 connections at a time, counted when they connect, before anything is read;
+  more are closed at once. A client has 15 s to send its request. A progress websocket uses TCP
+  keepalive and is closed after 5 minutes without traffic either way;
+- installs node packs only as its own catalog names them for a model id (pinned commit, the
+  same code as the Models tab), never from a repository the request names.
+
+On the editor computer the pairing code is kept in `config.json` next to the Hugging Face token
+(owner-only on Linux and macOS, left out of `repr()` and the log), with the address it was paired
+with (`remote_paired`). It is sent only to that address: after the address is edited, OpenFill
+asks for a new code instead of sending the old one somewhere else.
+
+The GPU server prints the pairing code to its window once. A service or script that logs that
+output keeps the code in its log.
+
+Over SSH to a plain ComfyUI (no GPU server), the tunnel's local port has no code, like a local
+ComfyUI: any program on the editor computer can use it while the tunnel is open.
 
 ## Telemetry
 

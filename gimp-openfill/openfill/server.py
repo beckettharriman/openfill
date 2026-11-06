@@ -104,6 +104,21 @@ class ServerManager:
         # children of GIMP (the default, the parent pid); the PhotoCraft companion sets its own.
         self.watch_pid: int | None = None
         self.watch_name = ""  # the watched process's executable name, set with watch_pid
+        self._remote: Any = None  # remote.RemoteLink, made when the Remote GPU is the backend
+        self._remote_status: tuple[float, dict[str, Any]] = (0.0, {})
+
+    # Remote GPU ------------------------------------------------------------
+
+    @property
+    def remote(self) -> Any:
+        """The Remote GPU link (``remote.RemoteLink``), or None when ComfyUI runs on this computer."""
+        if not self.settings.uses_remote:
+            return None
+        if self._remote is None:
+            from .remote import RemoteLink
+
+            self._remote = RemoteLink(self.settings, self.log, records=self.paths.base / "ssh-tunnels")
+        return self._remote
 
     # state ---------------------------------------------------------------
 
@@ -121,6 +136,8 @@ class ServerManager:
 
     def touch(self) -> None:
         """Record activity so the idle timeout restarts."""
+        if self.settings.uses_remote:
+            return  # the GPU computer's ComfyUI is not ours to stop
         state = self.read_state()
         if state:
             self.register_watcher()
@@ -145,6 +162,8 @@ class ServerManager:
 
     def request_stop(self) -> bool:
         """Ask the supervisor to shut the backend down. Returns True if asked."""
+        if self.settings.uses_remote:
+            return False
         state = self.read_state()
         if not state:
             return False
@@ -160,7 +179,10 @@ class ServerManager:
     # health --------------------------------------------------------------
 
     def url(self) -> str:
-        """URL of the running managed backend, else the configured one."""
+        """URL of the running managed backend, else the configured one (Remote GPU: the GPU
+        computer's address, or the local end of the SSH tunnel to it)."""
+        if self.remote is not None:
+            return self.remote.url()
         state = self.read_state()
         return state.get("url") or self.settings.active_url
 
@@ -204,7 +226,13 @@ class ServerManager:
     # start ---------------------------------------------------------------
 
     def ensure_running(self, progress: ProgressCallback | None = None, cancel: Callable[[], bool] | None = None) -> str:
-        """Return a healthy base URL, starting the backend if allowed."""
+        """Return a healthy base URL, starting the backend if allowed. A Remote GPU is only
+        checked (never started here, never replaced by this computer's ComfyUI)."""
+        if self.remote is not None:
+            url = self.remote.ensure(progress, cancel, wait_s=max(30, int(self.settings.startup_timeout)))
+            if self.log:
+                self.log.info("remote GPU ready at %s (%s)", url, self.remote.kind)
+            return url
         url = self.url()
         if self.is_healthy(url):
             self.touch()
@@ -223,6 +251,8 @@ class ServerManager:
 
     def start(self, progress: ProgressCallback | None = None, cancel: Callable[[], bool] | None = None) -> str:
         """Launch the backend supervisor detached and wait until ComfyUI answers."""
+        if self.settings.uses_remote:
+            raise BackendUnavailable("Remote GPU is chosen: ComfyUI runs on the GPU computer, not here.")
         layout = comfy_layout(self.settings.comfy_dir)
         if layout is None:
             raise BackendUnavailable(
@@ -300,7 +330,7 @@ class ServerManager:
 
     def ensure_task_worker(self) -> None:
         """Make sure something will process queued tasks."""
-        if self.task_worker_alive():
+        if self.settings.uses_remote or self.task_worker_alive():
             return
         cmd = [
             self._helper_python(),
@@ -318,6 +348,8 @@ class ServerManager:
 
     def queue_task(self, task: dict[str, Any]) -> str:
         """Write ``task`` to the queue (atomically) and make sure a worker runs; returns its id."""
+        if self.settings.uses_remote:
+            raise BackendUnavailable(REMOTE_NO_LOCAL_TASKS)
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
         task_id = task.get("id") or f"{int(time.time() * 1000)}-{task.get('type', 'task')}"
         task["id"] = task_id
@@ -334,7 +366,10 @@ class ServerManager:
         """The worker's ``tasks-status.json`` (current task, queue, history).
 
         A "current" task whose worker is gone (killed, or shut down with GIMP mid-download)
-        is dropped, so the Models tab does not show a download that nobody is doing."""
+        is dropped, so the Models tab does not show a download that nobody is doing.
+        Remote GPU: the GPU server's status (node installs there), asked at most every 2 s."""
+        if self.remote is not None:
+            return self._remote_task_status()
         try:
             status = json.loads((self.paths.base / "tasks-status.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -357,6 +392,8 @@ class ServerManager:
 
     def pending_tasks(self) -> list[dict[str, Any]]:
         """Decoded queued tasks, oldest first."""
+        if self.settings.uses_remote:
+            return []
         out = []
         worker = None
         for p in sorted(self.tasks_dir.glob("*.json")) if self.tasks_dir.is_dir() else []:
@@ -374,6 +411,18 @@ class ServerManager:
     def supervisor_stderr_log(self) -> Path:
         """Where the supervisor's stderr goes (argument errors, crashes before its own log is open)."""
         return self.paths.base / SUPERVISOR_STDERR_FILENAME
+
+    def _remote_task_status(self) -> dict[str, Any]:
+        from .remote import RETRY_AFTER_FAILURE, task_status
+
+        checked, status = self._remote_status
+        now = time.monotonic()
+        if now - checked < (2.0 if status.get("ok", True) else RETRY_AFTER_FAILURE):
+            return status
+        url = self.remote.url()
+        status = task_status(ComfyClient(url, timeout=2)) if url else {}
+        self._remote_status = (now, status or {"ok": False})
+        return status
 
     def _drop_stale_cpu_flag(self) -> None:
         """Download ComfyUI adds --cpu for its own folder on a PC without an NVIDIA card; once the
@@ -471,6 +520,8 @@ class ServerManager:
 
     def server_log_tail(self, lines: int = 8) -> str:
         """Last ``lines`` lines of the ComfyUI log, for error messages."""
+        if self.settings.uses_remote:
+            return "(ComfyUI's log is on the GPU computer, next to the OpenFill GPU server)"
         try:
             text = self.paths.server_log.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -480,6 +531,12 @@ class ServerManager:
 
 def _valid_pid(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+REMOTE_NO_LOCAL_TASKS = (
+    "Remote GPU is chosen: models are downloaded on the GPU computer. Run the OpenFill GPU server's "
+    "download command there (see docs/remote-gpu.md), then press Check backend."
+)
 
 
 def _split_host_port(url: str) -> tuple[str, int]:

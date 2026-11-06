@@ -10,16 +10,25 @@ Each entry from now on says which PhotoCraft versions it works with.
 
 ## [Unreleased] - OpenFill for PhotoCraft · works with PhotoCraft 0.12 to 0.20
 
+PhotoCraft versions:
 - Tested on PhotoCraft 0.17.0, 0.18.0, 0.19.0, 0.20.1 and 0.20.2 (install, Fill, Remove, Expand and Create). No changes were needed, so the supported range is now PhotoCraft 0.12 to 0.20.
 - The Engine section of the panel shows an About line: "OpenFill for PhotoCraft 0.2.x · works with PhotoCraft 0.12 to 0.20".
 - READMEs, badges and install docs name OpenFill's version and the PhotoCraft range separately, so 0.2.x can't be read as a PhotoCraft version.
 - Linux: when the installer downloads PhotoCraft for you, it checks the download against PhotoCraft's checksum list, never the signature file that releases carry from 0.20.2 on.
+
+Where images are made:
+- Add an optional cloud service under Engine: OpenRouter or any OpenAI-compatible image API, with your own key. Off unless you pick it; the panel then says your image is sent to it, and it is never used as a fallback. Untested against the real services so far. See docs/cloud.md.
+- Add Remote GPU in the gear's Engine section: use ComfyUI on another computer of yours, over Tailscale or SSH, with the OpenFill GPU server's pairing code. See docs/remote-gpu.md.
+- Models from another ComfyUI: the gear's Engine section takes the folder of another ComfyUI, such as Krita AI Diffusion's, and OpenFill uses its models read only. Nothing is downloaded, deleted or installed there (#6).
+- Your own FLUX.1 Fill file reuses the FLUX text encoders and VAE already in ComfyUI, under other names, formats or the `text_encoders` folder, instead of downloading them again (#8).
+
+Engine:
 - When ComfyUI crashes or closes during a job, say so right away instead of after 90 seconds.
 - The status line says "Stopped: Generate restarts it" after ComfyUI stops, instead of "Ready".
 - Error messages point to OpenFill's settings in PhotoCraft, not to GIMP's menus and profile folder.
-- Mac model menu: a menu closed while it is open is removed only after macOS has dismissed it.
 - Intel Arc graphics, untested: on Windows the Download ComfyUI card gets ComfyUI's version for Intel for an Arc card or a Core Ultra chip with Arc graphics, and says it is untested. On Linux the card points to the PyTorch for Intel steps.
 - The setup card's help link goes to the Intel steps on Intel graphics.
+- Mac model menu: a menu closed while it is open is removed only after macOS has dismissed it.
 
 ## [0.2.4] - 2026-10-26
 
