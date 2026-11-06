@@ -232,8 +232,9 @@ The plug-in installs as `gimp-openfill/` and keeps settings in `<GIMP profile>/o
 
 ## Uninstall
 
-- **PhotoCraft on Windows:** run `Install OpenFill for PhotoCraft.cmd --uninstall` from a command prompt in the unzipped folder.
-- **PhotoCraft on Linux:** `openfill-photocraft-uninstall`.
+- **PhotoCraft on Windows:** open **Uninstall OpenFill for PhotoCraft** in the Start menu. Or run `Install OpenFill for PhotoCraft.cmd --uninstall` from a command prompt in the unzipped folder.
+- **PhotoCraft on Linux:** open **Uninstall OpenFill for PhotoCraft** in your app menu, or run `openfill-photocraft-uninstall`.
+- **PhotoCraft on macOS:** open **Uninstall OpenFill for PhotoCraft** in the Applications folder in your home folder.
 - **GIMP on Windows:** `powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall` in the unzipped folder (add `-RemoveConfig` to delete the settings too).
 - **GIMP on macOS and Linux:** `sh install.sh --uninstall` (add `--remove-config` to delete the settings too).
 

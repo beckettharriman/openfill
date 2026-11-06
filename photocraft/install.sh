@@ -19,11 +19,24 @@ for need in 'import tkinter; ' ''; do
     "$HOME/AI/ComfyUI/venv/bin/python3" "$HOME/AI/ComfyUI/.venv/bin/python3" \
     "$HOME/Documents/ComfyUI/venv/bin/python3" "$HOME/Documents/ComfyUI/.venv/bin/python3" python; do
     command -v "$py" >/dev/null 2>&1 || [ -x "$py" ] || continue
+    # macOS's own /usr/bin/python3 is 3.9, and without the developer tools running it opens an
+    # install dialog: never try it there.
+    if [ "$(uname -s)" = Darwin ]; then
+      case "$(command -v "$py")" in /usr/bin/*) continue ;; esac
+    fi
     if "$py" -c "$need$CHECK" 2>/dev/null; then
       exec "$py" -m openfill_photocraft.install "$@"
     fi
   done
 done
-echo "OpenFill needs Python 3.10 or newer with Pillow. ComfyUI's Python can be used." >&2
-echo 'Set OPENFILL_PYTHON to its full path and run this script again. Tk is optional.' >&2
+echo "OpenFill needs Python 3.10 or newer with Pillow, and none was found." >&2
+if [ "$(uname -s)" = Darwin ]; then
+  echo "  Install Python from https://www.python.org/downloads/macos/, then run: python3 -m pip install Pillow" >&2
+else
+  echo "  Fedora:          sudo dnf install python3-pillow python3-tkinter" >&2
+  echo "  Ubuntu, Debian:  sudo apt install python3-pil python3-pil.imagetk python3-tk" >&2
+  echo "  Arch:            sudo pacman -S python-pillow tk" >&2
+fi
+echo "Then run this again. Or use ComfyUI's Python (Tk is optional):" >&2
+echo "  OPENFILL_PYTHON=~/ComfyUI/venv/bin/python sh install.sh" >&2
 exit 1
