@@ -7,6 +7,16 @@ export PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}"
 # An explicit interpreter wins, including a ComfyUI environment without Tk.
 CHECK='import sys, PIL; sys.exit(sys.version_info < (3, 10))'
 if [ -n "$OPENFILL_PYTHON" ]; then
+  # Said plainly rather than run: macOS's own Python is 3.9, and may open a developer tools dialog.
+  if [ "$(uname -s)" = Darwin ]; then
+    case "$(command -v "$OPENFILL_PYTHON" 2>/dev/null)" in
+      /usr/bin/*)
+        echo "OPENFILL_PYTHON is macOS's own Python 3.9, which OpenFill can't use." >&2
+        echo "Leave OPENFILL_PYTHON unset, or point it to Python 3.10 or newer with Pillow." >&2
+        exit 1
+        ;;
+    esac
+  fi
   if "$OPENFILL_PYTHON" -c "$CHECK" 2>/dev/null; then
     exec "$OPENFILL_PYTHON" -m openfill_photocraft.install "$@"
   fi

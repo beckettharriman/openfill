@@ -2285,7 +2285,7 @@ class ShellInterpreterTests(unittest.TestCase):
                 self.run_script(script, False)
 
     def run_as_mac(
-        self, script: str, extra: Path | None = None, system: str = "Darwin", pillow: bool = True
+        self, script: str, extra: Path | None = None, system: str = "Darwin", pillow: bool = True, **more: str
     ) -> subprocess.CompletedProcess:
         """Run ``script`` with ``uname`` saying ``system``, a fake Pillow (or a broken one) and no ComfyUI."""
         temp = tempfile.mkdtemp(prefix="openfill mac python ")
@@ -2302,7 +2302,7 @@ class ShellInterpreterTests(unittest.TestCase):
         for name in ("install.py", "__main__.py"):
             (package / name).write_text("print('started with', __import__('sys').executable)\n")
         path = [str(stubs)] + ([str(extra)] if extra else []) + ["/usr/bin", "/bin"]
-        env = {"PATH": os.pathsep.join(path), "HOME": str(root / "home"), "PYTHONPATH": str(root)}
+        env = {"PATH": os.pathsep.join(path), "HOME": str(root / "home"), "PYTHONPATH": str(root), **more}
         shutil.copy2(ROOT / "photocraft" / script, root / script)  # it puts its own folder on the path
         return subprocess.run(["sh", str(root / script)], env=env, capture_output=True, text=True, timeout=30)
 
@@ -2314,7 +2314,22 @@ class ShellInterpreterTests(unittest.TestCase):
                 self.assertEqual(r.returncode, 1, r.stdout)
                 self.assertNotIn("started with", r.stdout)
                 self.assertIn("python.org/downloads/macos", r.stderr)
-                self.assertIn("OPENFILL_PYTHON=~/ComfyUI/venv/bin/python", r.stderr)
+                self.assertIn(f"OPENFILL_PYTHON=~/ComfyUI/venv/bin/python sh {script}", r.stderr)
+
+    @unittest.skipUnless(os.access("/usr/bin/python3", os.X_OK), "needs a /usr/bin/python3 to refuse")
+    def test_mac_explicit_system_python_is_refused_with_a_reason(self):
+        for script in ("install.sh", "openfill-photocraft.sh"):
+            with self.subTest(script=script):
+                r = self.run_as_mac(script, OPENFILL_PYTHON="/usr/bin/python3")
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertNotIn("started with", r.stdout)
+                self.assertIn("OPENFILL_PYTHON is macOS's own Python 3.9", r.stderr)
+
+    @unittest.skipUnless(os.access("/usr/bin/python3", os.X_OK), "needs a /usr/bin/python3")
+    def test_linux_explicit_usr_bin_python_is_used(self):
+        r = self.run_as_mac("install.sh", system="Linux", OPENFILL_PYTHON="/usr/bin/python3")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("started with", r.stdout)
 
     def test_mac_uses_a_python3_outside_usr_bin(self):
         other = Path(tempfile.mkdtemp(prefix="openfill other python "))
