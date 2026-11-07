@@ -970,20 +970,6 @@ class App:
         except Exception:  # noqa: BLE001 - no catalog or ComfyUI folder: treat as a pick
             return False
 
-    def expand_suggestion(self, model_choice: str) -> tuple[cat.ModelEntry, cat.ModelEntry] | None:
-        """(picked, better) when the Expand default is installed and is not the
-        model picked; None otherwise. The pick is always respected unless the
-        user agrees to the switch."""
-        if self.uses_cloud:
-            return None
-        entry, _model = self.resolve_model(model_choice)
-        try:
-            installed = cat.runnable_installed(self.catalog, self.models_root, self.custom_nodes_dir, "expand")
-        except Exception:  # noqa: BLE001 - no suggestion when the catalog cannot be read
-            return None
-        best = cat.expand_suggestion(installed, entry)
-        return (entry, best) if best is not None else None
-
     def removal_fallback(self, model_choice: str) -> str:
         """Model for a removal (empty prompt or Remove object) when no LaMa/MAT
         is installed: the chosen model, unless it is FLUX or Qwen (they repaint

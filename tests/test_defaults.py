@@ -44,6 +44,35 @@ class DefaultsTests(unittest.TestCase):
         self.assertIsNone(cat.expand_suggestion(no_default, self.by["realvisxl-v5"]))
         self.assertIsNone(cat.expand_suggestion(both, None))
 
+    def test_no_expand_suggestion_for_flux_or_qwen(self):
+        # FLUX Fill and Qwen Edit outpaint on their own and are only ever picked by hand:
+        # nothing suggests SD 1.5 instead (it used to ask in the middle of the run).
+        installed = [self.by[i] for i in ("sd15-inpainting", "dreamshaper-8-inpainting", "flux1-fill-dev-gguf-q6")]
+        for mid in (
+            "flux1-fill-dev-gguf-q4",
+            "flux1-fill-dev-gguf-q6",
+            "flux1-fill-dev",
+            "qwen-image-edit-2511-gguf-q4",
+        ):
+            self.assertIsNone(cat.expand_suggestion(installed, self.by[mid]), mid)
+
+    def test_expand_notes_decided_before_the_run(self):
+        installed = [self.by[i] for i in ("sd15-inpainting", "realvisxl-v5", "flux1-fill-dev-gguf-q6")]
+        picks = {
+            "active": self.by["realvisxl-v5"],
+            "realvisxl-v5": self.by["realvisxl-v5"],
+            "sd15-inpainting": self.by["sd15-inpainting"],
+            "flux1-fill-dev-gguf-q6": self.by["flux1-fill-dev-gguf-q6"],
+            "unknown": None,
+        }
+        sd15 = self.by["sd15-inpainting"].name
+        self.assertEqual(cat.expand_notes(installed, picks), {"active": sd15, "realvisxl-v5": sd15})
+        # FLUX active: no note on it either
+        self.assertEqual(cat.expand_notes(installed, {"active": self.by["flux1-fill-dev-gguf-q6"]}), {})
+        # no Expand default installed: nothing to point at
+        self.assertEqual(cat.expand_notes([self.by["realvisxl-v5"]], picks), {})
+        self.assertEqual(cat.expand_notes(installed, {}), {})
+
     def test_expand_defaults(self):
         both = ["dreamshaper-8-inpainting", "sd15-inpainting", "realvisxl-v5"]
         for tier in ("fast", "quality"):

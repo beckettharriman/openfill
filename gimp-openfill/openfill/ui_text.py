@@ -310,8 +310,9 @@ def expand_over_limit(
 
 
 def expand_model_note(better: str) -> str:
-    """Question shown before an Expand with a model other than the Expand default."""
-    return f"{better} usually continues a scene better. Use it instead?"
+    """Note in the Expand dialog when the picked model is not the Expand default
+    (shown before the run; the picked model is always the one used)."""
+    return f"Tip: {better} usually continues a scene better."
 
 
 def expand_status(image: tuple[int, int] | None, left: int, top: int, right: int, bottom: int) -> str:

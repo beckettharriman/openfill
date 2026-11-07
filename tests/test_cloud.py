@@ -910,7 +910,6 @@ class AppNoFallbackTests(unittest.TestCase):
         self.assertEqual(png.read_header(images[0])[:2], (rect.width, rect.height))
         self.assertTrue(name.startswith("Generative Fill"))
         self.assertTrue(app.has_model_for("remove"))
-        self.assertIsNone(app.expand_suggestion("active"))
         app.generative_fill(FakeImage(300, 200), "", "", 1, 1.0, -1, "lama-big", remove=True, as_picked=True)
         body = json.loads(self.cloud.requests[1]["body"])
         self.assertIn("Remove what is in", body["prompt"])
