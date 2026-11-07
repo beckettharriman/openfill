@@ -1,0 +1,148 @@
+# OpenFill for PhotoCraft
+# SPDX-License-Identifier: Apache-2.0
+"""A small Photoshop (PSD) writer: RGB, 8 bits, layers with masks, names, visibility and
+one level of groups. Nothing else.
+
+OpenFill brings its results into PhotoCraft as one PSD that already holds every layer,
+mask and group, so PhotoCraft opens one scratch document per job and OpenFill never has
+to work inside it (see ``bridge``). Channel data is written uncompressed: the file only
+lives for a moment in the exchange folder.
+"""
+
+from __future__ import annotations
+
+import struct
+from dataclasses import dataclass, field
+
+# Section divider kinds (the "lsct" block).
+_OPEN_FOLDER, _BOUNDING_DIVIDER = 1, 3
+
+
+@dataclass
+class PsdLayer:
+    """One pixel layer, or a group when ``children`` is not None (then ``rgba`` is unused)."""
+
+    name: str
+    x: int = 0
+    y: int = 0
+    width: int = 0
+    height: int = 0
+    rgba: bytes = b""  # width * height * 4
+    visible: bool = True
+    mask: tuple[int, int, int, int, bytes] | None = None  # (x, y, width, height, 8-bit pixels)
+    children: list[PsdLayer] | None = None  # top first, like the Layers panel
+
+
+@dataclass
+class _Record:
+    name: str
+    rect: tuple[int, int, int, int]  # top, left, bottom, right
+    channels: list[tuple[int, bytes]] = field(default_factory=list)  # (channel id, raw plane)
+    visible: bool = True
+    mask: tuple[int, int, int, int] | None = None  # top, left, bottom, right
+    divider: int = 0
+
+
+def _pascal(name: str) -> bytes:
+    raw = name.encode("latin-1", "replace")[:255]
+    data = bytes([len(raw)]) + raw
+    return data + b"\0" * (-len(data) % 4)
+
+
+def _unicode(name: str) -> bytes:
+    text = name.encode("utf-16-be")
+    body = struct.pack(">I", len(text) // 2) + text
+    body += b"\0" * (-len(body) % 4)
+    return b"8BIMluni" + struct.pack(">I", len(body)) + body
+
+
+def _planes(layer: PsdLayer) -> list[tuple[int, bytes]]:
+    rgba = layer.rgba
+    if len(rgba) != layer.width * layer.height * 4:
+        raise ValueError(f"layer '{layer.name}': {len(rgba)} bytes for {layer.width} x {layer.height}")
+    return [(-1, rgba[3::4]), (0, rgba[0::4]), (1, rgba[1::4]), (2, rgba[2::4])]
+
+
+def _records(layers: list[PsdLayer]) -> list[_Record]:
+    """The records for ``layers`` (top first) in file order: bottom first, a group's closing
+    divider before its children and the group itself after them."""
+    out: list[_Record] = []
+    for layer in reversed(layers):
+        if layer.children is not None:
+            out.append(
+                _Record("</Layer group>", (0, 0, 0, 0), [(c, b"") for c in (-1, 0, 1, 2)], divider=_BOUNDING_DIVIDER)
+            )
+            out.extend(_records(layer.children))
+            out.append(
+                _Record(
+                    layer.name, (0, 0, 0, 0), [(c, b"") for c in (-1, 0, 1, 2)], layer.visible, divider=_OPEN_FOLDER
+                )
+            )
+            continue
+        record = _Record(layer.name, (layer.y, layer.x, layer.y + layer.height, layer.x + layer.width))
+        record.channels, record.visible = _planes(layer), layer.visible
+        if layer.mask is not None:
+            mx, my, mw, mh, pixels = layer.mask
+            if len(pixels) != mw * mh:
+                raise ValueError(f"layer '{layer.name}': mask of {len(pixels)} bytes for {mw} x {mh}")
+            record.mask = (my, mx, my + mh, mx + mw)
+            record.channels.append((-2, pixels))
+        out.append(record)
+    return out
+
+
+def _record_bytes(record: _Record) -> bytes:
+    out = bytearray(struct.pack(">4i", *record.rect))
+    out += struct.pack(">H", len(record.channels))
+    for channel, plane in record.channels:
+        out += struct.pack(">hI", channel, len(plane) + 2)  # + the compression word
+    flags = 0x08 | (0 if record.visible else 0x02)
+    if record.divider:
+        flags |= 0x10  # no pixel data of its own
+    out += b"8BIMnorm" + bytes([255, 0, flags, 0])
+    extra = bytearray()
+    if record.mask is not None:
+        extra += struct.pack(">I4iBB2x", 20, *record.mask, 0, 0)
+    else:
+        extra += struct.pack(">I", 0)
+    extra += struct.pack(">I", 0)  # blending ranges
+    extra += _pascal(record.name)
+    extra += _unicode(record.name)
+    if record.divider:
+        extra += b"8BIMlsct" + struct.pack(">II", 4, record.divider)
+    out += struct.pack(">I", len(extra)) + extra
+    return bytes(out)
+
+
+def encode(width: int, height: int, layers: list[PsdLayer]) -> bytes:
+    """A PSD of ``width`` x ``height`` holding ``layers`` (top first)."""
+    if not layers:
+        raise ValueError("a PSD needs a layer")
+    records = _records(layers)
+    info = bytearray(struct.pack(">h", -len(records)))  # negative: the merged image has alpha
+    for record in records:
+        info += _record_bytes(record)
+    for record in records:
+        for _channel, plane in record.channels:
+            info += b"\0\0" + plane
+    info += b"\0" * (len(info) % 2)
+    layer_info = struct.pack(">I", len(info)) + info
+    section = layer_info + struct.pack(">I", 0)  # no global mask info
+    out = bytearray(b"8BPS" + struct.pack(">H6xHIIHH", 1, 4, height, width, 8, 3))
+    out += struct.pack(">I", 0)  # colour mode data
+    out += struct.pack(">I", 0)  # image resources
+    out += struct.pack(">I", len(section)) + section
+    out += _blank_merged(width, height, 4)  # PhotoCraft reads the layers
+    return bytes(out)
+
+
+def _blank_merged(width: int, height: int, channels: int) -> bytes:
+    """The merged image, all zeros, run-length encoded (PackBits): a few bytes a row."""
+    row = bytearray()
+    left = width
+    while left > 0:
+        n = min(left, 128)
+        row += bytes([0, 0]) if n == 1 else bytes([257 - n, 0])
+        left -= n
+    rows = channels * height
+    return struct.pack(">H", 1) + struct.pack(">H", len(row)) * rows + bytes(row) * rows

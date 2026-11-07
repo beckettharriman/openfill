@@ -31,6 +31,77 @@ from PIL import Image  # noqa: E402
 from openfill.geometry import Rect  # noqa: E402
 
 
+def read_psd(data: bytes) -> tuple[tuple[int, int], list[dict]]:
+    """The canvas size and the layers (top first; groups with ``children``) of a PSD that
+    ``openfill_photocraft.psd`` wrote: what PhotoCraft reads from it."""
+    import struct
+
+    assert data[:4] == b"8BPS"
+    height, width = struct.unpack(">II", data[14:22])
+    pos = 26
+    for _ in range(2):  # colour mode data, image resources
+        pos += 4 + struct.unpack(">I", data[pos : pos + 4])[0]
+    pos += 8  # section length, layer info length
+    (count,) = struct.unpack(">h", data[pos : pos + 2])
+    pos += 2
+    records = []
+    for _ in range(abs(count)):
+        top, left, bottom, right = struct.unpack(">4i", data[pos : pos + 16])
+        (channels,) = struct.unpack(">H", data[pos + 16 : pos + 18])
+        pos += 18
+        lengths = []
+        for _ in range(channels):
+            cid, length = struct.unpack(">hI", data[pos : pos + 6])
+            lengths.append((cid, length))
+            pos += 6
+        flags = data[pos + 10]
+        (extra,) = struct.unpack(">I", data[pos + 12 : pos + 16])
+        body, pos = data[pos + 16 : pos + 16 + extra], pos + 16 + extra
+        (mask_len,) = struct.unpack(">I", body[:4])
+        mask = struct.unpack(">4i", body[4:20]) if mask_len else None
+        at = 4 + mask_len
+        at += 4 + struct.unpack(">I", body[at : at + 4])[0]
+        name_len = body[at]
+        name = body[at + 1 : at + 1 + name_len].decode("latin-1")
+        divider = 0
+        if b"8BIMluni" in body:
+            i = body.index(b"8BIMluni") + 12
+            (n,) = struct.unpack(">I", body[i : i + 4])
+            name = body[i + 4 : i + 4 + 2 * n].decode("utf-16-be")
+        if b"8BIMlsct" in body:
+            i = body.index(b"8BIMlsct") + 12
+            (divider,) = struct.unpack(">I", body[i : i + 4])
+        records.append(
+            {
+                "rect": (left, top, right - left, bottom - top),
+                "visible": not flags & 2,
+                "name": name,
+                "mask": None if mask is None else (mask[1], mask[0], mask[3] - mask[1], mask[2] - mask[0]),
+                "divider": divider,
+                "lengths": lengths,
+            }
+        )
+    planes = {}
+    for index, record in enumerate(records):
+        for cid, length in record["lengths"]:
+            planes[(index, cid)] = data[pos + 2 : pos + length]
+            pos += length
+    stack: list[list[dict]] = [[]]
+    for index, record in enumerate(records):  # bottom first
+        if record["divider"] == 3:
+            stack.append([])
+            continue
+        row = {"name": record["name"], "visible": record["visible"], "rect": record["rect"]}
+        if record["divider"] in (1, 2):
+            row["children"] = list(reversed(stack.pop()))
+        else:
+            row["alpha"] = planes[(index, -1)]
+            if record["mask"] is not None:
+                row["mask"], row["mask_rect"], row["mask_pixels"] = True, record["mask"], planes[(index, -2)]
+        stack[-1].append(row)
+    return (width, height), list(reversed(stack[0]))
+
+
 class FakeServer:
     """A loopback server speaking the control protocol's JSON lines."""
 
@@ -149,13 +220,16 @@ class FakePhotoCraft:
 
     NEEDS_SELECTION = ("select.modify.expand", "select.modify.feather", "layer.layerMask.revealSelection")
 
-    def __init__(self, exchange: Path, size=(64, 48)) -> None:
+    def __init__(self, exchange: Path, size=(64, 48), version: str | None = None) -> None:
         self.exchange = exchange
+        self.version = version  # what ui.inspect reports; None as PhotoCraft before 0.16
+        self.views: list[dict] = []
         self.calls: list[tuple[str, dict]] = []
         self.next_id = 10
         self.docs = [self._doc("photo.png", size, [{"id": 2, "name": "Background", "visible": True}])]
         self.docs[0]["selection"] = [8, 6, 20, 10]
         self.active = 0
+        self.opened_psds: list[list[dict]] = []  # the layers of every PSD OpenFill opened
         # The user clicking to deselect in PhotoCraft while OpenFill works: before each of the
         # next ``deselects`` selection-using commands, the active document loses its selection.
         self.deselects = 0
@@ -181,15 +255,31 @@ class FakePhotoCraft:
 
     def call(self, method: str, **params):
         self.calls.append((method, params))
+        if method == "ui.set":
+            self.views.append({"document": self.active, **params})
+            return None
         if method == "ui.inspect":
             return {
+                "updates": {"currentVersion": self.version} if self.version else None,
+                "views": [{"zoom": 0.5 + i, "center": [10.0 * i, 20.0]} for i in range(len(self.docs))],
                 "session": {
                     "active": self.active,
                     "documents": [
                         {"index": i, "name": d["name"], "revision": d["revision"]} for i, d in enumerate(self.docs)
                     ],
-                }
+                },
             }
+        if method == "app.save" and params["path"].endswith(".tif"):
+            # a flat TIFF: red, green, blue and the document's alpha channel (as PhotoCraft 0.18 on)
+            if not self.doc["channels"]:  # the colours alone
+                Image.new("RGB", self.doc["size"], (200, 200, 200)).save(self.exchange / params["path"])
+                return {"path": params["path"]}
+            im = Image.new("RGBA", self.doc["size"], (200, 200, 200, 0))
+            for channel in self.doc["channels"]:
+                x, y, w, h = channel["rect"]
+                im.paste((200, 200, 200, 255), (x, y, x + w, y + h))
+            im.save(self.exchange / params["path"], compression="raw")
+            return {"path": params["path"]}
         if method == "app.save":
             kind = "L" if self.doc["name"] == "OpenFill mask" else "RGBA"
             im = Image.new(kind, self.doc["size"], 0 if kind == "L" else (200, 200, 200, 255))
@@ -198,6 +288,24 @@ class FakePhotoCraft:
                 im.paste(255, (x, y, x + w, y + h))
             im.save(self.exchange / params["path"])
             return {"path": params["path"]}
+        if method == "app.open" and params["path"].endswith(".psd"):
+            path = self.exchange / params["path"]
+            size, rows = read_psd((path if path.exists() else self.exchange.parent / params["path"]).read_bytes())
+            self.opened_psds.append(rows)
+
+            def ids(rows):  # the document's rows: what layer.list shows, without the pixels
+                out = []
+                for row in rows:
+                    kept = {k: v for k, v in row.items() if not isinstance(v, bytes) and k != "children"}
+                    kept["id"] = self._new_id()
+                    if "children" in row:
+                        kept["children"] = ids(row["children"])
+                    out.append(kept)
+                return out
+
+            self.docs.append(self._doc(Path(params["path"]).name, size, ids(rows)))
+            self.active = len(self.docs) - 1
+            return {"name": Path(params["path"]).name}
         if method == "app.open":
             with Image.open(
                 self.exchange.parent / params["path"]
@@ -266,12 +374,17 @@ class FakePhotoCraft:
                 "channels": {"alpha": doc["channels"]},
             }
         if command == "image.duplicate":
-            self.docs.append(self._doc(params.get("name", "copy"), doc["size"], [{"id": self._new_id(), "name": "x"}]))
+            copy = self._doc(params.get("name", "copy"), doc["size"], [{"id": self._new_id(), "name": "x"}])
+            copy["selection"] = doc["selection"]  # a duplicate keeps the selection
+            self.docs.append(copy)
             self.active = len(self.docs) - 1
             return {}
         if command == "select.saveSelection":
-            self.docs[params["document"]]["channels"].append({"name": params["name"], "rect": doc["selection"]})
-            return {}
+            if not doc["selection"]:
+                raise control.ControlError(f"engine.execute: {command} is not available right now: no selection")
+            target = self.docs[params.get("document", self.active)]
+            target["channels"].append({"name": params["name"], "rect": doc["selection"]})
+            return {"channel": len(target["channels"]) - 1}
         if command == "channel.duplicate":
             rect = next(c["rect"] for c in doc["channels"] if c["name"] == params["channel"])
             new = self._doc("OpenFill mask", doc["size"], [{"id": self._new_id(), "name": "mask"}])
@@ -408,10 +521,23 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual([layer.id for layer in layers], [c["id"] for c in group["children"]])
         self.assertEqual(len(self.pc.docs), 1)  # scratch documents closed
         self.assertEqual(self.target["selection"], [8, 6, 20, 10])  # the user's selection is untouched
-        expand = [p for c, p in self.pc.calls if c == "select.modify.expand"]
-        self.assertEqual(len(expand), 3)  # the selection is loaded again for each mask
-        self.assertEqual((expand[0]["radius"], expand[0]["applyAtCanvasBounds"]), (4, False))
         self.assertNotIn("edit.copy", self.pc.commands())  # the clipboard is never used
+        # One scratch document holds all three, masks included: nothing is built inside it.
+        commands = self.pc.commands()
+        self.assertEqual(len(self.pc.opened_psds), 1)
+        for command in ("select.loadSelection", "select.modify.expand", "layer.layerMask.revealSelection"):
+            self.assertNotIn(command, commands)
+        # the document is the active one again right after the open, before anything else
+        opened = commands.index("app.open")
+        self.assertEqual(self.pc.calls[opened + 1], ("document.activate", {"document": 0}))
+        (group, backdrop) = self.pc.opened_psds[0]
+        self.assertEqual(backdrop["name"], "OpenFill backdrop")  # looks like the document; never copied
+        self.assertNotIn("OpenFill backdrop", [r["name"] for r in self.target["layers"]])
+        first = group["children"][0]
+        # the selection (8, 6, 20 x 10) grown by 4 and feathered: wider than it, opaque in the middle
+        x, y, w, h = first["mask_rect"]
+        self.assertTrue(x <= 4 and y <= 2 and x + w >= 32 and y + h >= 20, first["mask_rect"])
+        self.assertGreater(first["mask_pixels"][(10 - y) * w + (17 - x)], 200)
 
     def test_keep_and_discard_leave_one_step_or_none(self):
         from types import SimpleNamespace
@@ -511,7 +637,14 @@ class BridgeTests(unittest.TestCase):
         service.show_variation(2)
         before = json.loads(json.dumps(self.target["layers"]))
         history = list(self.target["history"])  # the job's step and the picker's two
-        self.pc.deselects = 1000  # every try loses the selection
+        real_call = self.pc.call
+
+        def call(method, **params):  # PhotoCraft can't open OpenFill's layers
+            if method == "app.open":
+                raise control.ControlError("app.open: no")
+            return real_call(method, **params)
+
+        self.pc.call = call
         with self.assertRaises(control.ControlError):
             service.keep("selected")
         self.assertEqual(self.target["history"], history)
@@ -519,7 +652,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(len(self.pc.docs), 1)  # scratch documents closed
         self.assertEqual(service.layers, layers)  # and still in the picker
         self.assertEqual(len(service.state.variations), 3)
-        self.pc.deselects = 0
+        self.pc.call = real_call
         service.keep("selected")  # Keep again works
         self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])
         self.assertEqual(self.target["layers"][0]["name"], "Fill")
@@ -652,8 +785,94 @@ class BridgeTests(unittest.TestCase):
             self.image, [png_bytes("red")], Rect(0, 0, 64, 48), "E", 0.0, None, use_selection_mask=False
         )
         self.bridge.resize_canvas(self.image, 100, 80, 10, 20)
-        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer", "Crop"])
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])  # the earlier round is in
+        self.assertNotIn("image.crop", self.pc.commands())  # the canvas waits for its layers
+        self.assertEqual((self.image.get_width(), self.image.get_height()), (100, 80))
+        self.bridge.insert_results(
+            self.image, [png_bytes("blue", (100, 80))], Rect(0, 0, 100, 80), "E", 0.0, None, False
+        )
+        self.bridge.finish(self.image)
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer", "Duplicate Layer", "Crop"])
+        commands = self.pc.commands()
+        last_copy = len(commands) - 1 - commands[::-1].index("layer.copyToDocument")
+        self.assertGreater(commands.index("image.crop"), last_copy)  # the layers first, then the canvas
+        copy = [p for c, p in self.pc.calls if c == "layer.copyToDocument"][-1]
+        self.assertEqual(copy["offset"], [-10, -20])  # placed for the new canvas before it grows
         self.assertIn(("image.crop", {"x": -10, "y": -20, "width": 100, "height": 80}), self.pc.calls)
+        self.assertEqual(self.target["size"], (100, 80))
+
+    def test_a_failed_expand_leaves_the_canvas_as_it_was(self):
+        self.bridge.resize_canvas(self.image, 100, 80, 10, 20)
+        self.bridge.discard(self.image)
+        self.bridge.finish(self.image)
+        self.assertEqual((self.target["size"], self.target["history"]), ((64, 48), ["Open"]))
+        self.assertNotIn("image.crop", self.pc.commands())
+
+    def test_the_selection_comes_from_a_tiff_from_photocraft_0_18(self):
+        pc = FakePhotoCraft(self.exchange, version="0.20.2")
+        bridge = PhotoCraftBridge(pc, self.exchange, Path(self.tmp.name))
+        image = bridge.track(bridge.active_image())
+        _png, raw = bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.assertEqual((raw[6 * 64 + 8], raw[15 * 64 + 28], raw[0], raw[15 * 64 + 27]), (255, 0, 0, 255))
+        _png, flat = bridge.export_region(image, Rect(0, 0, 64, 48))
+        self.assertEqual(flat[:4], bytes((200, 200, 200, 255)))  # the colours, opaque
+        saves = [p["path"] for c, p in pc.calls if c == "app.save"]
+        self.assertTrue(all(path.endswith(".tif") for path in saves), saves)  # no slow PNG
+        commands = pc.commands()
+        self.assertNotIn("channel.duplicate", commands)  # no black and white document
+        self.assertEqual(commands.count("image.duplicate"), 1)
+        self.assertEqual(len(pc.docs), 1)
+        self.assertEqual(pc.docs[0]["history"], ["Open"])
+        # the duplicate is shown where the document was, at its zoom
+        self.assertEqual(pc.views, [{"document": 1, "zoom": 0.5, "center": [0.0, 20.0]}])
+        self.assertEqual(list(self.exchange.iterdir()), [])
+
+    def test_the_copy_takes_the_view_after_photocraft_fitted_it(self):
+        pc = FakePhotoCraft(self.exchange, version="0.20.2")
+        real_call, pending = pc.call, [2]
+
+        def call(method, **params):  # a new document fits itself to the window on its first frames
+            reply = real_call(method, **params)
+            if method == "ui.inspect" and len(pc.docs) > 1 and pending[0]:
+                pending[0] -= 1
+                reply["views"][-1]["fit_pending"] = True
+            return reply
+
+        pc.call = call
+        bridge = PhotoCraftBridge(pc, self.exchange, Path(self.tmp.name))
+        image = bridge.track(bridge.active_image())
+        bridge.export_region(image, Rect(0, 0, 64, 48))
+        self.assertEqual(pending, [0])  # asked until the fit was done
+        self.assertEqual(pc.views, [{"document": 1, "zoom": 0.5, "center": [0.0, 20.0]}])
+
+    def test_the_version_photocraft_reports(self):
+        for reported, expected in (("0.20.2", (0, 20, 2)), ("0.18.0-beta.1", (0, 18, 0)), (None, (0,))):
+            pc = FakePhotoCraft(self.exchange, version=reported)
+            self.assertEqual(PhotoCraftBridge(pc, self.exchange, Path(self.tmp.name)).photocraft_version(), expected)
+
+    def test_a_tiff_without_the_selection_falls_back_to_a_mask_document(self):
+        pc = FakePhotoCraft(self.exchange, version="0.18.0")
+        real_call = pc.call
+
+        def call(method, **params):  # a PhotoCraft that leaves the alpha channel out
+            if method == "app.save" and params["path"].endswith(".tif"):
+                Image.new("RGB", pc.doc["size"]).save(self.exchange / params["path"], compression="raw")
+                return {"path": params["path"]}
+            return real_call(method, **params)
+
+        pc.call = call
+        bridge = PhotoCraftBridge(pc, self.exchange, Path(self.tmp.name))
+        image = bridge.track(bridge.active_image())
+        _png, raw = bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.assertEqual((raw[6 * 64 + 8], raw[0]), (255, 0))
+        self.assertIn("channel.duplicate", pc.commands())
+        self.assertEqual(len(pc.docs), 1)
+        self.assertEqual(list(self.exchange.iterdir()), [])
+
+    def test_older_photocraft_never_tries_the_tiff(self):
+        _png, raw = self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        self.assertEqual(raw[6 * 64 + 8], 255)
+        self.assertFalse(any(p.get("path", "").endswith(".tif") for _c, p in self.pc.calls))
 
     def test_a_cancelled_job_leaves_nothing(self):
         self.bridge.insert_results(self.image, [png_bytes("red")], Rect(0, 0, 64, 48), "Fill", 0.0, None)
@@ -672,6 +891,51 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(bridge.open_file(str(picture))["name"], "holiday.png")
         with self.assertRaises(BridgeError):
             bridge.open_file("/etc/hostname")
+
+
+class PsdTests(unittest.TestCase):
+    def test_layers_masks_names_and_groups_survive(self):
+        from openfill_photocraft import psd
+
+        red, blue = bytes((255, 0, 0, 255)) * 6, bytes((0, 0, 255, 128)) * 4
+        data = psd.encode(
+            10,
+            8,
+            [
+                psd.PsdLayer(
+                    "Fill",
+                    children=[
+                        psd.PsdLayer("Fill (1) é", 1, 2, 3, 2, red, True, (0, 1, 4, 3, bytes(range(12)))),
+                        psd.PsdLayer("Fill (2)", -2, 0, 2, 2, blue, False),
+                    ],
+                ),
+                psd.PsdLayer("Below", 0, 0, 2, 2, blue),
+            ],
+        )
+        size, rows = read_psd(data)
+        self.assertEqual(size, (10, 8))
+        self.assertEqual([r["name"] for r in rows], ["Fill", "Below"])
+        first, second = rows[0]["children"]
+        self.assertEqual((first["name"], first["visible"], first["rect"]), ("Fill (1) é", True, (1, 2, 3, 2)))
+        self.assertEqual((first["mask_rect"], first["mask_pixels"]), ((0, 1, 4, 3), bytes(range(12))))
+        self.assertEqual(first["alpha"], bytes([255]) * 6)
+        self.assertEqual((second["visible"], second["rect"], "mask" in second), (False, (-2, 0, 2, 2), False))
+        self.assertEqual(len(data) % 2, 0)
+        with self.assertRaises(ValueError):
+            psd.encode(4, 4, [psd.PsdLayer("x", 0, 0, 2, 2, b"short")])
+
+    def test_grow_is_round_and_stays_inside_the_canvas(self):
+        from openfill_photocraft.bridge import _grow
+
+        mask = Image.new("L", (40, 40), 0)
+        mask.paste(255, (18, 18, 22, 22))
+        grown = _grow(mask, 6)
+        self.assertEqual(grown.getbbox(), (12, 12, 28, 28))
+        self.assertEqual(grown.getpixel((12, 20)), 255)  # straight out: the full radius
+        self.assertEqual(grown.getpixel((12, 12)), 0)  # the corner is cut: not a square
+        edge = Image.new("L", (10, 10), 0)
+        edge.paste(255, (0, 0, 2, 2))
+        self.assertEqual(_grow(edge, 3).getbbox(), (0, 0, 5, 5))
 
 
 class MenuTests(unittest.TestCase):

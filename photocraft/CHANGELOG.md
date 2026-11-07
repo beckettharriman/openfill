@@ -10,6 +10,12 @@ Each entry from now on says which PhotoCraft versions it works with.
 
 ## [Unreleased] - OpenFill for PhotoCraft · works with PhotoCraft 0.12 to 0.20
 
+Working in PhotoCraft:
+- Fill, Remove, Expand and Create no longer flash OpenFill's temporary documents in PhotoCraft. The results come in as one PSD with their masks and group already in it, so there is one temporary document per job instead of one per layer and mask, and it is never worked on in view. PhotoCraft is back on your image right after it opens.
+- The copy OpenFill reads your image from is shown at your zoom and position, and from PhotoCraft 0.18 on the selection is read from that same copy, so the black and white mask document is gone. Its tab still shows for about a second, because PhotoCraft can only save the document in front.
+- Expand no longer shows the bigger canvas empty (white) while the result is finished: the canvas grows when the new layers go in.
+- A failed or cancelled Expand leaves the canvas as it was.
+
 PhotoCraft versions:
 - Tested on PhotoCraft 0.17.0, 0.18.0, 0.19.0, 0.20.1 and 0.20.2 (install, Fill, Remove, Expand and Create). No changes were needed, so the supported range is now PhotoCraft 0.12 to 0.20.
 - The Engine section of the panel shows an About line: "OpenFill for PhotoCraft 0.2.x · works with PhotoCraft 0.12 to 0.20".
