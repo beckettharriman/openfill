@@ -311,13 +311,13 @@ class PhotoCraftBridge:
             out[(d.get("index"), d.get("name"))] = (d.get("revision"), n)
         return out
 
-    def _run_at(self, index: int, command: str, **params) -> dict:
+    def _run_at(self, index: int, command: str, atomic: bool = True, **params) -> dict:
         """Run ``command`` (one that acts on the document in front) on the document at tab
         ``index``, in one go: a throwaway action holding "show that document" and the command
         is played in a single request, so no tab click can come between them. The action is
         deleted right after. Without actions (or while the user records one): show, check, run;
         a click in that moment can still land it elsewhere, which ``_on_document`` notices."""
-        if self._actions is not False:
+        if atomic and self._actions is not False:
             try:
                 listed = self.client.run("actions.list") or {}
                 if listed.get("recording"):
@@ -374,7 +374,7 @@ class PhotoCraftBridge:
                 pass
         return False
 
-    def _on_document(self, image: PCImage, command: str, edits: bool = True, **params) -> dict:
+    def _on_document(self, image: PCImage, command: str, edits: bool = True, atomic: bool = True, **params) -> dict:
         """Run ``command``, which acts on whatever document is in front, on the job's document
         only (``_run_at``: in one go where PhotoCraft has actions). Afterwards every document's
         revision is compared: if it still landed elsewhere, that document is put back where it
@@ -389,7 +389,7 @@ class PhotoCraftBridge:
             if edits and job not in before:
                 continue
             try:
-                out = self._run_at(index, command, **params)
+                out = self._run_at(index, command, atomic=atomic, **params)
             except BridgeError:
                 continue
             after = self.session()
@@ -1102,11 +1102,12 @@ class PhotoCraftBridge:
         snap = self._new_snapshot(image, name)
         self._on_document(image, "history.selectState", state=max(0, int(since) - 1))
         try:
-            self._on_document(image, "history.selectSnapshot", snapshot=snap)
+            # Not in an action: PhotoCraft 0.20 would name the step "Action: ..." instead of the job.
+            self._on_document(image, "history.selectSnapshot", atomic=False, snapshot=snap)
         except ControlError:
             # Once more; if that fails too the snapshot stays in the History panel, so the
             # result can still be brought back by hand (or with Edit > Redo).
-            self._on_document(image, "history.selectSnapshot", snapshot=snap)
+            self._on_document(image, "history.selectSnapshot", atomic=False, snapshot=snap)
         self._on_document(image, "history.deleteSnapshot", edits=False, snapshot=snap)
         image._snapshot = None
 

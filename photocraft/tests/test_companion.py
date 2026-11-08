@@ -1141,6 +1141,15 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.pc.actions, {})  # the throwaway action is gone
         self.assertNotIn("history.deleteState", self.pc.commands())
 
+    def test_the_collapsed_step_is_selected_outside_an_action(self):
+        # PhotoCraft 0.20 names an edit played from an action "Action: <name>": the one step a
+        # job leaves is selected directly, so it carries the job's name.
+        self._round_one_in()
+        self.bridge.collapse(self.image, 1, "Generative Expand")
+        self.assertEqual(self.target["history"], ["Open", "Generative Expand"])
+        self.assertIn("history.selectSnapshot", self.pc.commands())
+        self.assertNotIn("history.selectSnapshot", [p["id"] for c, p in self.pc.calls if c == "actions.insert"])
+
     def test_a_click_recorded_into_openfills_action_is_never_replayed(self):
         other = self._other_doc()
         self._round_one_in()
