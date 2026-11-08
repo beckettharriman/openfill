@@ -38,13 +38,29 @@ from .backend import ModelSpec
 from .downloads import safe_relative_path, validate_node_spec
 
 TIERS = ("fast", "quality", "edit", "removal")
-CAPABILITIES = ("fill", "expand", "txt2img", "remove", "edit", "patch")
+CAPABILITIES = ("fill", "expand", "txt2img", "remove", "edit", "patch", "bgremove")
 SOURCE_TYPES = ("first-party", "community-quantization")
-TEMPLATES = ("sd15_inpaint", "sdxl_fooocus", "flux_fill", "qwen_edit", "inpaint_model", "sdxl_eraser", "flux_eraser")
+TEMPLATES = (
+    "sd15_inpaint",
+    "sdxl_fooocus",
+    "flux_fill",
+    "qwen_edit",
+    "inpaint_model",
+    "sdxl_eraser",
+    "flux_eraser",
+    "bgremove",
+)
 # Erase-trained diffusion models: they run Remove object with their own prompt and
 # settings (RORem on SDXL inpainting; an object-removal LoRA on FLUX.1 Fill).
 ERASER_TEMPLATES = ("sdxl_eraser", "flux_eraser")
-ARCHS = {"sd15": "sd15", "sdxl": "sdxl", "flux": "flux", "qwen_image": "qwen_image", "inpaint_model": "inpaint_model"}
+ARCHS = {
+    "sd15": "sd15",
+    "sdxl": "sdxl",
+    "flux": "flux",
+    "qwen_image": "qwen_image",
+    "inpaint_model": "inpaint_model",
+    "bg_removal": "bg_removal",
+}
 SOURCES = ("bundled", "huggingface", "civitai")
 
 # Model families the plug-in can drive (one workflow template each), in display order.
@@ -63,6 +79,7 @@ FAMILY_OF_TEMPLATE = {
     "inpaint_model": "removal",
     "sdxl_eraser": "removal",
     "flux_eraser": "removal",
+    "bgremove": "removal",
 }
 TEMPLATE_ARCH = {"sd15_inpaint": "sd15", "sdxl_fooocus": "sdxl", "flux_fill": "flux", "qwen_edit": "qwen_image"}
 # Operations of the plug-in and the capabilities that can serve them.
@@ -72,6 +89,7 @@ OPERATION_CAPABILITIES = {
     "txt2img": ("txt2img",),
     "edit": ("edit",),
     "remove": ("remove", "fill"),  # Remove object falls back to a prompt-led fill without LaMa/MAT
+    "bgremove": ("bgremove",),  # Remove Background: BiRefNet only, there is no fallback
 }
 NO_MODEL_MESSAGE = "No AI model is installed yet. Download the two starting models below to begin."
 HUB_SELECTED_FILENAME = "hub-selected.json"
@@ -950,6 +968,7 @@ def model_spec_for(entry: ModelEntry, catalog: Iterable[ModelEntry] = (), models
     spec.vae = names.get("vae", "")
     spec.inpaint_model = names.get("inpaint_model", "")
     spec.lora = names.get("lora", "")
+    spec.bg_removal_model = names.get("bg_removal_model", "")
     if entry.template == "flux_eraser":
         # The LoRA runs on the FLUX.1 Fill entry it requires: its UNet, text encoders and VAE.
         catalog = list(catalog)
@@ -1169,7 +1188,14 @@ def model_role(row: dict[str, Any]) -> str:
 
 
 # What a model can run, in the words of the tools (Create is text to image).
-JOB_WORDS = {"fill": "fill", "expand": "expand", "txt2img": "create", "remove": "remove", "edit": "edit"}
+JOB_WORDS = {
+    "fill": "fill",
+    "expand": "expand",
+    "txt2img": "create",
+    "remove": "remove",
+    "edit": "edit",
+    "bgremove": "remove background",
+}
 
 
 def job_hint(row: dict[str, Any]) -> str:

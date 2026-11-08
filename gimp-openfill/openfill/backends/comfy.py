@@ -45,7 +45,16 @@ ACTIVITY_EXTENSION = 180.0
 SLOW_ARCHS = ("flux", "qwen_image")
 SLOW_MODEL_FLOOR = 240.0
 # Model folders searched for the size of a request's model files.
-MODEL_FOLDERS = ("checkpoints", "diffusion_models", "unet", "clip", "text_encoders", "vae", "inpaint")
+MODEL_FOLDERS = (
+    "checkpoints",
+    "diffusion_models",
+    "unet",
+    "clip",
+    "text_encoders",
+    "vae",
+    "inpaint",
+    "background_removal",
+)
 
 # Inputs that name a model file. ComfyUI lists a file in a sub folder with the separator of the
 # computer it runs on (os.path.relpath: "sub\\file" on Windows) and only accepts that exact name.
@@ -129,7 +138,8 @@ class ComfyBackend(Backend):
         if self._caps is None or refresh:
             info = self.client.object_info("INPAINT_ExpandMask")
             native = self.client.object_info(workflow.NATIVE_LAMA_NODE)
-            self._caps = workflow.Capabilities(inpaint_nodes=bool(info), native_lama=bool(native))
+            bg = self.client.object_info("RemoveBackground")
+            self._caps = workflow.Capabilities(inpaint_nodes=bool(info), native_lama=bool(native), bg_removal=bool(bg))
         return self._caps
 
     def health(self) -> HealthStatus:
@@ -433,6 +443,7 @@ def model_files(model: ModelSpec | None) -> set[str]:
         model.clip2,
         model.vae,
         model.inpaint_model,
+        model.bg_removal_model,
         model.fooocus_head if model.uses_fooocus else "",
         model.fooocus_patch if model.uses_fooocus else "",
     )

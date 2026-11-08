@@ -108,6 +108,7 @@ class ModelSpec:
     vae: str = ""  # separate VAE file
     inpaint_model: str = ""  # LaMa / MAT file for prompt-free removal
     lora: str = ""  # LoRA applied to the diffusion model (the FLUX Fill object-removal LoRA)
+    bg_removal_model: str = ""  # background removal file (BiRefNet), from models/background_removal
 
     @property
     def uses_fooocus(self) -> bool:
@@ -124,12 +125,18 @@ class ModelSpec:
             "flux": "flux_fill",
             "qwen_image": "qwen_edit",
             "inpaint_model": "inpaint_model",
+            "bg_removal": "bgremove",
         }.get(self.arch, "sd15_inpaint")
 
     @property
     def prompt_free(self) -> bool:
         """LaMa / MAT style models that ignore the prompt."""
         return self.effective_template == "inpaint_model"
+
+    @property
+    def background_removal(self) -> bool:
+        """BiRefNet style models: they cut the subject out of the whole image (no selection, no prompt)."""
+        return self.effective_template == "bgremove"
 
     @property
     def eraser(self) -> bool:

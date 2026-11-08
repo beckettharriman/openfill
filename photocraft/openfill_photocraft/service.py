@@ -338,6 +338,7 @@ class Service:
                 "fill": "Object Removal" if params.get("remove") else "Generative Fill",
                 "expand": "Generative Expand",
                 "txt2img": "Text to Image",
+                "bgremove": "Remove Background",
             }.get(kind, kind)
             self.state.model = ""
             self.state.fraction, self.state.started, self.state.finished = 0.0, time.time(), 0.0
@@ -411,6 +412,8 @@ class Service:
                     seed,
                     model,
                 )
+            elif kind == "bgremove":
+                layers = self.app.remove_background(image)
             elif kind == "txt2img":
                 self.app.text_to_image(
                     image,

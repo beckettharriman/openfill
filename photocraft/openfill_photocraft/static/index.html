@@ -118,9 +118,10 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 
 <div id="tools">
   <div class="content">
-    <div class="seg" id="modes" role="group" aria-label="Mode"><button data-mode="fill" class="on">Fill</button><button data-mode="remove">Remove</button><button data-mode="expand">Expand</button><button data-mode="txt2img">Create</button></div>
+    <div class="seg" id="modes" role="group" aria-label="Mode"><button data-mode="fill" class="on">Fill</button><button data-mode="remove">Remove</button><button data-mode="expand">Expand</button><button data-mode="txt2img">Create</button><button data-mode="bgremove">Cutout</button></div>
     <div class="context" id="context"><span id="ctx-icon"></span><span id="ctx-text">Connecting to PhotoCraft...</span></div>
     <div class="small" id="remove-text" hidden>Erases what you selected and fills in the background around it.</div>
+    <div class="small" id="bg-text" hidden>Cuts the subject out of the whole image and makes the background transparent, as a new layer. No selection needed.</div>
     <div class="stack" id="expand-box" hidden>
       <div class="seg s12 fit" id="presets" role="group" aria-label="Size"></div>
       <div class="grid4">
@@ -233,7 +234,7 @@ function svg(name,color,size){size=size||16;return `<svg aria-hidden="true" widt
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
 const short=n=>(n||"").split(" (")[0].trim()||n;
 const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0"};
-const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create"};
+const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create",bgremove:"Remove background"};
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
 let cloud=null, loaded={}, mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
@@ -247,7 +248,7 @@ $("sections").onclick=e=>{const b=e.target.closest("button");if(b)showSection(b.
 $("gear").onclick=()=>gear?showTools():showGear(section);
 $("back").onclick=()=>showTools();
 function setMode(m){mode=m;note=null;segPick($("modes"),$("modes").querySelector(`[data-mode="${m}"]`));
-  $("remove-text").hidden=m!=="remove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove";
+  $("remove-text").hidden=m!=="remove";$("bg-text").hidden=m!=="bgremove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove"||m==="bgremove";
   $("advanced").hidden=m!=="fill";$("prompt").placeholder=PH[m]||"";$("go").textContent=GO[m];fillSelect();context();if(m==="expand")presets()}
 function showTools(){gear=false;$("tools").hidden=false;$("gearview").hidden=true;$("head-tools").hidden=false;$("head-view").hidden=true;$("gear").classList.remove("on")}
 function showGear(s){gear=true;$("tools").hidden=true;$("gearview").hidden=false;$("head-tools").hidden=true;$("head-view").hidden=false;$("gear").classList.add("on");showSection(s||"models")}
@@ -260,6 +261,7 @@ $("strength").oninput=()=>$("str-v").textContent=(+$("strength").value).toFixed(
 $("model").onchange=async()=>{const v=$("model").value;
   if(v==="__manage"){fillSelect();showGear("models");return}
   if(mode==="remove"){removal=v;return}
+  if(mode==="bgremove")return;
   if(v&&v!==activeId&&!removers().has(v)){try{await post("/api/models/activate",{id:v});activeId=v}catch(e){say(e.message,"bad")}}};
 function seedOf(){const v=$("seed").value.trim();return v===""?-1:parseInt(v)}
 function say(t,kind){note=t?{text:t,kind:kind||"bad",base:baseContext()[0]}:null;context()}
@@ -269,6 +271,7 @@ $("go").onclick=()=>{if(busy)return;const prompt=$("prompt").value.trim(),model=
     const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:mode==="fill"?+$("strength").value:1,seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
     if(mode==="remove"){b.removal=model;b.model="active";if(["default",...PROMPT_FREE].includes(model))b.variations=1}else b.model=model;
     start("fill",b)}
+  else if(mode==="bgremove"){if(!doc){say("Open an image in PhotoCraft first.","bad");return}start("bgremove",{})}
   else if(mode==="expand"){const m=["left","top","right","bottom"].map(k=>+$("e-"+k).value);if(!m.some(Boolean)){say("Enter the pixels to add on each side, or pick a ratio.","bad");return}
     start("expand",{prompt,negative:"",left:m[0],top:m[1],right:m[2],bottom:m[3],variations,seed:-1,model})}
   else{if(!prompt){say("Describe the image first.","bad");return}const onSel=target==="layer"&&sel;start("txt2img",{prompt,negative:"",width:onSel?0:size[0],height:onSel?0:size[1],variations,seed:-1,model,target})}};
@@ -287,6 +290,7 @@ function expSize(){if(!doc){$("exp-size").textContent="";return}const m=["left",
 function baseContext(){if(!pc.connected)return["Waiting for PhotoCraft...","dim","info"];if(pc.waiting)return["PhotoCraft is not answering. If its window is minimized or covered, bring it into view.","warn","warn"];
   if(mode==="txt2img"&&doc&&sel&&target==="layer")return[`A layer in ${doc.name}, on the selection (${sel[2]} x ${sel[3]} px)`,"dim","selection"];
   if(mode==="txt2img")return["Makes a new image"+(doc?`, or a layer in ${doc.name}`:""),"dim","image"];if(!doc)return["Open an image in PhotoCraft.","dim","image"];
+  if(mode==="bgremove")return[`${doc.name} · ${doc.width} x ${doc.height} · the whole image`,"dim","image"];
   if(mode==="fill"||mode==="remove")return sel?[`${doc.name} · ${doc.width} x ${doc.height} · selection ${sel[2]} x ${sel[3]} px`,"dim","selection"]:[NO_SEL,"dim","selection"];
   return[`${doc.name} · ${doc.width} x ${doc.height} · pixels to add on each side`,"dim","image"]}
 function context(){let[t,k,i]=baseContext();if(note){if(note.base!==t)note=null;else{t=note.text;k=note.kind;i={bad:"error",ok:"check",warn:"warn"}[k]||"info"}}
@@ -359,7 +363,7 @@ async function tick(){
 }
 
 // What a model can run, as catalog.job_hint says it: any fill model can also remove; erasers are marked.
-function detail(r){const words={fill:"fill",expand:"expand",txt2img:"create",remove:"remove",edit:"edit"};
+function detail(r){const words={fill:"fill",expand:"expand",txt2img:"create",remove:"remove",edit:"edit",bgremove:"background removal"};
   const caps=(r.capabilities||[]).filter(c=>c in words);const list=caps.map(c=>words[c]);
   if(caps.includes("fill")&&!caps.includes("remove"))list.push("remove");
   let what=list.join(", ");what=what.charAt(0).toUpperCase()+what.slice(1);
