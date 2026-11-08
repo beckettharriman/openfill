@@ -347,12 +347,18 @@ class FakePhotoCraft:
             if command == "actions.record":
                 self.actions[params["name"]] = []
                 return {"action": params["name"]}
-            if command == "actions.stop":
-                return {"steps": 0}
+            if command == "actions.stop":  # what was done while recording (``recorded``), as PhotoCraft does
+                steps = getattr(self, "recorded", [])
+                self.actions[next(reversed(self.actions))] = list(steps)
+                self.recorded = []
+                return {"steps": len(steps)}
             if command == "actions.insert":
                 self.actions[params["action"]].append((params["id"], params.get("params") or {}))
                 return {}
             if command == "actions.delete":
+                if "step" in params:
+                    del self.actions[params["action"]][params["step"]]
+                    return {"action": params["action"]}
                 del self.actions[params["action"]]
                 return {"deleted": params["action"]}
             if command == "actions.play":  # in one go: nothing (no click) comes between its steps
@@ -1134,6 +1140,14 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(other["history"], ["Open"] + ["Layer Properties"] * 3)
         self.assertEqual(self.pc.actions, {})  # the throwaway action is gone
         self.assertNotIn("history.deleteState", self.pc.commands())
+
+    def test_a_click_recorded_into_openfills_action_is_never_replayed(self):
+        other = self._other_doc()
+        self._round_one_in()
+        self.pc.recorded = [("document.activate", {"document": 1}), ("layer.setProps", {"layer": 70, "name": "x"})]
+        self.assertEqual(self.bridge.discard(self.image), "undone")
+        self.assertEqual(other["history"], ["Open"] + ["Layer Properties"] * 3)  # nothing replayed on it
+        self.assertEqual(self.pc.actions, {})
 
     def test_without_actions_a_rollback_that_lands_elsewhere_is_put_back(self):
         self._with(actions=False)

@@ -335,8 +335,9 @@ class PhotoCraftBridge:
                 pass
             else:
                 try:
-                    if stopped.get("steps"):  # the user did something in that moment: not ours to play
-                        raise BridgeError("PhotoCraft recorded a step of the user's into OpenFill's action")
+                    for step in reversed(range(int(stopped.get("steps") or 0))):
+                        # what the user did in that moment (it happened already): never replayed
+                        self.client.run("actions.delete", action=name, step=step)
                     self.client.run("actions.insert", action=name, id="document.activate", params={"document": index})
                     self.client.run("actions.insert", action=name, id=command, params=params)
                     played = self.client.run("actions.play", action=name) or {}
