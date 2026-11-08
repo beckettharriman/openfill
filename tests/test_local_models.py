@@ -9,6 +9,7 @@ from pathlib import Path
 
 from openfill import catalog as cat
 from openfill import local_models as lm
+from tests.sparse import grow_open
 
 ENTRIES = cat.load_catalog()
 
@@ -232,7 +233,7 @@ class CompanionTests(unittest.TestCase):
     def sized(self, path, size):
         """Pad a fake file to ``size`` bytes (sparse, so the catalog's sizes cost nothing)."""
         with open(path, "r+b") as fh:
-            fh.truncate(size)
+            grow_open(fh, size)
         return path
 
     def test_catalog_layout_is_unchanged(self):

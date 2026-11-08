@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from openfill import catalog as cat
 from openfill import downloads
+from tests.sparse import grow_open
 
 REPO = Path(__file__).resolve().parent.parent
 CATALOG = REPO / "models" / "catalog.json"
@@ -139,7 +140,7 @@ class StatusTests(unittest.TestCase):
             self.assertEqual(cat.install_status(mat, root, nodes).label, "Partial")
             f = mat.files[0]
             with open(root / f.dest, "wb") as fh:
-                fh.truncate(f.size)
+                grow_open(fh, f.size)
             st = cat.install_status(mat, root, nodes)
             self.assertTrue(st.installed)
             self.assertEqual(st.label, "Needs node")
@@ -148,7 +149,7 @@ class StatusTests(unittest.TestCase):
             # companion model requirement
             (root / "checkpoints").mkdir(exist_ok=True)
             with open(root / sdxl.files[0].dest, "wb") as fh:
-                fh.truncate(sdxl.files[0].size)
+                grow_open(fh, sdxl.files[0].size)
             st = cat.install_status(sdxl, root, nodes, entries)
             self.assertEqual(st.label, "Needs model")
             self.assertEqual(st.missing_models, ["fooocus-inpaint-patch"])
@@ -406,7 +407,7 @@ class FirstRunTests(unittest.TestCase):
             mat = cat.by_id(entries, "mat-places512")
             (root / "inpaint").mkdir(parents=True)
             with open(root / mat.files[0].dest, "wb") as fh:
-                fh.truncate(mat.files[0].size)
+                grow_open(fh, mat.files[0].size)
             self.assertEqual(cat.runnable_installed(entries, root, nodes, "remove"), [])  # node missing
             (nodes / "comfyui-inpaint-nodes").mkdir(parents=True)
             self.assertEqual([e.id for e in cat.runnable_installed(entries, root, nodes, "remove")], ["mat-places512"])
@@ -414,7 +415,7 @@ class FirstRunTests(unittest.TestCase):
             sd15 = cat.by_id(entries, "sd15-inpainting")
             (root / "checkpoints").mkdir()
             with open(root / sd15.files[0].dest, "wb") as fh:
-                fh.truncate(sd15.files[0].size)
+                grow_open(fh, sd15.files[0].size)
             fill = cat.runnable_installed(entries, root, nodes, "fill")
             self.assertEqual([e.id for e in fill], ["sd15-inpainting"])
             self.assertEqual(len(cat.runnable_installed(entries, root, nodes, "remove")), 2)
@@ -630,7 +631,7 @@ class PreviewFileTests(unittest.TestCase):
             path = Path(tmp) / main.dest
             path.parent.mkdir(parents=True)
             with open(path, "wb") as fh:
-                fh.truncate(main.size)
+                grow_open(fh, main.size)
             self.assertTrue(cat.install_status(entry, Path(tmp), None).installed)
             self.assertEqual([f.filename for f in cat.missing_previews(entry, Path(tmp))], ["taesd_decoder.pth"])
             (Path(tmp) / "vae_approx").mkdir()

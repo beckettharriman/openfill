@@ -10,6 +10,7 @@ from openfill import catalog as cat
 from openfill import workflow as w
 from openfill.backend import InpaintRequest, ModelSpec, Sampling
 from openfill.backends.comfy import ComfyBackend, model_files
+from tests.sparse import grow_open
 
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / "models" / "catalog.json"
@@ -59,7 +60,7 @@ class CatalogTests(unittest.TestCase):
             root, nodes = Path(tmp) / "models", Path(tmp) / "custom_nodes"
             (root / "background_removal").mkdir(parents=True)
             with open(root / self.entry.files[0].dest, "wb") as fh:
-                fh.truncate(self.entry.files[0].size)
+                grow_open(fh, self.entry.files[0].size)
             self.assertEqual(
                 [e.id for e in cat.runnable_installed(self.entries, root, nodes, "bgremove")], ["birefnet"]
             )

@@ -20,6 +20,7 @@ from openfill import local_models as lm
 from openfill import shared_models as sm
 from openfill.backend import BackendError
 from openfill.config import Settings
+from tests.sparse import grow_open
 from tests.test_local_models import (
     CLIP_L,
     FLUX_FILL,
@@ -41,7 +42,7 @@ def sized(path: Path, size: int) -> Path:
     if not path.exists():
         path.write_bytes(b"x")
     with open(path, "r+b") as fh:
-        fh.truncate(size)
+        grow_open(fh, size)
     return path
 
 
@@ -117,6 +118,16 @@ def _yaml(path: Path):
         body = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
         return {} if body == ["{}"] else text
     return yaml.safe_load(text)
+
+
+def _listed(text: str) -> list[str]:
+    """Every folder the yaml names, as ComfyUI reads it. The values are double-quoted strings,
+    so a Windows path is written with its backslashes doubled; PyYAML reads them back as one."""
+    out = []
+    for line in text.splitlines():
+        if line.startswith("  ") and ": " in line:
+            out.append(json.loads(line.strip().partition(": ")[2]))
+    return out
 
 
 class SettingTests(unittest.TestCase):
@@ -295,7 +306,8 @@ class DetectTests(unittest.TestCase):
 class YamlTests(unittest.TestCase):
     def test_yaml_lists_existing_folders_quoted(self):
         with tempfile.TemporaryDirectory() as tmp:
-            odd = Path(tmp) / "a #b: $HOME" / "models"
+            # ':' and '"' cannot be in a Windows file name; '#', '$', spaces and quotes can
+            odd = Path(tmp) / ("a #b, $HOME 'q'" if os.name == "nt" else 'a #b: $HOME "q"') / "models"
             for name in ("checkpoints", "text_encoders", "inpaint"):
                 (odd / name).mkdir(parents=True)
             plain = Path(tmp) / "plain"
@@ -321,7 +333,9 @@ class YamlTests(unittest.TestCase):
         except ImportError:
             self.skipTest("PyYAML is not installed")
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / 'we"ird \\ #: $HOME' / "models"
+            # every Windows path has backslashes; ':' and '"' cannot be in a Windows file name
+            odd = "we'ird #, $HOME" if os.name == "nt" else 'we"ird \\ #: $HOME'
+            root = Path(tmp) / odd / "models"
             (root / "checkpoints").mkdir(parents=True)
             data = yaml.safe_load(sm.yaml_text([root]))
             self.assertEqual(data, {"openfill_shared_1": {"checkpoints": str((root / "checkpoints").resolve())}})
@@ -347,7 +361,7 @@ class YamlTests(unittest.TestCase):
             server = make_krita(Path(tmp) / "server")
             path = sm.write_config(base, sm.model_roots(server))
             self.assertEqual(path, base / sm.CONFIG_FILENAME)
-            self.assertIn(str((server / "models" / "vae").resolve()), path.read_text())
+            self.assertIn(str((server / "models" / "vae").resolve()), _listed(path.read_text()))
             self.assertIsNone(sm.write_config(base, []))
             self.assertEqual(_yaml(path), {})  # kept as an empty mapping
             self.assertIsNone(sm.write_config(Path(tmp) / "never", []))
@@ -587,7 +601,7 @@ class WorkerTests(WorkerFixture):
         logs = []
         path = supervisor.shared_model_paths(self.profile, self.profile / "config.json", lambda m, *_: logs.append(m))
         self.assertEqual(path, self.profile / sm.CONFIG_FILENAME)
-        self.assertIn(str((self.server / "models" / "inpaint").resolve()), path.read_text())
+        self.assertIn(str((self.server / "models" / "inpaint").resolve()), _listed(path.read_text()))
         Settings(comfy_dir=str(self.comfy)).save(self.profile / "config.json")
         self.assertIsNone(supervisor.shared_model_paths(self.profile, self.profile / "config.json", logs.append))
         self.assertEqual(_yaml(path), {})  # kept for a ComfyUI started by hand, with no folders
@@ -937,6 +951,10 @@ class Review2AppTests(AppTests):
     test_suggestions_skip_folders_already_used = None
 
     def api(self):
+        try:
+            import PIL  # noqa: F401, PLC0415 - the page's module needs it; core CI has no Pillow
+        except ImportError:
+            self.skipTest("needs Pillow; CI runs this with the PhotoCraft companion tests")
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "photocraft"))
         from openfill_photocraft import web
 
@@ -953,12 +971,13 @@ class Review2AppTests(AppTests):
 
     def test_an_unplugged_shared_folder_does_not_block_other_settings(self):
         """N2: the page sends the unchanged list on every save; it is not checked again."""
+        api = self.api()
         self.app.set_shared_models(str(self.server))
         stored = self.app.settings.shared_models
         moved = self.server.with_name("server-unplugged")
         self.server.rename(moved)
         try:
-            self.api().post("/api/settings", {"steps": 31, "shared_models": sm.display(stored)})
+            api.post("/api/settings", {"steps": 31, "shared_models": sm.display(stored)})
             self.assertEqual(Settings.load(self.app.paths.config).steps, 31)
             self.assertEqual(Settings.load(self.app.paths.config).shared_models, stored)
         finally:
@@ -966,6 +985,7 @@ class Review2AppTests(AppTests):
 
     def test_web_save_with_a_new_comfyui_folder_is_all_or_nothing(self):
         """N8: the list is checked against the ComfyUI folder saved with it."""
+        api = self.api()
         other = Path(self.tmp.name) / "OtherComfy"
         (other / "python_embeded").mkdir(parents=True)
         (other / "python_embeded" / "python.exe").write_text("")
@@ -979,12 +999,12 @@ class Review2AppTests(AppTests):
             (other / "ComfyUI" / "models").symlink_to(krita_models, target_is_directory=True)
             body = {"comfy_dir": str(other), "shared_models": str(self.server)}
             with self.assertRaises(BackendError):
-                self.api().post("/api/settings", body)
+                api.post("/api/settings", body)
             self.assertEqual(Settings.load(self.app.paths.config).comfy_dir, before, "half the save was applied")
         # a good pair is saved together, and the yaml follows the new ComfyUI folder (N11)
         (other / "ComfyUI" / "models").unlink() if os.name == "posix" else None
         (other / "ComfyUI" / "models" / "checkpoints").mkdir(parents=True, exist_ok=True)
-        self.api().post("/api/settings", {"comfy_dir": str(other), "shared_models": str(self.server)})
+        api.post("/api/settings", {"comfy_dir": str(other), "shared_models": str(self.server)})
         saved = Settings.load(self.app.paths.config)
         self.assertEqual((saved.comfy_dir, sm.parse(saved.shared_models)), (str(other), [str(self.server)]))
         text = (self.app.paths.base / sm.CONFIG_FILENAME).read_text(encoding="utf-8")

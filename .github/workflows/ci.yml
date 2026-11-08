@@ -42,6 +42,7 @@ jobs:
         run: |
           python -m pip install --quiet pillow
           python -m unittest photocraft/tests/test_companion.py -v
+          python -m unittest tests.test_shared_models.Review2AppTests -v
       - name: Patchy companion tests
         run: python -m unittest patchy/tests/test_companion.py -v
 
@@ -73,6 +74,7 @@ jobs:
         run: |
           python -m pip install --quiet pillow
           python -m unittest photocraft/tests/test_companion.py -v
+          python -m unittest tests.test_shared_models.Review2AppTests -v
       - name: Patchy companion tests
         run: python -m unittest patchy/tests/test_companion.py -v
 
@@ -81,17 +83,31 @@ jobs:
     # runner: PhotoCraft's .msi, then the zip is made and unpacked, "Install OpenFill for
     # PhotoCraft.cmd", start, Filter menu entries, the first-run states (no ComfyUI, no
     # models, Download ComfyUI resolves its pinned archive), quit, uninstall. No GPU.
-    # The oldest and the newest PhotoCraft OpenFill is tested with.
+    # The oldest and the newest PhotoCraft OpenFill is tested with. PhotoCraft 0.12 to 0.16
+    # install for all users (HKLM, Program Files\PhotoCraft); from 0.17 the .msi installs for
+    # the user by default (HKCU, %LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft) or, with
+    # ALLUSERS=1, for all users (HKLM, Program Files\ArtCraft\PhotoCraft). Both are tested.
     strategy:
       fail-fast: false
       matrix:
-        photocraft: ["0.12.0", "0.20.2"]
-    name: photocraft-windows-fresh-install (PhotoCraft ${{ matrix.photocraft }})
+        include:
+          - photocraft: "0.12.0"
+            scope: machine
+            hive: HKLM
+          - photocraft: "0.20.2"
+            scope: user
+            hive: HKCU
+          - photocraft: "0.20.2"
+            scope: machine
+            hive: HKLM
+    name: photocraft-windows-fresh-install (PhotoCraft ${{ matrix.photocraft }}, ${{ matrix.scope }})
     runs-on: windows-latest
     timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
       PC: ${{ matrix.photocraft }}
+      SCOPE: ${{ matrix.scope }}
+      HIVE: ${{ matrix.hive }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -102,8 +118,15 @@ jobs:
         run: |
           gh release download "v$env:PC" -R storytold/photocraft -p "photocraft-$env:PC-windows-x64.msi" -D $env:RUNNER_TEMP
           $msi = Join-Path $env:RUNNER_TEMP "photocraft-$env:PC-windows-x64.msi"
-          Start-Process msiexec.exe -Wait -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart'
-          Get-ItemProperty 'HKLM:\Software\PhotoCraft' | Select-Object InstallDir
+          $msiArgs = @('/i', "`"$msi`"", '/qn', '/norestart')
+          if ($env:SCOPE -eq 'machine' -and $env:PC -ne '0.12.0') { $msiArgs += 'ALLUSERS=1' }
+          $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $msiArgs
+          if ($p.ExitCode -ne 0) { throw "msiexec failed: $($p.ExitCode)" }
+          $key = "$($env:HIVE):\Software\PhotoCraft"
+          if (-not (Test-Path $key)) { throw "PhotoCraft $env:PC wrote no $key" }
+          $dir = (Get-ItemProperty $key).InstallDir
+          Write-Output "$key InstallDir = $dir"
+          if (-not (Test-Path (Join-Path $dir 'photocraft.exe'))) { throw "no photocraft.exe in $dir" }
       - name: Fresh install from the zip
         env:
           OPENFILL_NO_FIXED_ROOTS: "1"

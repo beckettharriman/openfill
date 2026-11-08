@@ -14,6 +14,7 @@ from openfill import geometry as g
 from openfill import workflow as w
 from openfill.backend import ModelSpec, Sampling
 from openfill.comfy_nodes import plan as native
+from tests.sparse import grow_open
 
 ROOT = Path(__file__).resolve().parent.parent
 LAMA = ModelSpec(arch="inpaint_model", inpaint_model="big-lama.pt")
@@ -207,7 +208,7 @@ class EraserTests(unittest.TestCase):
                     if f.role != cat.PREVIEW_ROLE:
                         (root / f.dest).parent.mkdir(parents=True, exist_ok=True)
                         with open(root / f.dest, "wb") as out:
-                            out.truncate(f.size or 1)  # sparse: the catalog size, no real bytes
+                            grow_open(out, f.size or 1)  # sparse: the catalog size, no real bytes
 
             put("flux1-fill-object-removal-lora")
             status = cat.install_status(self.flux, root, None, self.entries)
@@ -329,7 +330,7 @@ class NodePackOnFirstUseTests(unittest.TestCase):
             dest = comfy / "ComfyUI" / "models" / f.dest
             dest.parent.mkdir(parents=True, exist_ok=True)
             with open(dest, "wb") as fh:
-                fh.truncate(f.size)
+                grow_open(fh, f.size)
         self.nodes = comfy / "ComfyUI" / "custom_nodes"
         for node in lama.requires_nodes:  # the other packs LaMa needs are there, as in a ComfyUI that ran it
             if not node.bundled:
