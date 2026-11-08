@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Remove Background (Cutout tab): cuts the subject out into a new layer with BiRefNet, by Pedro (PedroArthurr) ([#11](https://github.com/beckettharriman/openfill/pull/11)), from the same panel as PhotoCraft. Needs ComfyUI 0.39 or newer and BiRefNet from Models.
 - Add OpenFill for Patchy 0.1.0 (prototype): the OpenFill panel as a Patchy companion app, started from Plugins > Companions, with each result one step in Patchy's history.
 - Grow the canvas for Expand with Patchy's `resizeCanvas` offset, so the Background layer covers the new canvas, filled with the image's mean colour.
 - Say Patchy is not answering only after it has stayed busy for a few seconds, so dragging a selection's handles no longer flashes the warning.

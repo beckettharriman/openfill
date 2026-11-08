@@ -13,6 +13,9 @@ Each entry from now on says which PhotoCraft versions it works with.
 Fixed (update recommended):
 - If you clicked your image's tab while OpenFill was exporting, OpenFill could save your image into its own folder or close it without saving. It now only ever saves or closes its own temporary documents, found by their own names. 0.2.4 and earlier have this bug.
 
+New:
+- Remove Background (Cutout tab): cuts the subject out into a new layer with BiRefNet, by Pedro (PedroArthurr) ([#11](https://github.com/beckettharriman/openfill/pull/11)). Needs ComfyUI 0.39 or newer and BiRefNet (424 MB) from Models. Not in the GIMP plug-in yet.
+
 Working in PhotoCraft:
 - Fill, Remove, Expand and Create no longer flash OpenFill's temporary documents in PhotoCraft. The results come in as one PSD with their masks and group already in it, so there is one temporary document per job instead of one per layer and mask, and it is never worked on in view. PhotoCraft is back on your image right after it opens.
 - The copy OpenFill reads your image from is shown at your zoom and position, and from PhotoCraft 0.18 on the selection is read from that same copy, so the black and white mask document is gone. Its tab still shows for about a second, because PhotoCraft can only save the document in front.
