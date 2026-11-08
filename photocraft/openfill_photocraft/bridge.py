@@ -28,6 +28,10 @@ keeps that moment as short as it can and makes it look like the user's own docum
   document is made active again right after the open, before anything else;
 - an expand grows the canvas only once its layers are in, so the new area is never
   shown empty.
+
+OpenFill's own documents have unique names and are found by them before every save and
+close: the user may click another tab at any moment, and "the active document" is never
+taken to be OpenFill's.
 """
 
 from __future__ import annotations
@@ -104,6 +108,13 @@ class PCImage:
     # An expand's canvas change that waits for its layers (``resize_canvas``): the new width and
     # height, and where the old (0, 0) lands.
     pending_crop: tuple[int, int, int, int] | None = None
+    path: str | None = None  # the document's file, when PhotoCraft says (tells same-named tabs apart)
+    known_ids: set[int] = field(default_factory=set)  # layer ids seen in it: its identity among same-named tabs
+    # What this job has put into the document so far (a multi-round expand commits round 1 before
+    # round 2 runs): how many history steps, and the history right after the last one. A failed
+    # or cancelled job takes them back (``discard``) if nothing else happened since.
+    steps_added: int = 0
+    history_after: list[str] | None = None
 
     def _inspect(self) -> dict:
         self.bridge.activate(self)
@@ -183,19 +194,64 @@ class PhotoCraftBridge:
         active = session.get("active")
         for d in session.get("documents") or []:
             if d.get("index") == active:
-                return PCImage(self, str(d.get("name")), int(d["index"]))
+                return PCImage(self, str(d.get("name")), int(d["index"]), path=d.get("path"))
         return None
 
+    def _layer_ids(self, index: int) -> set[int]:
+        try:
+            rows = (self.client.run("layer.list", document=int(index), flat=True) or {}).get("layers") or []
+        except ControlError:
+            return set()
+        return {int(r["id"]) for r in rows if r.get("id") is not None}
+
     def _find(self, image: PCImage, session: dict | None = None) -> dict:
+        """``image``'s tab. PhotoCraft has no document ids and tabs move when one closes, so a
+        tab is the job's when its name (and file, when known) match; when several tabs match,
+        the one holding the layers seen in the job's document is it."""
         docs = (session or self.session()).get("documents") or []
-        for d in docs:  # where it was, if it is still there (two tabs may share a name)
-            if d.get("index") == image.index and d.get("name") == image.name:
-                return d
-        for d in docs:
-            if d.get("name") == image.name:
-                image.index = int(d["index"])
-                return d
-        raise BridgeError(f"the document '{image.name}' is no longer open in PhotoCraft")
+        same = [d for d in docs if d.get("name") == image.name]
+        if image.path:
+            same = [d for d in same if d.get("path") == image.path] or same
+        if not same:
+            raise BridgeError(f"the document '{image.name}' is no longer open in PhotoCraft")
+        found = same[0]
+        if len(same) > 1:
+            overlap = [(len(self._layer_ids(d["index"]) & image.known_ids), d) for d in same]
+            best = max(n for n, _d in overlap)
+            if best:
+                found = next(d for n, d in overlap if n == best)
+            else:  # nothing to tell them apart by: where it was
+                found = next((d for d in same if d.get("index") == image.index), same[0])
+        image.index = int(found["index"])
+        return found
+
+    def _index_of(self, name: str) -> int | None:
+        """The tab named ``name``: one of OpenFill's own documents, whose names are unique."""
+        found = [int(d["index"]) for d in self.documents() if d.get("name") == name]
+        return found[-1] if found else None
+
+    def _make_active(self, name: str) -> int:
+        """Make OpenFill's own document ``name`` the active one (the user may have clicked
+        another tab) and check that it is: its index. Nothing is saved or read otherwise."""
+        for _ in range(3):
+            session = self.session()
+            index = next((int(d["index"]) for d in session.get("documents") or [] if d.get("name") == name), None)
+            if index is None:
+                raise BridgeError(f"OpenFill's document '{name}' is gone")
+            if session.get("active") == index:
+                return index
+            try:
+                self.client.run("document.activate", document=index)
+            except ControlError:
+                pass
+        raise BridgeError(f"PhotoCraft would not show OpenFill's document '{name}'")
+
+    def _close_own(self, name: str) -> None:
+        """Close OpenFill's own document ``name``, found by its name at that moment: never
+        whatever happens to be active."""
+        index = self._index_of(name)
+        if index is not None:
+            self._close(index)
 
     def activate(self, image: PCImage) -> None:
         session = self.session()
@@ -276,16 +332,15 @@ class PhotoCraftBridge:
         except OSError:
             pass
 
-    def _write_bytes(self, data: bytes, stem: str, ext: str) -> str:
-        rel = self._file(stem, ext)
-        (self.exchange / rel).write_bytes(data)
-        return rel
-
-    def _open_scratch(self, image: PCImage, data: bytes) -> tuple[int, int]:
-        """Open the PSD ``data`` as a scratch document and make ``image`` the active one again
-        at once (``app.open`` shows what it opens): (the scratch document's index, ``image``'s)."""
-        back = int(self._find(image)["index"])
-        rel = self._write_bytes(data, "layers", ".psd")
+    def _open_scratch(self, image: PCImage, rel: str) -> tuple[str, int, int]:
+        """Open the PSD ``rel`` (in the exchange folder) as a scratch document and make ``image`` the active one again
+        at once (``app.open`` shows what it opens): (the scratch document's name and index,
+        ``image``'s index). Its file name is unique, so it is found by name."""
+        try:
+            back = int(self._find(image)["index"])
+        except BaseException:
+            self._forget(rel)
+            raise
         try:
             opened = self.client.call("app.open", path=self._open_path(rel)) or {}
         finally:
@@ -299,13 +354,13 @@ class PhotoCraftBridge:
         session = self.session()
         docs = session.get("documents") or []
         name = str(opened.get("name") or Path(rel).name)
-        scratch = [int(d["index"]) for d in docs if d.get("name") == name and d.get("index") != back]
+        scratch = [int(d["index"]) for d in docs if d.get("name") == name]
         if not scratch:
             raise BridgeError("PhotoCraft did not open OpenFill's layers")
-        if session.get("active") != back:
-            self.activate(image)
-            back = int(self._find(image)["index"])
-        return scratch[-1], back
+        target = int(self._find(image, session)["index"])
+        if session.get("active") != target:
+            self.client.run("document.activate", document=target)
+        return name, scratch[-1], target
 
     def _close(self, index: int) -> None:
         try:
@@ -355,35 +410,52 @@ class PhotoCraftBridge:
         back = int(self._find(image)["index"])
         d = self.client.run("document.inspect")
         bounds = d.get("selectionBounds") if d.get("hasSelection") else None
+        eight_bit = int(d.get("depth") or 8) == 8  # the TIFF reads below are 8-bit only
         view = self._view()
-        self.client.run("image.duplicate", name="OpenFill export", mergedOnly=True)
-        duplicate = int(self.session().get("active"))
-        self._show_like(view)
-        selection, opened = None, [duplicate]
+        # OpenFill's documents get names no user document has: they are found by name, never
+        # taken to be "the active one" (the user may click another tab at any moment).
+        copy = f"OpenFill export {os.getpid()}-{next(self._names)}"
+        self.client.run("image.duplicate", name=copy, mergedOnly=True)
+        opened = [copy]
+        selection = None
         try:
-            visible = self._visible()
+            self._make_active(copy)
+            self._show_like(view)
+            visible = self._visible(copy, eight_bit)
             if d.get("hasSelection"):
-                selection = self._selection_tiff(bounds)
+                selection = self._selection_tiff(copy, bounds) if eight_bit else None
                 if selection is None:
-                    selection = self._selection_document(image, duplicate, opened)
+                    selection = self._selection_document(image, copy, opened)
         finally:
             try:
                 self.client.run("document.activate", document=back)  # first, then close the copies
             except ControlError:
                 pass
-            for index in sorted(opened, reverse=True):
-                self._close(index)
+            for name in reversed(opened):
+                self._close_own(name)
             self.activate(image)
         image._snapshot = (revision, visible, selection)
         return visible, selection
 
-    def _visible(self) -> Image.Image:
-        """The active duplicate's pixels (RGBA). From PhotoCraft 0.18 on an uncompressed TIFF,
-        which saves several times faster than a PNG (the duplicate shows for less time)."""
-        if self.photocraft_version() >= TIFF_CHANNELS_FROM:
+    def _save_own(self, name: str, rel: str, **options) -> None:
+        """Save OpenFill's own document ``name`` (app.save saves the active one): checked to be
+        the active one before, and again after, so a file never holds the user's document."""
+        for _ in range(3):
+            self._make_active(name)
+            self.client.call("app.save", path=rel, **options)
+            if self.session().get("active") == self._index_of(name):
+                return
+            self._forget(rel)  # another document came to the front meanwhile: once more
+        raise BridgeError("PhotoCraft kept showing another document while OpenFill read the image")
+
+    def _visible(self, copy: str, eight_bit: bool = True) -> Image.Image:
+        """The duplicate's pixels (RGBA). From PhotoCraft 0.18 on, for 8-bit documents, an
+        uncompressed TIFF, which saves several times faster than a PNG (the duplicate shows for
+        less time)."""
+        if eight_bit and self.photocraft_version() >= TIFF_CHANNELS_FROM:
             rel = self._file("visible", ".tif")
             try:
-                self.client.call("app.save", path=rel, tiffCompression="none", tiffTransparency=True)
+                self._save_own(copy, rel, tiffCompression="none", tiffTransparency=True)
                 path = self.exchange / rel
                 for _ in range(50):  # the save returns when written; allow a slow disk a moment
                     if path.is_file():
@@ -401,10 +473,10 @@ class PhotoCraftBridge:
                 pass
             self._forget(rel)
         rel = self._file("visible")
-        self.client.call("app.save", path=rel)
+        self._save_own(copy, rel)
         return self._read(rel).convert("RGBA")
 
-    def _selection_tiff(self, bounds) -> Image.Image | None:
+    def _selection_tiff(self, copy: str, bounds) -> Image.Image | None:
         """The selection of the active duplicate (it keeps the document's), saved into it as an
         alpha channel and read from a flat TIFF that carries that channel (PhotoCraft 0.18 on).
         None when this PhotoCraft can't, or the file does not hold what it should."""
@@ -412,8 +484,9 @@ class PhotoCraftBridge:
             return None
         rel = self._file("selection", ".tif")
         try:
-            saved = self.client.run("select.saveSelection", name="OpenFill selection") or {}
-            self.client.call("app.save", path=rel, tiffCompression="none", tiffTransparency=False)
+            duplicate = self._make_active(copy)
+            saved = self.client.run("select.saveSelection", name="OpenFill selection", document=duplicate) or {}
+            self._save_own(copy, rel, tiffCompression="none", tiffTransparency=False)
             selection = _tiff_channel(self.exchange / rel, saved.get("channel"))
         except ControlError:
             selection = None
@@ -426,16 +499,24 @@ class PhotoCraftBridge:
             return None  # not the selection: read it the long way
         return selection
 
-    def _selection_document(self, image: PCImage, duplicate: int, opened: list[int]) -> Image.Image:
+    def _selection_document(self, image: PCImage, copy: str, opened: list[str]) -> Image.Image:
         """The selection the way every PhotoCraft can: saved into the duplicate, copied into a
         document of its own (black and white) and saved from there."""
         self.activate(image)
-        self.client.run("select.saveSelection", name="OpenFill selection", document=duplicate)
-        self.client.run("document.activate", document=duplicate)
-        self.client.run("channel.duplicate", channel="OpenFill selection", document="new", name="OpenFill mask")
-        opened.append(int(self.session().get("active")))
+        self.client.run("select.saveSelection", name="OpenFill selection", document=self._index_of(copy))
+        self._make_active(copy)
+        mask = f"OpenFill mask {os.getpid()}-{next(self._names)}"
+        before = [d.get("name") for d in self.documents()]
+        self.client.run("channel.duplicate", channel="OpenFill selection", document="new", name=mask)
+        names = [d.get("name") for d in self.documents()]
+        if mask not in names:  # a PhotoCraft that names the new document itself: the new name
+            new = [n for n in set(names) if names.count(n) > before.count(n)]
+            if len(new) != 1 or names.count(new[0]) != 1:
+                raise BridgeError("PhotoCraft did not make OpenFill's mask document")
+            mask = str(new[0])
+        opened.append(mask)
         rel = self._file("mask")
-        self.client.call("app.save", path=rel)
+        self._save_own(mask, rel)
         return self._read(rel).convert("L")
 
     def export_region(self, image: PCImage, rect: Rect, transparent_outside: bool = False) -> tuple[bytes, bytes]:
@@ -595,23 +676,36 @@ class PhotoCraftBridge:
         back.paste(visible, off)
         return back
 
-    def _psd(self, image: PCImage, layers: list[PCLayer], group_name: str, size: tuple[int, int]) -> bytes:
+    def _write_psd(self, image: PCImage, layers: list[PCLayer], group_name: str, size: tuple[int, int]) -> str:
         """``layers`` (top first) with masks, names and visibility, in their group, as a PSD the
-        size of the canvas, with the backdrop at the bottom."""
+        size of the canvas, with the backdrop at the bottom, written into the exchange folder:
+        its name there. Variations sharing a mask (the job's selection, grown and feathered)
+        get it made once."""
+        masks: dict[tuple, tuple | None] = {}
         out = []
         for layer in layers:
-            mask, box = self._layer_mask(image, layer, size), None
-            if mask is not None:
-                box = mask.getbbox() or (0, 0, 1, 1)  # an empty mask: one hidden pixel
-                box = (box[0], box[1], box[2] - box[0], box[3] - box[1], mask.crop(box).tobytes())
+            key = (layer.mask_kind, layer.grow, layer.feather, id(layer.mask), id(layer.selection))
+            if key not in masks:
+                mask, box = self._layer_mask(image, layer, size), None
+                if mask is not None:
+                    box = mask.getbbox() or (0, 0, 1, 1)  # an empty mask: one hidden pixel
+                    box = (box[0], box[1], box[2] - box[0], box[3] - box[1], mask.crop(box).tobytes())
+                masks[key] = box
             o = layer.origin
-            out.append(psd.PsdLayer(layer.name, o.x, o.y, o.width, o.height, layer.rgba, layer.visible, box))
+            out.append(psd.PsdLayer(layer.name, o.x, o.y, o.width, o.height, layer.rgba, layer.visible, masks[key]))
         if group_name:
             out = [psd.PsdLayer(group_name, children=out)]
         back = self._backdrop(image, size)
         if back is not None:
             out.append(psd.PsdLayer(BACKDROP, 0, 0, size[0], size[1], back.tobytes()))
-        return psd.encode(size[0], size[1], out)
+        rel = self._file("layers", ".psd")
+        try:
+            with open(self.exchange / rel, "wb") as f:
+                psd.write(f, size[0], size[1], out)
+        except BaseException:
+            self._forget(rel)
+            raise
+        return rel
 
     def _bring_in(
         self, image: PCImage, layers: list[PCLayer], group_name: str, before_copy: Callable[[], None] | None = None
@@ -623,7 +717,7 @@ class PhotoCraftBridge:
         right after it opens, and it is closed right after the copy. While an expand's canvas
         change is pending the copies go where they belong on the new canvas (``commit``)."""
         size = image.size()
-        scratch, target = self._open_scratch(image, self._psd(image, layers, group_name, size))
+        name, scratch, target = self._open_scratch(image, self._write_psd(image, layers, group_name, size))
         try:
             rows = (self.client.run("layer.list", document=scratch) or {}).get("layers") or []
             tops = [int(r["id"]) for r in rows if not r.get("depth") and r.get("name") != BACKDROP]
@@ -631,6 +725,12 @@ class PhotoCraftBridge:
                 raise BridgeError("PhotoCraft opened OpenFill's layers without them")
             if before_copy:
                 before_copy()
+            # Both found again right before the copy: a tab the user closed meanwhile moves them.
+            session = self.session()
+            target = int(self._find(image, session)["index"])
+            scratch = next((int(d["index"]) for d in session.get("documents") or [] if d.get("name") == name), None)
+            if scratch is None:
+                raise BridgeError("OpenFill's layers were closed in PhotoCraft")
             crop = image.pending_crop
             copied = self.client.run(
                 "layer.copyToDocument",
@@ -640,10 +740,11 @@ class PhotoCraftBridge:
                 offset=[-crop[2], -crop[3]] if crop else [0, 0],
             )
         finally:
-            self._close(scratch)
+            self._close_own(name)
         ids = [int(i) for i in (copied or {}).get("layers") or []]
         if len(ids) != len(tops):
             raise BridgeError("PhotoCraft did not report the copied layer")
+        image.known_ids.update(ids)
         return ids
 
     def commit(self, image: PCImage, canvas: bool = True) -> None:
@@ -651,11 +752,17 @@ class PhotoCraftBridge:
         make a pending canvas change (an expand grows the canvas only now, under its layers;
         ``canvas`` False leaves it waiting for the layers still to come)."""
         layers, group_name = image.pending, image.pending_group
+        changed = False
         if layers:
             # The results stay pending until they are in the document, so a failure here can be
             # tried again and never loses them.
-            self._select_top(image)
-            copied = self._bring_in(image, layers, group_name)
+            reopen = self._select_top(image)
+            try:
+                copied = self._bring_in(image, layers, group_name)
+            finally:
+                reopen()
+            image.steps_added += 1
+            changed = True
             image.pending, image.pending_group = [], ""
             self._take_ids(image, layers, group_name, copied)
             image._snapshot = None
@@ -663,14 +770,41 @@ class PhotoCraftBridge:
             new_w, new_h, off_x, off_y = image.pending_crop
             self.activate(image)
             self.client.run("image.crop", x=-off_x, y=-off_y, width=new_w, height=new_h)
+            image.steps_added += 1
+            changed = True
             image.pending_crop = None
             image._snapshot = None
+        if changed:
+            image.history_after = self.history(image)
 
-    def _select_top(self, image: PCImage) -> None:
+    def _select_top(self, image: PCImage) -> Callable[[], None]:
+        """Make the next copy land on top of the stack, outside any group: select the topmost
+        layer. A copy above a selected open group goes into it, so a group on top is closed
+        for the copy (a view setting, not a history step); the returned function opens it again."""
         self.activate(image)
-        top_layer = self._top_layer(image)
-        if top_layer is not None:
-            self.client.run("layer.select", layer=top_layer)  # not a history step
+        rows = [row for row in self._flat_layers(image) if not row.get("depth")]
+        if not rows:
+            return lambda: None
+        top = int(rows[0]["id"])
+        self.client.run("layer.select", layer=top)  # not a history step
+        if str(rows[0].get("kind") or "").lower() != "group":
+            return lambda: None
+        tree = (self.client.run("document.inspect") or {}).get("layers") or []
+        expanded = next((row.get("expanded") for row in tree if row.get("id") == top), None)
+        if expanded is False:
+            return lambda: None
+        try:
+            self.client.run("layer.setExpanded", layer=top, expanded=False)
+        except ControlError:  # a PhotoCraft without it: the copy goes into the group, as before
+            return lambda: None
+
+        def reopen() -> None:
+            try:
+                self.client.run("layer.setExpanded", layer=top, expanded=True)
+            except ControlError:
+                pass
+
+        return reopen
 
     def _take_ids(self, image: PCImage, layers: list[PCLayer], group_name: str, copied: list[int]) -> None:
         """Note the ids the copied ``layers`` have in the document; the first is selected."""
@@ -706,6 +840,8 @@ class PhotoCraftBridge:
         """Remember ``image`` so its layers can be found again (``set_layer_rgba``)."""
         if image not in self._known_images:
             self._known_images.append(image)
+        if not image.known_ids and image.index is not None:
+            image.known_ids = self._layer_ids(image.index)
         return image
 
     def _flat_layers(self, image: PCImage) -> list[dict]:
@@ -782,12 +918,12 @@ class PhotoCraftBridge:
             chosen.mask,
             chosen.selection,
         )
-        rewound = []
+        rewound, reopen = [], []
 
         def rewind() -> None:
             self.rewind(image, since)
             rewound.append(True)
-            self._select_top(image)
+            reopen.append(self._select_top(image))
 
         try:
             copied = self._bring_in(image, [kept], "", before_copy=rewind)
@@ -795,6 +931,9 @@ class PhotoCraftBridge:
             if rewound:
                 self._restore(image, layers)
             raise
+        finally:
+            for again in reopen:
+                again()
         chosen.id, chosen.group, chosen.visible, chosen.name = copied[0], None, True, name
         self.client.run("layer.select", layer=copied[0])
         image._snapshot = None
@@ -853,8 +992,12 @@ class PhotoCraftBridge:
             opened = self.client.call("app.open", path=self._open_path(rel)) or {}
         finally:
             self._forget(rel)
-        index = int(self.session().get("active"))
-        image = self.track(PCImage(self, str(opened.get("name") or rel), index))
+        name = str(opened.get("name") or rel)
+        new = [d for d in self.documents() if d.get("name") == name]  # opened last: the last of that name
+        if not new:
+            raise BridgeError("PhotoCraft did not open the new image")
+        image = self.track(PCImage(self, name, int(new[-1]["index"]), path=new[-1].get("path")))
+        self.activate(image)
         base = (self.client.run("document.inspect") or {}).get("activeLayer")
         if base is not None:
             self.client.run("layer.setProps", layer=base, name=base_name if len(images) == 1 else f"{base_name} (1)")
@@ -890,6 +1033,7 @@ class PhotoCraftBridge:
         finally:
             image.selection = None
             image._snapshot = None
+            image.steps_added, image.history_after = 0, None  # the job's steps are its result now
 
     def discard(self, image: PCImage) -> None:
         """A failed or cancelled job: forget results that never reached the document."""
@@ -897,32 +1041,68 @@ class PhotoCraftBridge:
         image.pending_crop = None  # the canvas stays as it was
         image.selection = None
         image._snapshot = None
+        steps, expected = image.steps_added, image.history_after
+        image.steps_added, image.history_after = 0, None
+        if steps and expected:
+            # What the job put in already (a multi-round expand's first rounds) goes too, when
+            # the document is still exactly as the job left it: nothing of the user's is undone.
+            try:
+                if self.history(image) == expected and len(expected) > steps:
+                    self.rewind(image, len(expected) - steps)
+            except (ControlError, BridgeError):
+                pass
+
+
+def _octagon(img: Image.Image, reach: float) -> Image.Image:
+    """``img`` dilated by a regular octagon of radius ``reach`` (a square, then a diamond: the
+    octagon is their sum), each built by doubling, so a radius r takes about log r passes.
+    ``img`` needs a zero margin of ``reach`` + 1 all round (the shifts wrap)."""
+    a = round(reach * 0.41421356)
+    b = max(0, round(reach) - a)
+
+    def spread(im: Image.Image, shifts: tuple) -> Image.Image:
+        out = im
+        for dx, dy in shifts:
+            out = ImageChops.lighter(out, ImageChops.offset(im, dx, dy))
+        return out
+
+    for ax, ay in ((1, 0), (0, 1)):  # a line of 2k + 1 pixels and its copies s away: 2(k + s) + 1
+        k = 0
+        while k < a:
+            step = min(2 * k + 1, a - k)
+            img = spread(img, ((step * ax, step * ay), (-step * ax, -step * ay)))
+            k += step
+    k = 0
+    while k < b:  # a diamond of radius k and its copies s <= k away along the axes: radius k + s
+        step = 1 if k == 0 else min(k, b - k)
+        img = spread(img, ((step, 0), (-step, 0), (0, step), (0, -step)))
+        k += step
+    return img
 
 
 def _grow(mask: Image.Image, radius: int) -> Image.Image:
-    """``mask`` grown by ``radius`` pixels, round as Select > Modify > Expand grows it (square
-    and cross steps in turn: an octagon), worked only around what is selected."""
+    """``mask`` grown by ``radius`` pixels, round as Select > Modify > Expand grows it (here an
+    octagon), worked only around what is selected. Large radii are grown at 1/f size, f =
+    radius // 12, and scaled back (OpenFill's grow is at most 48 px and always feathered
+    after, so this costs a pixel or two of the edge): 6000 x 4000 at 48 px in about half a second."""
     box = mask.getbbox()
     if box is None or radius <= 0:
         return mask
     w, h = mask.size
     area = (max(0, box[0] - radius), max(0, box[1] - radius), min(w, box[2] + radius), min(h, box[3] + radius))
     part = mask.crop(area)
-    for step in range(radius):
-        if step % 2 == 0:
-            part = part.filter(ImageFilter.MaxFilter(3))
-        else:
-            pw, ph = part.size
-            grown = part
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                shifted = Image.new("L", part.size, 0)
-                shifted.paste(
-                    part.crop((max(0, -dx), max(0, -dy), pw - max(0, dx), ph - max(0, dy))), (max(0, dx), max(0, dy))
-                )
-                grown = ImageChops.lighter(grown, shifted)
-            part = grown
+    f = max(1, radius // 12)
+    sw, sh = -(-part.width // f), -(-part.height // f)
+    small = part.resize((sw, sh), Image.BOX) if f > 1 else part
+    m = -(-radius // f) + 2
+    padded = Image.new("L", (sw + 2 * m, sh + 2 * m), 0)
+    padded.paste(small, (m, m))
+    grown = _octagon(padded, radius / f).crop((m, m, m + sw, m + sh))
+    if f > 1:
+        grown = grown.resize((sw * f, sh * f), Image.BILINEAR).crop((0, 0, part.width, part.height))
+        grown = ImageChops.lighter(part, grown)
     out = mask.copy()
-    out.paste(part, area[:2])
+    out.paste(grown, area[:2])
     return out
 
 

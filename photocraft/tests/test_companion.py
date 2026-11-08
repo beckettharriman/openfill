@@ -93,7 +93,7 @@ def read_psd(data: bytes) -> tuple[tuple[int, int], list[dict]]:
             continue
         row = {"name": record["name"], "visible": record["visible"], "rect": record["rect"]}
         if record["divider"] in (1, 2):
-            row["children"] = list(reversed(stack.pop()))
+            row["kind"], row["children"] = "Group", list(reversed(stack.pop()))
         else:
             row["alpha"] = planes[(index, -1)]
             if record["mask"] is not None:
@@ -365,6 +365,7 @@ class FakePhotoCraft:
             return {
                 "width": doc["size"][0],
                 "height": doc["size"][1],
+                "depth": doc.get("depth", 8),
                 "hasSelection": bool(doc["selection"]),
                 "selectionBounds": doc["selection"],
                 "history": list(doc["history"]),
@@ -410,18 +411,38 @@ class FakePhotoCraft:
         if command == "layer.copyToDocument":
             src, dest = self.docs[params.get("source", self.active)], self.docs[params["document"]]
             ids = []
+            # As PhotoCraft places a copy: above the selected layer, into a selected (open)
+            # group as its top child, on top of the stack with no layer selected.
+            siblings, at = dest["layers"], 0
+            anchor = dest.get("selected")
+            for row in self._all(dest):
+                if row["id"] == anchor:
+                    if "children" in row and row.get("expanded", True):
+                        siblings, at = row["children"], 0
+                    else:
+                        siblings = next(
+                            (g["children"] for g in dest["layers"] if row in g.get("children", [])), dest["layers"]
+                        )
+                        at = siblings.index(row)
             for layer_id in params["layers"]:
                 layer = next(row for row in src["layers"] if row["id"] == layer_id)
                 copy = json.loads(json.dumps(layer))
                 copy["id"] = self._new_id()
                 for child in copy.get("children", []):
                     child["id"] = self._new_id()
-                dest["layers"].insert(0, copy)
+                siblings.insert(at, copy)
                 ids.append(copy["id"])
+            dest["selected"] = ids[-1] if ids else anchor
             self.active = params["document"]
             self._edit(dest, command)
             return {"document": params["document"], "layers": ids}
-        if command == "select.loadSelection":
+        if command == "layer.select":
+            doc["selected"] = params.get("layer")
+        elif command == "layer.setExpanded":  # a view setting, not a history step
+            next(r for r in doc["layers"] if r["id"] == params["layer"])["expanded"] = params["expanded"]
+        elif command == "select.deselectLayers":
+            doc["selected"] = None
+        elif command == "select.loadSelection":
             doc["selection"] = [0, 0, *doc["size"]]
         elif command == "layer.layerMask.revealSelection":
             doc["selection"] = None  # adding a mask uses the selection up, as in PhotoCraft
@@ -430,7 +451,7 @@ class FakePhotoCraft:
             row = next(r for r in self._all(doc) if r["id"] == params["layer"])
             row.update({k: v for k, v in params.items() if k in ("name", "visible")})
         elif command == "layer.new.group":
-            group = {"id": self._new_id(), "name": params.get("name"), "visible": True, "children": []}
+            group = {"id": self._new_id(), "name": params.get("name"), "kind": "Group", "visible": True, "children": []}
             doc["layers"].insert(0, group)
             self._edit(doc, command)
             return {"layer": group["id"]}
@@ -869,6 +890,150 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(len(pc.docs), 1)
         self.assertEqual(list(self.exchange.iterdir()), [])
 
+    def _bridge(self, version=None):
+        pc = FakePhotoCraft(self.exchange, version=version)
+        bridge = PhotoCraftBridge(pc, self.exchange, Path(self.tmp.name))
+        return pc, bridge, bridge.track(bridge.active_image())
+
+    def test_a_tab_click_during_the_export_never_writes_into_the_users_document(self):
+        # PhotoCraft 0.18 on: the user clicks their own tab while the copy is saved. The selection
+        # goes into the copy by name, and every save checks the copy is the one in front.
+        pc, bridge, image = self._bridge("0.20.2")
+        real_call, fired = pc.call, []
+
+        def call(method, **params):
+            out = real_call(method, **params)
+            if method == "app.save" and params["path"].endswith(".tif") and not fired:
+                fired.append(params["path"])
+                pc.active = 0  # the user's click on their own tab
+            return out
+
+        pc.call = call
+        _png, raw = bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.assertTrue(fired)
+        self.assertEqual(pc.docs[0]["channels"], [])  # the user's document got nothing
+        self.assertEqual(pc.docs[0]["history"], ["Open"])
+        self.assertEqual((raw[6 * 64 + 8], raw[0]), (255, 0))
+        self.assertEqual([d["name"] for d in pc.docs], ["photo.png"])
+        self.assertEqual(list(self.exchange.iterdir()), [])
+
+    def test_a_tab_click_right_after_the_duplicate_never_closes_the_users_document(self):
+        # The copy is found by its own name, never as "the active document": a click on the
+        # user's tab right after image.duplicate must not get the user's document saved or closed.
+        for version in ("0.20.2", None):
+            pc, bridge, image = self._bridge(version)
+            real_run, real_call, saved = pc.run, pc.call, []
+
+            def run(command, _pc=pc, _real=real_run, **params):
+                out = _real(command, **params)
+                if command == "image.duplicate":
+                    _pc.active = 0  # the user's click on their own tab
+                return out
+
+            def call(method, _pc=pc, _real=real_call, _saved=saved, **params):
+                if method == "app.save":
+                    _saved.append(_pc.doc["name"])
+                return _real(method, **params)
+
+            pc.run, pc.call = run, call
+            bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+            self.assertEqual([d["name"] for d in pc.docs], ["photo.png"], version)
+            self.assertNotIn("photo.png", saved, version)
+            self.assertEqual(pc.docs[0]["channels"], [], version)
+
+    def test_two_tabs_with_the_same_name_after_a_tab_left_of_them_closes(self):
+        # Tabs [x.png, photo.png (the job's), photo.png (another)]; x.png closes mid-job, so
+        # the other photo.png takes the job's old index: the result still goes to the job's.
+        pc = self.pc
+        pc.docs.insert(0, pc._doc("x.png", (64, 48), [{"id": 90, "name": "X", "visible": True}]))
+        pc.docs.append(pc._doc("photo.png", (64, 48), [{"id": 91, "name": "Other", "visible": True}]))
+        pc.active = 1
+        image = self.bridge.track(self.bridge.active_image())
+        mine, other = pc.docs[1], pc.docs[2]
+        self.bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.bridge.insert_results(image, [png_bytes("red")], Rect(0, 0, 64, 48), "Fill", 0.0, None)
+        pc.docs.pop(0)  # the user closes x.png while the job runs
+        pc.active = 0
+        self.bridge.finish(image)
+        self.assertEqual(other["history"], ["Open"])
+        self.assertEqual(mine["history"], ["Open", "Duplicate Layer"])
+
+    def test_a_two_round_expand_that_fails_in_round_two_leaves_the_canvas(self):
+        # Round 2 reads the document, so round 1 (its layer and the bigger canvas) is in it
+        # already; a failure or Cancel in round 2 takes that back too.
+        bridge, target = self.bridge, self.target
+        bridge.export_region(self.image, Rect(-10, 0, 84, 48), transparent_outside=True)
+        bridge.resize_canvas(self.image, 84, 48, 10, 0)
+        bridge.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
+        bridge.export_region(self.image, Rect(-10, 0, 104, 48), transparent_outside=True)  # round 2 reads
+        self.assertEqual(target["size"], (84, 48))
+        bridge.discard(self.image)  # round 2 failed or was cancelled
+        self.assertEqual((target["size"], target["history"]), ((64, 48), ["Open"]))
+        self.assertEqual([r["name"] for r in target["layers"]], ["Background"])
+
+    def test_a_failed_expand_keeps_what_the_user_did_meanwhile(self):
+        bridge, target = self.bridge, self.target
+        bridge.export_region(self.image, Rect(-10, 0, 84, 48), transparent_outside=True)
+        bridge.resize_canvas(self.image, 84, 48, 10, 0)
+        bridge.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
+        bridge.export_region(self.image, Rect(-10, 0, 104, 48), transparent_outside=True)
+        self.pc.run("layer.setProps", layer=2, name="Renamed")  # the user, between the rounds
+        history = list(target["history"])
+        bridge.discard(self.image)
+        self.assertEqual(target["history"], history)  # nothing of theirs is undone
+
+    def test_a_finished_job_is_not_taken_back(self):
+        self.bridge.resize_canvas(self.image, 84, 48, 10, 0)
+        self.bridge.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
+        self.bridge.finish(self.image)
+        self.bridge.discard(self.image)  # what Service._job's finally does after every job
+        self.assertEqual(self.target["size"], (84, 48))
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer", "Crop"])
+
+    def test_the_same_mask_is_made_once_for_all_variations(self):
+        from openfill_photocraft import bridge as bridge_mod
+
+        self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        self.bridge.insert_results(
+            self.image,
+            [png_bytes("red"), png_bytes("blue"), png_bytes("green")],
+            Rect(0, 0, 64, 48),
+            "Fill",
+            6.0,
+            None,
+            grow=4,
+        )
+        with mock.patch.object(bridge_mod, "_grow", wraps=bridge_mod._grow) as grow:
+            self.bridge.finish(self.image)
+        self.assertEqual(grow.call_count, 1)
+        masks = [c["mask_pixels"] for c in self.pc.opened_psds[-1][0]["children"]]
+        self.assertEqual(len(set(masks)), 1)
+
+    def test_a_result_after_a_variations_group_lands_on_top_not_in_it(self):
+        self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        self.bridge.insert_results(
+            self.image, [png_bytes("red"), png_bytes("blue"), png_bytes("green")], Rect(0, 0, 64, 48), "Fill", 0.0, None
+        )
+        self.bridge.finish(self.image)
+        group = self.target["layers"][0]
+        self.assertEqual(len(group["children"]), 3)
+        self.pc.run("layer.select", layer=group["children"][0]["id"])  # what the picker leaves
+        self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        (layer,) = self.bridge.insert_results(self.image, [png_bytes("blue")], Rect(0, 0, 64, 48), "Next", 0.0, None)
+        self.bridge.finish(self.image)
+        self.assertEqual([r["name"] for r in self.target["layers"]], ["Next", "Fill", "Background"])
+        self.assertEqual(self.target["layers"][0]["id"], layer.id)
+        self.assertEqual(len(self.target["layers"][1]["children"]), 3)  # the group keeps its three
+        self.assertTrue(self.target["layers"][1]["expanded"])  # closed for the copy only
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer", "Duplicate Layer"])
+
+    def test_deep_documents_skip_the_tiff_reads(self):
+        pc, bridge, image = self._bridge("0.20.2")
+        pc.docs[0]["depth"] = 16
+        _png, raw = bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.assertEqual(raw[6 * 64 + 8], 255)
+        self.assertFalse(any(p.get("path", "").endswith(".tif") for _c, p in pc.calls))
+
     def test_older_photocraft_never_tries_the_tiff(self):
         _png, raw = self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
         self.assertEqual(raw[6 * 64 + 8], 255)
@@ -923,6 +1088,28 @@ class PsdTests(unittest.TestCase):
         self.assertEqual(len(data) % 2, 0)
         with self.assertRaises(ValueError):
             psd.encode(4, 4, [psd.PsdLayer("x", 0, 0, 2, 2, b"short")])
+
+    def test_written_to_a_file_it_is_the_same_psd(self):
+        from openfill_photocraft import psd
+
+        layers = [psd.PsdLayer("A", 0, 0, 3, 2, bytes(range(24)), True, (0, 0, 3, 2, bytes(6)))]
+        out = io.BytesIO()
+        psd.write(out, 5, 4, layers)
+        self.assertEqual(out.getvalue(), psd.encode(5, 4, layers))
+        self.assertEqual(read_psd(out.getvalue())[1][0]["alpha"], bytes(range(3, 24, 4)))
+
+    def test_grow_is_fast_on_a_big_picture(self):
+        import time
+
+        from openfill_photocraft.bridge import _grow
+
+        big = Image.new("L", (6000, 4000), 0)
+        big.paste(255, (400, 400, 5600, 3600))
+        start = time.monotonic()
+        grown = _grow(big, 48)
+        self.assertLess(time.monotonic() - start, 5.0)  # about 0.5 s here; it was 16 s
+        self.assertEqual(grown.getpixel((352, 2000)), 255)  # straight out: the full radius
+        self.assertEqual(grown.getpixel((340, 2000)), 0)
 
     def test_grow_is_round_and_stays_inside_the_canvas(self):
         from openfill_photocraft.bridge import _grow
