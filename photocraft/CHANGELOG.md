@@ -10,6 +10,9 @@ Each entry from now on says which PhotoCraft versions it works with.
 
 ## [Unreleased] - OpenFill for PhotoCraft · works with PhotoCraft 0.12 to 0.20
 
+Fixed (update recommended):
+- If you clicked your image's tab while OpenFill was exporting, OpenFill could save your image into its own folder or close it without saving. It now only ever saves or closes its own temporary documents, found by their own names. 0.2.4 and earlier have this bug.
+
 Working in PhotoCraft:
 - Fill, Remove, Expand and Create no longer flash OpenFill's temporary documents in PhotoCraft. The results come in as one PSD with their masks and group already in it, so there is one temporary document per job instead of one per layer and mask, and it is never worked on in view. PhotoCraft is back on your image right after it opens.
 - The copy OpenFill reads your image from is shown at your zoom and position, and from PhotoCraft 0.18 on the selection is read from that same copy, so the black and white mask document is gone. Its tab still shows for about a second, because PhotoCraft can only save the document in front.
@@ -19,7 +22,6 @@ Working in PhotoCraft:
 - When a dialog you opened keeps OpenFill from closing its temporary copy, it says so and closes it with the next job.
 - Picking OpenFill in Filter > Plug-ins: the step it leaves is taken back only on that image, while it is still in front and unchanged, and with the history (it stays as a redo step that does nothing). Before, switching tabs at that moment could delete another image's last step for good.
 - A result now always lands on top of the layer stack. Before, a job after a Fill with several variations put its layer inside that Fill's group.
-- OpenFill only ever saves or closes its own temporary documents, found by their own names. Before, clicking your own tab at the wrong moment during a job could get your image saved into OpenFill's folder or closed without asking.
 - The result goes into the right image when two open images share a name and another tab closes during the job.
 - Bigger selections on big images: the grown mask is made once per job, in about half a second on a 24 MP image instead of several seconds per variation.
 

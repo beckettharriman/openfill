@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- OpenFill for PhotoCraft: fixed a bug where clicking your image's tab while OpenFill was exporting could save your image into OpenFill's folder or close it without saving. Its temporary documents also stay out of sight.
 - GIMP: Generative Expand with FLUX no longer stops after you press Generate to ask whether to use SD 1.5 instead. Expand always runs the model you picked. When the Expand default usually continues a scene better than an SD 1.5 or SDXL pick, the Expand dialog says so before you start.
 - Add OpenFill for Patchy (prototype), by Seth Robinson (#9): the PhotoCraft panel as a Patchy companion app, started from Plugins > Companions, with each result one step in Patchy's history.
 - Add an optional cloud service: run Fill, Remove, Expand and Create on OpenRouter or any OpenAI-compatible image API (OpenAI, LiteLLM) with your own key, for computers without a suitable graphics card. Off unless you pick it; every screen then says your image is sent to it; never used as a fallback. The result is put back through your selection, so pixels outside it never change. Untested against the real services so far. See docs/cloud.md.
