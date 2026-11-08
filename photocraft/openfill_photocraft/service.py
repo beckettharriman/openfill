@@ -117,6 +117,8 @@ class WebRunner:
 class Service:
     """Owns the PhotoCraft connection, OpenFill's App and the one running job."""
 
+    host = "PhotoCraft"  # the editor's name in messages
+
     def __init__(self, client: ControlClient, bridge: PhotoCraftBridge) -> None:
         self.client = client
         self.bridge = bridge
@@ -282,7 +284,7 @@ class Service:
         try:
             image = self.bridge.active_image() if kind != "txt2img" or p.get("target") == "layer" else None
             if kind != "txt2img" and image is None:
-                raise RuntimeError("Open an image in PhotoCraft first.")
+                raise RuntimeError(f"Open an image in {self.host} first.")
             self._job_base, self._expected_history, self._collapsed = [], [], False
             base: list[str] | None = None
             if image is not None:
@@ -338,7 +340,7 @@ class Service:
             done_text = self.state.text or "Done"
             if image is not None:
                 with self.state.lock:
-                    self.state.text = "Adding the result to PhotoCraft..."
+                    self.state.text = f"Adding the result to {self.host}..."
                 self.bridge.finish(image)  # the results reach the document here, in one step
                 self._one_step(image, base)
             self.layers = list(layers or [])

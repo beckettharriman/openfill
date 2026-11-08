@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ComfyUI's own `RemoveBackground` nodes, so it needs ComfyUI 0.39 or newer (the one Download ComfyUI
   fetches). New catalog model `birefnet` (424 MB, MIT), new template `bgremove`, new capability `bgremove`.
   The GIMP plug-in does not have the command yet.
+- Add OpenFill for Patchy (prototype): the PhotoCraft panel as a Patchy companion app, started from Plugins > Companions, with each result one step in Patchy's history.
 - Detect long Windows paths before ComfyUI startup or download and explain the shorter-folder fix.
 - Add PhotoCraft installation on Apple Silicon, tested with all four tools on an M3 MacBook Air.
 - Fix Finder Python architecture, Aqua panel startup and PhotoCraft discovery on macOS.

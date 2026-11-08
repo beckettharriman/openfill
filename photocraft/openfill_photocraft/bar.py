@@ -325,10 +325,24 @@ def rounded(im: Image.Image, radius: int, bg: str) -> Image.Image:
 
 
 class Bar:
-    """The window. ``show(action)`` is what the Filter > Plug-ins entry calls."""
+    """The window. ``show(action)`` is what the Filter > Plug-ins entry calls.
 
-    def __init__(self, service: Service, watcher: Watcher, page_url: str, profile: Path) -> None:
+    ``host`` names the editor in the panel's messages and ``reopen`` says how to bring the
+    panel back there; ``tether`` ties the windows to the editor's (``tether.Tether`` by
+    default). The PhotoCraft launcher leaves all three as they are."""
+
+    def __init__(
+        self,
+        service: Service,
+        watcher: Watcher,
+        page_url: str,
+        profile: Path,
+        host: str = "PhotoCraft",
+        reopen: str = "Filter > Plug-ins > OpenFill in PhotoCraft",
+        tether: Any = None,
+    ) -> None:
         self.service, self.watcher, self.page_url, self.profile = service, watcher, page_url, profile
+        self.host, self.reopen = host, reopen
         self.settings_file = profile / "bar.json"
         self.prefs = self._load_prefs()
         self.calls: queue.Queue = queue.Queue()  # actions from other threads
@@ -352,9 +366,11 @@ class Bar:
             self.root.iconphoto(True, self._icon)
         except Exception:  # noqa: BLE001 - the window works without an icon
             pass
-        from .tether import Tether
+        if tether is None:
+            from .tether import Tether
 
-        self.tether = Tether()
+            tether = Tether()
+        self.tether = tether
         self.tab = tk.StringVar(value="fill")
         self.variations = tk.IntVar(value=max(1, min(5, int(self.prefs.get("variations", 1)))))
         self.model_choice = tk.StringVar(value="")
@@ -929,8 +945,7 @@ class Bar:
             self._save_prefs()
             ui.message(
                 self.root,
-                "OpenFill keeps running while PhotoCraft is open.\n\n"
-                "To bring it back, use Filter > Plug-ins > OpenFill in PhotoCraft.",
+                f"OpenFill keeps running while {self.host} is open.\n\nTo bring it back, use {self.reopen}.",
             )
 
     def toggle_gear(self) -> None:
@@ -1236,7 +1251,7 @@ class Bar:
         def work() -> None:
             try:
                 self.service.setup_comfy()
-                self.call_soon(self._say, "Downloading ComfyUI. You can keep working in PhotoCraft.", OK)
+                self.call_soon(self._say, f"Downloading ComfyUI. You can keep working in {self.host}.", OK)
             except Exception as err:  # noqa: BLE001 - shown on the panel
                 self.call_soon(self._say, str(err), BAD)
             self.refresher.wake.set()
@@ -1296,10 +1311,10 @@ class Bar:
         snap = self.watcher.snapshot()
         doc, sel, tab = snap.get("document"), snap.get("selection"), self.tab.get()
         if not snap.get("connected"):
-            return "Waiting for PhotoCraft...", DIM, "info"
+            return f"Waiting for {self.host}...", DIM, "info"
         if snap.get("waiting"):
             return (
-                "PhotoCraft is not answering. If its window is minimized or covered, bring it into view.",
+                f"{self.host} is not answering. If its window is minimized or covered, bring it into view.",
                 WARN,
                 "warn",
             )
@@ -1308,7 +1323,7 @@ class Bar:
                 return f"A layer in {doc['name']}, on the selection ({sel[2]} x {sel[3]} px)", DIM, "selection"
             return "Makes a new image" + (f", or a layer in {doc['name']}" if doc else ""), DIM, "image"
         if not doc:
-            return "Open an image in PhotoCraft.", DIM, "image"
+            return f"Open an image in {self.host}.", DIM, "image"
         if tab == "bgremove":
             return f"{doc['name']} · {doc['width']} x {doc['height']} · the whole image", DIM, "image"
         if tab in ("fill", "remove"):
