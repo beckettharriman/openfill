@@ -344,9 +344,11 @@ list and uses the first model that is installed (`openfill/catalog.py`,
 | Generative Expand (both tiers) | SD 1.5 inpainting, then DreamShaper 8 | 4 photos x 3 models x 25 % and 60 % per side, all sides: SD 1.5 best in 5 of 8 pairs, DreamShaper 2, RealVisXL 1 (it invents scenery); `docs/evidence/daytime-2026-10-09/expand-models/` |
 | Automatic active model | RealVisXL V5, DreamShaper 8, SD 1.5, Juggernaut, SDXL base | the most often acceptable fills |
 
-Generative Expand uses the model you pick. When the Expand default is
-installed and you picked another model, a question offers to switch; declining
-keeps your pick.
+Generative Expand uses the model you pick, and nothing asks again after you
+press Generate. When the Expand default is installed and you picked an SD 1.5
+or SDXL model other than it, the Expand dialog says so in a short tip. FLUX
+Fill and Qwen Edit get no tip: they outpaint on their own, and the Expand
+benchmark only compared SD 1.5, DreamShaper 8 and RealVisXL.
 
 FLUX Fill and Qwen Edit are never chosen automatically; they are used only
 when picked by hand. FLUX Fill (Q4) scored 5/5/18, ties RealVisXL on object

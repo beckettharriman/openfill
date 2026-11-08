@@ -861,11 +861,30 @@ def tier_default(installed: Iterable[ModelEntry], tier: str, operation: str = "f
 def expand_suggestion(installed: Iterable[ModelEntry], picked: ModelEntry | None) -> ModelEntry | None:
     """The Expand default when it is installed and differs from the model the
     user picked; None when there is nothing better to suggest (the pick is the
-    default, is unknown, or no default is installed)."""
+    default, is unknown, or no default is installed). FLUX Fill and Qwen Edit
+    (opt-in, only ever picked by hand) get no suggestion: they outpaint on their
+    own, and the Expand benchmark behind the default compared SD 1.5,
+    DreamShaper 8 and RealVisXL only."""
+    if picked is None or is_opt_in(picked):
+        return None
     best = tier_default(installed, "quality", "expand")
-    if best is None or picked is None or best.id == picked.id:
+    if best is None or best.id == picked.id:
         return None
     return best
+
+
+def expand_notes(installed: Iterable[ModelEntry], picks: dict[str, ModelEntry | None]) -> dict[str, str]:
+    """For the Expand dialog, decided before anything runs: dropdown id ->
+    name of the model that usually continues a scene better, for the picks
+    that have one (:func:`expand_suggestion`). The pick is always the model
+    that runs; the note only says what else is there."""
+    installed = list(installed)
+    notes = {}
+    for key, entry in picks.items():
+        better = expand_suggestion(installed, entry)
+        if better is not None:
+            notes[key] = better.name
+    return notes
 
 
 def removal_substitute(installed: Iterable[ModelEntry], entry: ModelEntry | None) -> ModelEntry | None:

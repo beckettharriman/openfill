@@ -90,7 +90,10 @@ class StatusTextTests(unittest.TestCase):
         self.assertFalse(ut.expand_over_limit((1000, 800), 0, 200, 0, 0))
         self.assertFalse(ut.expand_over_limit(None, 999, 999, 999, 999))
         self.assertIn("25%", ut.EXPAND_OVER_LIMIT)
-        self.assertIn("SD 1.5", ut.expand_model_note("SD 1.5 Inpainting"))
+        note = ut.expand_model_note("SD 1.5 Inpainting")
+        self.assertIn("SD 1.5", note)
+        self.assertNotIn("?", note)  # a note in the dialog, not a question
+        self.assertNotIn("—", note)
 
     def test_dialog_status_lines(self):
         self.assertIn("No selection", ut.selection_status(None, (100, 50)))
@@ -296,6 +299,30 @@ class PrimaryButtonTests(unittest.TestCase):
         self.assertEqual(ut.model_option_label("SD", True, True), "SD (active model)")
         self.assertEqual(ut.model_option_label("SD", False, False), "SD (not downloaded)")
         self.assertEqual(ut.model_option_label("MAT - prompt-free removal", True, True), "MAT (active model)")
+
+
+class ExpandNoMidRunQuestionTests(unittest.TestCase):
+    """Generative Expand runs the model picked in its dialog: nothing in
+    ``run_expand`` opens another dialog or swaps the model after Generate."""
+
+    def test_run_expand_asks_nothing_and_keeps_the_pick(self):
+        import ast
+
+        src = Path(__file__).resolve().parents[1] / "gimp-openfill" / "gimp-openfill.py"
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+        names = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+        self.assertNotIn("_ask_expand_switch", names)
+        run = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run_expand")
+        calls = {
+            c.func.attr if isinstance(c.func, ast.Attribute) else getattr(c.func, "id", "")
+            for c in ast.walk(run)
+            if isinstance(c, ast.Call)
+        }
+        self.assertFalse({"MessageDialog", "expand_suggestion", "_ask_expand_switch"} & calls, calls)
+        assigns = [
+            a for a in ast.walk(run) if isinstance(a, ast.Assign) and ast.unparse(a.targets[0]) == "model_choice"
+        ]
+        self.assertEqual([ast.unparse(a.value) for a in assigns], ["_model_arg(config)"])
 
 
 class ExpandDiscardRestoreTests(unittest.TestCase):

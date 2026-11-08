@@ -238,11 +238,12 @@ def _choice_options(config: Gimp.ProcedureConfig, prop: str) -> list[tuple[str, 
 
 def _model_options(
     config: Gimp.ProcedureConfig, kind: str, settings: Settings
-) -> tuple[list[tuple[str, str]], str, bool, frozenset]:
+) -> tuple[list[tuple[str, str]], str, bool, frozenset, dict[str, str]]:
     """Model dropdown: the active model first, then the catalog models that
     can do ``kind`` (downloaded ones before the others). Also: the active model's
-    name, whether it only removes objects, and the dropdown ids that are FLUX models
-    ("active" included when the active model is one)."""
+    name, whether it only removes objects, the dropdown ids that are FLUX models
+    ("active" included when the active model is one) and, for Expand, the notes
+    naming a model that usually continues a scene better (dropdown id -> name)."""
     from pathlib import Path
 
     from openfill import catalog as cat
@@ -252,11 +253,12 @@ def _model_options(
 
         name = settings.cloud_model or provider(settings.cloud_provider).default_model or "cloud model"
         label = f"{name} (cloud, {destination(settings.cloud_provider, settings.cloud_url)})"
-        return [("active", label)], label, False, frozenset()
+        return [("active", label)], label, False, frozenset(), {}
     nicks = [n for n, _ in (_choice_options(config, "model") or [("active", "Active model")])]
     active_name, prompt_free = settings.active_model, False
     installed_rows, other_rows = [], []
     flux_ids: set[str] = set()
+    notes: dict[str, str] = {}
     try:
         from openfill import local_models, shared_models
 
@@ -269,11 +271,13 @@ def _model_options(
         catalog = local_models.with_local(catalog, root, base, shared) if settings.comfy_dir else catalog
         active_id = cat.effective_active(catalog, root, nodes, settings.active_model)
         active_name = active_id or "none installed"
+        picks: dict[str, cat.ModelEntry | None] = {}
         for entry in catalog:
             if entry.arch == "flux":
                 flux_ids.add(entry.id)
             if entry.id == active_id:
                 active_name = entry.name
+                picks["active"] = entry
                 prompt_free = "remove" in entry.capabilities
                 if entry.arch == "flux":
                     flux_ids.add("active")
@@ -283,14 +287,17 @@ def _model_options(
             if not any(c in entry.capabilities for c in KIND_CAPABILITY[kind]):
                 continue
             installed = cat.install_status(entry, root, nodes, catalog).installed
+            picks[entry.id] = entry
             label = ui_text.model_option_label(entry.name, installed, False)
             if cat.is_opt_in(entry) and cat.tier_label(entry):
                 label += f", {cat.tier_label(entry)}"  # FLUX: "Quality (slow)", only used when picked
             (installed_rows if installed else other_rows).append((entry.id, label))
+        if kind == "expand":  # decided here, before the run: the dialog shows it, nothing asks later
+            notes = cat.expand_notes(cat.runnable_installed(catalog, root, nodes, "expand"), picks)
     except Exception:  # noqa: BLE001 - the dropdown still offers the active model
         pass
     options = [("active", ui_text.model_option_label(active_name, True, True))]
-    return options + installed_rows + other_rows, active_name, prompt_free, frozenset(flux_ids)
+    return options + installed_rows + other_rows, active_name, prompt_free, frozenset(flux_ids), notes
 
 
 _PICKED_MODEL: str | None = None  # a dialog pick outside the registered model ids (one run)
@@ -337,7 +344,7 @@ def _generation_dialog(
     if hooks.get("mode") == "remove":
         values["remove"] = True
     values.update(hooks.get("values") or {})  # test hook: start values as if picked under Advanced
-    models, active_name, prompt_free, flux_models = _model_options(config, kind, settings)
+    models, active_name, prompt_free, flux_models, expand_notes = _model_options(config, kind, settings)
     if hooks.get("prompt_free"):  # test hook: as if the active model only removed objects
         active_name, prompt_free = str(hooks["prompt_free"]), True
     image_size, selection_size = _image_sizes(image)
@@ -359,6 +366,7 @@ def _generation_dialog(
         active_prompt_free=prompt_free,
         active_name=active_name,
         flux_models=flux_models,
+        expand_notes=expand_notes,
         show_advanced=bool(hooks.get("advanced")),
         test_text=hooks.get("type"),
         test_key=hooks.get("press"),
@@ -736,27 +744,6 @@ def run_fill(
     return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
 
 
-def _ask_expand_switch(picked: str, better: str, hooks: dict) -> bool:
-    """Offer the Expand default instead of the picked model; True to switch."""
-    if "expand_switch" in hooks:  # test hook: answer without a dialog
-        return bool(hooks["expand_switch"])
-    gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk
-
-    dialog = Gtk.MessageDialog(
-        modal=True,
-        message_type=Gtk.MessageType.QUESTION,
-        text="Use a different model for Expand?",
-    )
-    dialog.format_secondary_text(ui_text.expand_model_note(better))
-    dialog.add_button(f"Keep {picked}", Gtk.ResponseType.CANCEL)
-    dialog.add_button(f"Use {better}", Gtk.ResponseType.OK)
-    dialog.set_default_response(Gtk.ResponseType.OK)
-    answer = dialog.run()
-    dialog.destroy()
-    return answer == Gtk.ResponseType.OK
-
-
 def run_expand(
     procedure: Gimp.Procedure,
     run_mode: Gimp.RunMode,
@@ -782,12 +769,7 @@ def run_expand(
     before_ids = _layer_ids(image)
     try:
         app = App(interactive=run_mode == Gimp.RunMode.INTERACTIVE)
-        model_choice = _model_arg(config)
-        grows = any(config.get_property(side) > 0 for side in ("left", "top", "right", "bottom"))
-        if run_mode == Gimp.RunMode.INTERACTIVE and grows:  # a pure crop generates nothing
-            suggestion = app.expand_suggestion(model_choice)
-            if suggestion and _ask_expand_switch(suggestion[0].name, suggestion[1].name, hooks):
-                model_choice = suggestion[1].id
+        model_choice = _model_arg(config)  # always the model picked in the dialog: no question mid-run
         layers = app.generative_expand(
             image,
             config.get_property("prompt"),

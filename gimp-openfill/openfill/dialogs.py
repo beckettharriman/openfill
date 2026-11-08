@@ -386,6 +386,7 @@ class GenerationDialog(Gtk.Dialog):
         show_advanced: bool = False,
         thumbnail: object | None = None,
         flux_models: frozenset = frozenset(),
+        expand_notes: dict[str, str] | None = None,
         cloud_note: str = "",
     ) -> None:
         super().__init__(title=self.TITLES[kind], modal=True)
@@ -397,6 +398,7 @@ class GenerationDialog(Gtk.Dialog):
         self.active_prompt_free = active_prompt_free
         self.active_name = active_name
         self.flux_models = flux_models
+        self.expand_notes = dict(expand_notes or {})  # dropdown id -> model that continues a scene better
         self._syncing = False
         self.set_default_size(self.WIDTH, -1)
         self.set_border_width(6)
@@ -761,6 +763,9 @@ class GenerationDialog(Gtk.Dialog):
             status = ui_text.expand_status((st.image_w, st.image_h), m.left, m.top, m.right, m.bottom)
             if ui_text.expand_over_limit((st.image_w, st.image_h), m.left, m.top, m.right, m.bottom):
                 warnings.append(ui_text.EXPAND_OVER_LIMIT)
+            model = self.model_combo.get_active_id() if hasattr(self, "model_combo") else "active"
+            if model in self.expand_notes:
+                warnings.append(ui_text.expand_model_note(self.expand_notes[model]))
         elif self.kind == "txt2img" and hasattr(self, "auto_size"):
             auto = self.auto_size.get_active()
             self.width_spin.set_sensitive(not auto)
