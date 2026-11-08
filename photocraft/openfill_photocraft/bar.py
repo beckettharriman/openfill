@@ -1165,7 +1165,7 @@ class Bar:
                 self.service.start("fill", body)
             elif kind == "bgremove":
                 if not self.watcher.snapshot().get("document"):
-                    self._say("Open an image in PhotoCraft first.", BAD)
+                    self._say(f"Open an image in {self.host} first.", BAD)
                     return
                 self.service.start("bgremove", body)
             elif kind == "expand":
