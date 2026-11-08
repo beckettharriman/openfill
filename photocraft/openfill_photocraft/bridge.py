@@ -116,6 +116,7 @@ class PCImage:
     steps_added: int = 0
     history_after: list[str] | None = None
     revision_after: int | None = None  # the document's revision then (any edit, undo or redo changes it)
+    rollback_ok: bool = True  # no step of the user's came between the job's
 
     def _inspect(self) -> dict:
         self.bridge.activate(self)
@@ -181,6 +182,8 @@ class PhotoCraftBridge:
         self._known_images: list[PCImage] = []
         self._version: tuple[int, ...] | None = None
         self._left_open: set[str] = set()  # OpenFill's documents PhotoCraft could not close yet
+        self._actions: bool | None = None  # whether PhotoCraft plays actions (see _run_at)
+        self._selection_colours: Image.Image | None = None  # the colours the selection's TIFF held
         self.exchange.mkdir(parents=True, exist_ok=True)
 
     # session ------------------------------------------------------------------
@@ -308,6 +311,50 @@ class PhotoCraftBridge:
             out[(d.get("index"), d.get("name"))] = (d.get("revision"), n)
         return out
 
+    def _run_at(self, index: int, command: str, **params) -> dict:
+        """Run ``command`` (one that acts on the document in front) on the document at tab
+        ``index``, in one go: a throwaway action holding "show that document" and the command
+        is played in a single request, so no tab click can come between them. The action is
+        deleted right after. Without actions (or while the user records one): show, check, run;
+        a click in that moment can still land it elsewhere, which ``_on_document`` notices."""
+        if self._actions is not False:
+            try:
+                listed = self.client.run("actions.list") or {}
+                if listed.get("recording"):
+                    raise BridgeError("the user is recording an action")  # theirs: not ours to touch
+                taken = {a.get("name") for a in listed.get("actions") or []}
+                label = {"image.crop": "Crop", "history.selectState": "History"}.get(command, command)
+                name = f"OpenFill {label}"  # the history shows "Action: OpenFill Crop"
+                while name in taken:
+                    name = f"OpenFill {label} {next(self._names)}"
+                self.client.run("actions.record", name=name)
+                stopped = self.client.run("actions.stop") or {}
+            except ControlError:
+                self._actions = False
+            except BridgeError:
+                pass
+            else:
+                try:
+                    if stopped.get("steps"):  # the user did something in that moment: not ours to play
+                        raise BridgeError("PhotoCraft recorded a step of the user's into OpenFill's action")
+                    self.client.run("actions.insert", action=name, id="document.activate", params={"document": index})
+                    self.client.run("actions.insert", action=name, id=command, params=params)
+                    played = self.client.run("actions.play", action=name) or {}
+                finally:
+                    try:
+                        self.client.run("actions.delete", action=name)
+                    except ControlError:
+                        pass
+                self._actions = True
+                failed = played.get("failed")
+                if failed:
+                    raise ControlError(f"{command}: {failed.get('error')}")
+                return played
+        self.client.run("document.activate", document=index)
+        if self.session().get("active") != index:
+            raise BridgeError("another image came to the front")
+        return self.client.run(command, **params) or {}
+
     def _put_back(self, key: tuple, states: int) -> bool:
         """Take the user's document ``key`` back to the history state it was at (``states``
         states before the redo ones) after an OpenFill command landed on it. Only ever moves
@@ -318,35 +365,32 @@ class PhotoCraftBridge:
             if index is None or states < 1:
                 return False
             try:
-                self.client.run("document.activate", document=index)
-                if self.session().get("active") != index:
-                    continue
-                self.client.run("history.selectState", state=states - 1)
+                self._run_at(index, "history.selectState", state=states - 1)
                 now = (self.client.run("document.inspect", document=index) or {}).get("history") or []
                 if len(now) == states:
                     return True
-            except ControlError:
+            except (ControlError, BridgeError):
                 pass
         return False
 
-    def _on_document(self, image: PCImage, command: str, edits: bool = True, **params):
+    def _on_document(self, image: PCImage, command: str, edits: bool = True, **params) -> dict:
         """Run ``command``, which acts on whatever document is in front, on the job's document
-        only. PhotoCraft can't run it on a named document, so the job's document is made the
-        active one and checked right before it; a click on another tab in the moment between
-        can still land it there. Afterwards every document's revision is compared: if it landed
-        elsewhere, that document is put back where it was in its history (a move, never a
-        deletion: Edit > Redo would still reach anything) and the command is tried again.
-        ``edits`` False: the command changes no revision (snapshots), so only the tab in front
-        before and after can be checked."""
+        only (``_run_at``: in one go where PhotoCraft has actions). Afterwards every document's
+        revision is compared: if it still landed elsewhere, that document is put back where it
+        was in its history (a move, never a deletion: Edit > Redo would still reach anything)
+        and the command is tried again. ``edits`` False: the command changes no revision
+        (snapshots), so only the tab in front before and after can be checked."""
         for _ in range(5):
             before = self._states() if edits else {}
-            session, index = self._job_document_active(image)
-            job = next(
-                (d.get("index"), d.get("name")) for d in session.get("documents") or [] if d.get("index") == index
-            )
+            session = self.session()
+            index = int(self._find(image, session)["index"])
+            job = (index, image.name)
             if edits and job not in before:
                 continue
-            out = self.client.run(command, **params)
+            try:
+                out = self._run_at(index, command, **params)
+            except BridgeError:
+                continue
             after = self.session()
             if not edits:
                 if after.get("active") == index:
@@ -358,7 +402,7 @@ class PhotoCraftBridge:
             if revisions.get(job) != before[job][0]:
                 return out  # it changed the job's document (anything else that changed is the user's own)
             landed = [key for key, rev in revisions.items() if key != job and key in before and rev != before[key][0]]
-            if not landed and after.get("active") == index:
+            if not landed:
                 return out  # it changed nothing (already so)
             for key in landed:
                 if not self._put_back(key, before[key][1]):
@@ -539,7 +583,14 @@ class PhotoCraftBridge:
             self._show_like(view)
             visible = self._visible(copy, eight_bit)
             if d.get("hasSelection"):
+                self._selection_colours = None
                 selection = self._selection_tiff(copy, bounds) if eight_bit else None
+                if selection is not None and not _same_colours(visible, self._selection_colours):
+                    # The selection's file is the copy's (it holds the copy's own channel); the
+                    # picture read before it is not: another tab was in front then. Once more.
+                    visible = self._visible(copy, eight_bit)
+                    if not _same_colours(visible, self._selection_colours):
+                        raise BridgeError("another image came to the front while OpenFill read yours; try again")
                 if selection is None:
                     selection = self._selection_document(image, copy, opened)
         finally:
@@ -621,13 +672,14 @@ class PhotoCraftBridge:
             duplicate = self._make_active(copy)
             saved = self.client.run("select.saveSelection", name="OpenFill selection", document=duplicate) or {}
             self._save_own(copy, rel, tiffCompression="none", tiffTransparency=False)
-            selection = _tiff_channel(self.exchange / rel, saved.get("channel"))
+            read = _tiff_channel(self.exchange / rel, saved.get("channel"))
         except ControlError:
-            selection = None
+            read = None
         finally:
             self._forget(rel)
-        if selection is None or not bounds:
+        if read is None or not bounds:
             return None
+        selection, self._selection_colours = read
         x, y, w, h = (int(v) for v in bounds)
         if selection.getbbox() != (x, y, x + w, y + h):
             return None  # not the selection: read it the long way
@@ -886,7 +938,16 @@ class PhotoCraftBridge:
         make a pending canvas change (an expand grows the canvas only now, under its layers;
         ``canvas`` False leaves it waiting for the layers still to come)."""
         layers, group_name = image.pending, image.pending_group
-        changed = False
+        if not layers and not (canvas and image.pending_crop is not None):
+            return
+        # Each of the job's steps is checked to be exactly one more state on top of the last
+        # (a step of the user's in between would be taken back with them): only then may a
+        # failed job take them back (``discard``).
+        history = self._history_of(image)
+        if image.steps_added == 0:
+            image.rollback_ok = True
+        elif history != image.history_after:
+            image.rollback_ok = False
         if layers:
             # The results stay pending until they are in the document, so a failure here can be
             # tried again and never loses them.
@@ -896,7 +957,7 @@ class PhotoCraftBridge:
             finally:
                 reopen()
             image.steps_added += 1
-            changed = True
+            history = self._one_more_state(image, history)
             image.pending, image.pending_group = [], ""
             self._take_ids(image, layers, group_name, copied)
             image._snapshot = None
@@ -904,12 +965,26 @@ class PhotoCraftBridge:
             new_w, new_h, off_x, off_y = image.pending_crop
             self._on_document(image, "image.crop", x=-off_x, y=-off_y, width=new_w, height=new_h)
             image.steps_added += 1
-            changed = True
+            history = self._one_more_state(image, history)
             image.pending_crop = None
             image._snapshot = None
-        if changed:
-            image.history_after = self.history(image)
-            image.revision_after = self._revision(image)
+        image.history_after = history
+        image.revision_after = self._revision(image)
+
+    def _history_of(self, image: PCImage) -> list[str]:
+        """The job's document's history (states before the redo ones), without showing it."""
+        index = int(self._find(image)["index"])
+        return list((self.client.run("document.inspect", document=index) or {}).get("history") or [])
+
+    def _one_more_state(self, image: PCImage, before: list[str]) -> list[str]:
+        """The history after one of the job's steps; rollback stays allowed only when that
+        step is exactly one more state on top of ``before``."""
+        after = self._history_of(image)
+        grew = len(after) == len(before) + 1 and after[: len(before)] == before
+        at_limit = len(after) == len(before) and after[: len(before) - 1] == before[1:]  # the oldest dropped
+        if not (grew or at_limit):
+            image.rollback_ok = False
+        return after
 
     def _select_top(self, image: PCImage) -> Callable[[], None]:
         """Make the next copy land on top of the stack, outside any group: select the topmost
@@ -1023,9 +1098,7 @@ class PhotoCraftBridge:
         it is, the steps taken back (to redo states), and the snapshot selected (PhotoCraft adds
         that as one step, which drops those redo states). The snapshot itself is deleted
         afterwards (the document does not change). Each on the job's document only."""
-        snap = (
-            self._on_document(image, "history.newSnapshot", edits=False, name=name, **{"from": "fullDocument"}) or {}
-        )["snapshot"]
+        snap = self._new_snapshot(image, name)
         self._on_document(image, "history.selectState", state=max(0, int(since) - 1))
         try:
             self._on_document(image, "history.selectSnapshot", snapshot=snap)
@@ -1035,6 +1108,18 @@ class PhotoCraftBridge:
             self._on_document(image, "history.selectSnapshot", snapshot=snap)
         self._on_document(image, "history.deleteSnapshot", edits=False, snapshot=snap)
         image._snapshot = None
+
+    def _new_snapshot(self, image: PCImage, name: str) -> int:
+        """A snapshot of the job's document named ``name``: its id (the newest of that name)."""
+        out = self._on_document(image, "history.newSnapshot", edits=False, name=name, **{"from": "fullDocument"})
+        if isinstance(out, dict) and "snapshot" in out:
+            return int(out["snapshot"])
+        index = int(self._find(image)["index"])
+        snaps = (self.client.run("document.inspect", document=index) or {}).get("snapshots") or []
+        ids = [int(sn["id"]) for sn in snaps if sn.get("name") == name]
+        if not ids:
+            raise BridgeError("PhotoCraft did not make OpenFill's snapshot")
+        return max(ids)
 
     def keep_one(self, image: PCImage, since: int, layers: list[PCLayer], chosen: PCLayer, name: str) -> None:
         """Keep: the job's result step (history step ``since``) becomes ``chosen`` alone, still
@@ -1171,6 +1256,7 @@ class PhotoCraftBridge:
             image.selection = None
             image._snapshot = None
             image.steps_added, image.history_after = 0, None  # the job's steps are its result now
+            image.revision_after, image.rollback_ok = None, True
 
     def discard(self, image: PCImage) -> str:
         """A failed or cancelled job: forget results that never reached the document, and take
@@ -1186,21 +1272,26 @@ class PhotoCraftBridge:
         image.selection = None
         image._snapshot = None
         steps, expected, revision = image.steps_added, image.history_after, image.revision_after
-        image.steps_added, image.history_after, image.revision_after = 0, None, None
+        safe = image.rollback_ok
+        image.steps_added, image.history_after, image.revision_after, image.rollback_ok = 0, None, None, True
         if not (steps and expected):
             return ""
         try:
-            session, index = self._job_document_active(image)
-            d = next(d for d in session.get("documents") or [] if d.get("index") == index)
+            session = self.session()
+            d = self._find(image, session)
+            index = int(d["index"])
             if (
-                revision is not None
+                safe
+                and revision is not None
                 and d.get("revision") == revision
                 and len(expected) > steps
-                and list((self.client.run("document.inspect") or {}).get("history") or []) == expected
+                and list((self.client.run("document.inspect", document=index) or {}).get("history") or []) == expected
             ):
+                # One request shows the job's document and moves its history back (_run_at),
+                # so the move can't land on another tab.
                 self.rewind(image, len(expected) - steps)
                 return "undone"
-        except (ControlError, BridgeError, StopIteration):
+        except (ControlError, BridgeError):
             pass
         return "kept"
 
@@ -1258,10 +1349,10 @@ def _grow(mask: Image.Image, radius: int) -> Image.Image:
     return out
 
 
-def _tiff_channel(path: Path, channel: object) -> Image.Image | None:
+def _tiff_channel(path: Path, channel: object) -> tuple[Image.Image, Image.Image] | None:
     """Alpha channel ``channel`` (its index among the document's alpha channels) of the flat,
-    uncompressed 8-bit TIFF PhotoCraft saved at ``path``: the samples after red, green and
-    blue. None when the file is not that."""
+    uncompressed 8-bit TIFF PhotoCraft saved at ``path`` (the samples after red, green and
+    blue), and the colours. None when the file is not that."""
     for _ in range(50):  # the save returns when written; allow a slow disk a moment
         if path.is_file():
             break
@@ -1284,7 +1375,26 @@ def _tiff_channel(path: Path, channel: object) -> Image.Image | None:
     if len(data) != width * height * samples:
         return None
     index = channel if isinstance(channel, int) and 0 <= channel < samples - 3 else samples - 4
-    return Image.frombytes("L", (width, height), bytes(data[3 + index :: samples]))
+    colours = Image.merge("RGB", [Image.frombytes("L", (width, height), bytes(data[k::samples])) for k in range(3)])
+    return Image.frombytes("L", (width, height), bytes(data[3 + index :: samples])), colours
+
+
+def _same_colours(visible: Image.Image, colours: Image.Image | None) -> bool:
+    """Whether ``visible`` (RGBA) shows the colours ``colours`` (RGB) where it is opaque, on a
+    grid of samples: the two reads were of the same document. True when there is nothing to
+    compare."""
+    if colours is None:
+        return True
+    if visible.size != colours.size:
+        return False
+    w, h = visible.size
+    step_x, step_y = max(1, w // 64), max(1, h // 64)
+    for y in range(0, h, step_y):
+        for x in range(0, w, step_x):
+            r, g, b, a = visible.getpixel((x, y))
+            if a == 255 and max(abs(r - c) for r, c in zip((r, g, b), colours.getpixel((x, y)), strict=True)) > 2:
+                return False
+    return True
 
 
 def default_profile() -> Path:

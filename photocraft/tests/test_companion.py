@@ -220,8 +220,9 @@ class FakePhotoCraft:
 
     NEEDS_SELECTION = ("select.modify.expand", "select.modify.feather", "layer.layerMask.revealSelection")
 
-    def __init__(self, exchange: Path, size=(64, 48), version: str | None = None) -> None:
+    def __init__(self, exchange: Path, size=(64, 48), version: str | None = None, actions: bool = True) -> None:
         self.exchange = exchange
+        self.actions = {} if actions else None  # recorded actions; None: a PhotoCraft without them
         self.version = version  # what ui.inspect reports; None as PhotoCraft before 0.16
         self.views: list[dict] = []
         self.calls: list[tuple[str, dict]] = []
@@ -272,17 +273,22 @@ class FakePhotoCraft:
         if method == "app.save" and params["path"].endswith(".tif"):
             # a flat TIFF: red, green, blue and the document's alpha channel (as PhotoCraft 0.18 on)
             if not self.doc["channels"]:  # the colours alone
-                Image.new("RGB", self.doc["size"], (200, 200, 200)).save(self.exchange / params["path"])
+                Image.new("RGB", self.doc["size"], self.doc.get("colour", (200, 200, 200))).save(
+                    self.exchange / params["path"]
+                )
                 return {"path": params["path"]}
-            im = Image.new("RGBA", self.doc["size"], (200, 200, 200, 0))
+            colour = self.doc.get("colour", (200, 200, 200))
+            im = Image.new("RGBA", self.doc["size"], (*colour, 0))
             for channel in self.doc["channels"]:
                 x, y, w, h = channel["rect"]
-                im.paste((200, 200, 200, 255), (x, y, x + w, y + h))
+                im.paste((*colour, 255), (x, y, x + w, y + h))
             im.save(self.exchange / params["path"], compression="raw")
             return {"path": params["path"]}
         if method == "app.save":
             kind = "L" if self.doc["name"] == "OpenFill mask" else "RGBA"
-            im = Image.new(kind, self.doc["size"], 0 if kind == "L" else (200, 200, 200, 255))
+            im = Image.new(
+                kind, self.doc["size"], 0 if kind == "L" else (*self.doc.get("colour", (200, 200, 200)), 255)
+            )
             if kind == "L":
                 x, y, w, h = self.doc["selection_source"]
                 im.paste(255, (x, y, x + w, y + h))
@@ -333,6 +339,29 @@ class FakePhotoCraft:
         doc = self.doc
         if command == "document.inspect" and "document" in params:  # it takes a document; most commands don't
             doc = self.docs[params["document"]]
+        if command.startswith("actions."):
+            if self.actions is None:
+                raise control.ControlError(f"engine.execute: unknown command `{command}`")
+            if command == "actions.list":
+                return {"actions": [{"name": n} for n in self.actions], "recording": None}
+            if command == "actions.record":
+                self.actions[params["name"]] = []
+                return {"action": params["name"]}
+            if command == "actions.stop":
+                return {"steps": 0}
+            if command == "actions.insert":
+                self.actions[params["action"]].append((params["id"], params.get("params") or {}))
+                return {}
+            if command == "actions.delete":
+                del self.actions[params["action"]]
+                return {"deleted": params["action"]}
+            if command == "actions.play":  # in one go: nothing (no click) comes between its steps
+                for step, step_params in self.actions[params["action"]]:
+                    try:
+                        FakePhotoCraft.run(self, step, **step_params)
+                    except control.ControlError as err:
+                        return {"ran": 0, "failed": {"id": step, "error": str(err)}}
+                return {"ran": len(self.actions[params["action"]])}
         if command in self.NEEDS_SELECTION:
             if self.deselects > 0:
                 self.deselects -= 1
@@ -386,6 +415,7 @@ class FakePhotoCraft:
                 "hasSelection": bool(doc["selection"]),
                 "selectionBounds": doc["selection"],
                 "history": list(doc["history"]),
+                "snapshots": [{"id": k, "name": v[0]} for k, v in doc.get("snapshots", {}).items()],
                 "revision": doc["revision"],
                 "activeLayer": doc["layers"][0]["id"] if doc["layers"] else None,
                 "layers": doc["layers"],
@@ -1053,6 +1083,13 @@ class BridgeTests(unittest.TestCase):
 
     # -- second review: the rollback never loses the user's history, and acts on the job's document only
 
+    def _with(self, actions=True):
+        """setUp's document again, on a PhotoCraft with or without actions."""
+        self.pc = FakePhotoCraft(self.exchange, actions=actions)
+        self.bridge = PhotoCraftBridge(self.pc, self.exchange, Path(self.tmp.name))
+        self.image = self.bridge.track(self.bridge.active_image())
+        self.target = self.pc.docs[0]
+
     def _other_doc(self, steps=3):
         """Another document of the user's, with ``steps`` history steps of its own."""
         other = self.pc._doc("other.png", (64, 48), [{"id": 70, "name": "Mine", "visible": True}])
@@ -1072,38 +1109,65 @@ class BridgeTests(unittest.TestCase):
         b.export_region(self.image, Rect(-10, 0, 104, 48), transparent_outside=True)
         self.assertEqual(self.target["history"], ["Open", "Duplicate Layer", "Crop"])
 
-    def test_rollback_never_deletes_states_of_another_document(self):
-        # history.deleteState acts on the active tab and can't be undone: the rollback uses
-        # history.selectState, checked to be on the job's document, and stops otherwise.
-        other = self._other_doc()
-        self._round_one_in()
-        real_run = self.pc.run
+    def _click_before(self, command, times=1000, where=1, then=None):
+        """The user clicks tab ``where`` right before each ``command`` OpenFill sends (``times``)."""
+        real_run, left = self.pc.run, [times]
 
-        def run(command, **params):
-            if command == "history.selectState":
-                self.pc.active = 1  # the user's click on their other tab
-            return real_run(command, **params)
+        def run(cmd, **params):
+            if cmd == command and left[0]:
+                left[0] -= 1
+                self.pc.active = where
+                if then:
+                    then()
+            return real_run(cmd, **params)
 
         self.pc.run = run
+
+    def test_the_rollback_is_one_request_no_click_can_split(self):
+        # "Show the job's document" and the history move are played as one throwaway action.
+        other = self._other_doc()
+        self._round_one_in()
+        self._click_before("actions.play")  # every click lands just before the play
+        self.assertEqual(self.bridge.discard(self.image), "undone")
+        self.assertEqual((self.target["size"], self.target["history"]), ((64, 48), ["Open"]))
+        self.assertEqual(self.target["redo"], ["Duplicate Layer", "Crop"])  # moved, never deleted
+        self.assertEqual(other["history"], ["Open"] + ["Layer Properties"] * 3)
+        self.assertEqual(self.pc.actions, {})  # the throwaway action is gone
+        self.assertNotIn("history.deleteState", self.pc.commands())
+
+    def test_without_actions_a_rollback_that_lands_elsewhere_is_put_back(self):
+        self._with(actions=False)
+        other = self._other_doc()
+        self._round_one_in()
+        self._click_before("history.selectState")  # the user keeps clicking their other tab
         self.assertEqual(self.bridge.discard(self.image), "kept")  # said so, never "unchanged"
         self.assertEqual(other["history"], ["Open"] + ["Layer Properties"] * 3)  # put back each time
         self.assertNotIn("history.deleteState", self.pc.commands())
 
-    def test_one_click_during_the_rollback_is_put_right_and_the_rollback_done(self):
+    def test_without_actions_one_click_during_the_rollback_is_put_right(self):
+        self._with(actions=False)
         other = self._other_doc()
         self._round_one_in()
-        real_run, clicks = self.pc.run, [1]
-
-        def run(command, **params):
-            if command == "history.selectState" and clicks:
-                clicks.pop()
-                self.pc.active = 1  # one click on their other tab, at the worst moment
-            return real_run(command, **params)
-
-        self.pc.run = run
+        self._click_before("history.selectState", times=1)
         self.assertEqual(self.bridge.discard(self.image), "undone")
         self.assertEqual(other["history"], ["Open"] + ["Layer Properties"] * 3)
         self.assertEqual((self.target["size"], self.target["history"]), ((64, 48), ["Open"]))
+
+    def test_a_step_of_the_users_between_the_jobs_steps_is_never_taken_back(self):
+        # The user adds a step while round 1's layer is copied in and before its crop: the
+        # job's steps are no longer the last ones together, so nothing is taken back.
+        self._click_before(
+            "actions.play", times=1, where=0, then=lambda: self.pc.run("layer.setProps", layer=2, name="x")
+        )
+        b = self.bridge
+        b.export_region(self.image, Rect(-10, 0, 84, 48), transparent_outside=True)
+        b.resize_canvas(self.image, 84, 48, 10, 0)
+        b.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
+        b.export_region(self.image, Rect(-10, 0, 104, 48), transparent_outside=True)
+        history = list(self.target["history"])
+        self.assertEqual(history, ["Open", "Duplicate Layer", "Layer Properties", "Crop"])
+        self.assertEqual(b.discard(self.image), "kept")
+        self.assertEqual(self.target["history"], history)
 
     def test_rollback_never_undoes_a_same_labelled_step_of_the_users(self):
         # The user undoes the job's Crop mid-job and crops the image themselves: the labels are
@@ -1120,19 +1184,13 @@ class BridgeTests(unittest.TestCase):
     def test_rollback_never_deletes_a_step_made_after_the_check(self):
         # A step of the user's that lands between the checks and the rollback is not deleted:
         # it becomes a redo state with the job's, so Edit > Redo brings it back.
-        self._round_one_in()
-        real_run, fired = self.pc.run, []
-
-        def run(command, **params):
-            if command == "history.selectState" and not fired:
-                fired.append(1)
-                real_run("layer.setProps", layer=2, name="My edit")  # the user's own step
-            return real_run(command, **params)
-
-        self.pc.run = run
-        self.bridge.discard(self.image)
-        self.assertTrue(fired)
-        self.assertIn("Layer Properties", self.target["history"] + self.target["redo"])
+        for actions in (True, False):
+            self._with(actions)
+            self._round_one_in()
+            command = "actions.play" if actions else "history.selectState"
+            self._click_before(command, times=1, where=0, then=lambda: self.pc.run("layer.setProps", layer=2, name="x"))
+            self.bridge.discard(self.image)
+            self.assertIn("Layer Properties", self.target["history"] + self.target.get("redo", []), actions)
 
     def test_a_user_document_named_like_the_copy_is_never_closed(self):
         real_run = self.pc.run
@@ -1152,22 +1210,55 @@ class BridgeTests(unittest.TestCase):
         self.assertIn("their work", [r["name"] for d in self.pc.docs for r in d["layers"]])
 
     def test_a_click_right_before_the_crop_never_crops_another_document(self):
+        for actions in (True, False):
+            self._with(actions)
+            other = self._other_doc(0)
+            self.bridge.export_region(self.image, Rect(-10, 0, 84, 48), transparent_outside=True)
+            self.bridge.resize_canvas(self.image, 84, 48, 10, 0)
+            self.bridge.insert_results(
+                self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False
+            )
+            self._click_before("actions.play" if actions else "image.crop", times=1)
+            self.bridge.finish(self.image)  # the crop lands on the job's document all the same
+            self.assertEqual((other["size"], other["history"]), ((64, 48), ["Open"]), actions)
+            self.assertEqual(self.target["size"], (84, 48), actions)
+
+    def test_a_crop_that_keeps_landing_elsewhere_stops_and_leaves_that_image_as_it_was(self):
+        self._with(actions=False)
         other = self._other_doc(0)
         self.bridge.export_region(self.image, Rect(-10, 0, 84, 48), transparent_outside=True)
         self.bridge.resize_canvas(self.image, 84, 48, 10, 0)
         self.bridge.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
-        real_run = self.pc.run
-
-        def run(command, **params):
-            if command == "image.crop":
-                self.pc.active = 1
-            return real_run(command, **params)
-
-        self.pc.run = run
+        self._click_before("image.crop")
         with self.assertRaises(BridgeError):  # it stops, and says why
             self.bridge.finish(self.image)
-        self.assertEqual(other["size"], (64, 48))  # the stray crop is a redo step there
-        self.assertEqual(other["history"], ["Open"])
+        self.assertEqual((other["size"], other["history"]), ((64, 48), ["Open"]))
+
+    def test_a_picture_read_from_another_tab_is_noticed_and_read_again(self):
+        # The user's other tab comes to the front just before the copy is saved, and the copy's
+        # tab just after: the check around the save passes. The selection's file, which holds
+        # the copy's own channel, shows the picture was another image's: it is read again.
+        pc, bridge, image = self._bridge("0.20.2")
+        other = pc._doc("other.png", (64, 48), [{"id": 70, "name": "Mine", "visible": True}])
+        other["colour"] = (0, 128, 128)
+        pc.docs.insert(1, other)
+        real_call, flips = pc.call, [1]
+
+        def call(method, **params):
+            if method == "app.save" and "visible" in params["path"] and flips:
+                flips.pop()
+                copy = pc.active
+                pc.active = 1  # their other image
+                out = real_call(method, **params)
+                pc.active = copy  # and the copy again before OpenFill looks
+                return out
+            return real_call(method, **params)
+
+        pc.call = call
+        _png, flat = bridge.export_region(image, Rect(0, 0, 64, 48))
+        bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.assertEqual(flat[:3], bytes((200, 200, 200)))  # the job's picture, not theirs
+        self.assertFalse(flips)
 
     def test_the_page_says_what_a_failed_rollback_left(self):
         from openfill_photocraft.service import JobState, Service
