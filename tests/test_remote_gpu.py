@@ -1255,6 +1255,31 @@ class ReviewFollowUpTests(GpuServerCase):
         self.assertEqual(self.post_prompt({"1": {"class_type": "LoadImage", "inputs": {}}})[0], 200)
         self.assertEqual(self.get("/prompt", method="POST", body=b"not json")[0], 400)
 
+    def test_a_remove_background_job_reaches_comfyui(self):  # PR #11 Cutout over Remote GPU
+        from openfill import workflow
+        from openfill.backend import InpaintRequest, ModelSpec, Sampling
+
+        req = InpaintRequest(
+            image_png=b"",
+            mask_png=b"",
+            width=64,
+            height=48,
+            work_width=64,
+            work_height=48,
+            prompt="",
+            negative="",
+            model=ModelSpec(arch="bg_removal", template="bgremove", bg_removal_model="birefnet.safetensors"),
+            sampling=Sampling(steps=1, batch=1),
+            mode="bgremove",
+        )
+        graph = workflow.build_bgremove(
+            req, "openfill/i.png", "openfill/m.png", 1, workflow.Capabilities(bg_removal=True)
+        )
+        self.assertLessEqual({n["class_type"] for n in graph.values()}, workflow.NODE_CLASSES)
+        before = len(self.comfy.seen)
+        self.assertEqual(self.post_prompt(graph)[0], 200)
+        self.assertGreater(len(self.comfy.seen), before)
+
     def test_every_node_type_the_workflows_use_is_allowed(self):  # R7
         import re
 
