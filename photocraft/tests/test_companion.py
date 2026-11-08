@@ -1438,28 +1438,73 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(menu._sleb(-1), b"\x7f")
         self.assertEqual(menu._sleb(64), b"\xc0\x00")
 
-    def test_watcher_reports_a_pick_and_removes_its_step(self):
-        from openfill_photocraft import menu
+    class _MenuPhotoCraft:
+        """Two documents, the active one with OpenFill's menu step on top; PhotoCraft's history
+        moves (selectState, with redo states), actions played in one go, and hooks to play the
+        user: ``before_play`` runs right before an action plays."""
 
-        state = {"history": ["Open", "Rectangular Marquee", "OpenFill"], "revision": 3}
+        def __init__(self):
+            self.docs = [
+                {"name": "a.png", "history": ["Open", "Rectangular Marquee", "OpenFill"], "redo": [], "revision": 3},
+                {"name": "b.png", "history": ["Open", "New Layer", "New Layer"], "redo": [], "revision": 7},
+            ]
+            self.active, self.actions, self.recording, self.before_play = 0, {}, None, None
+            self.commands = []
 
-        class Client:
-            def call(self, method, **params):
-                return {
-                    "session": {
-                        "active": 0,
-                        "documents": [{"index": 0, "name": "a.png", "revision": state["revision"]}],
-                    }
+        def call(self, method, **params):
+            return {
+                "session": {
+                    "active": self.active,
+                    "documents": [
+                        {"index": i, "name": d["name"], "revision": d["revision"]} for i, d in enumerate(self.docs)
+                    ],
                 }
+            }
 
-            def run(self, command, **params):
-                if command == "history.deleteState":
-                    del state["history"][params["state"] :]
-                    state["revision"] += 1
-                    return {}
+        def run(self, command, **params):
+            self.commands.append(command)
+            if command == "actions.list":
+                return {"actions": [{"name": n} for n in self.actions], "recording": self.recording}
+            if command == "actions.record":
+                self.actions[params["name"]] = []
+                return {}
+            if command == "actions.stop":
+                return {"steps": 0}
+            if command == "actions.insert":
+                self.actions[params["action"]].append((params["id"], params["params"]))
+                return {}
+            if command == "actions.delete":
+                self.actions.pop(params["action"], None)
+                return {}
+            if command == "actions.play":
+                if self.before_play:
+                    self.before_play()
+                for step, step_params in self.actions[params["action"]]:
+                    self._engine(step, step_params)
+                return {"ran": 2}
+            if command == "history.deleteState":
+                raise AssertionError("history.deleteState can't be undone: never used")
+            return self._engine(command, params)
+
+        def _engine(self, command, params):
+            doc = (
+                self.docs[params.get("document", self.active)]
+                if command == "document.inspect"
+                else self.docs[self.active]
+            )
+            if command == "document.activate":
+                self.active = params["document"]
+                return {}
+            if command == "history.selectState":
+                full = doc["history"] + doc["redo"]
+                k = params["state"]
+                doc["history"], doc["redo"] = full[: k + 1], full[k + 1 :]
+                doc["revision"] += 1
+                return {}
+            if command == "document.inspect":
                 return {
-                    "history": list(state["history"]),
-                    "revision": state["revision"],
+                    "history": list(doc["history"]),
+                    "revision": doc["revision"],
                     "width": 10,
                     "height": 8,
                     "hasSelection": True,
@@ -1467,14 +1512,72 @@ class MenuTests(unittest.TestCase):
                     "layers": [],
                     "activeLayer": None,
                 }
+            raise AssertionError(command)
 
+    def test_watcher_reports_a_pick_and_removes_its_step(self):
+        from openfill_photocraft import menu
+
+        pc = self._MenuPhotoCraft()
         picks = []
-        watcher = menu.Watcher(Client(), picks.append)
+        watcher = menu.Watcher(pc, picks.append)
         self.assertEqual(watcher.poll(), "panel")
         self.assertEqual(picks, ["panel"])
-        self.assertEqual(state["history"], ["Open", "Rectangular Marquee"])
+        a, b = pc.docs
+        self.assertEqual((a["history"], a["redo"]), (["Open", "Rectangular Marquee"], ["OpenFill"]))  # never deleted
+        self.assertEqual(b["history"], ["Open", "New Layer", "New Layer"])
+        self.assertEqual(pc.actions, {})  # the throwaway action is gone
         self.assertEqual(watcher.snapshot()["selection"], [1, 2, 3, 4])
         self.assertIsNone(watcher.poll())  # nothing new
+
+    def test_a_tab_click_during_a_menu_pick_never_touches_another_document(self):
+        from openfill_photocraft import menu
+
+        # the click lands right before the one request: it shows the menu's document again and
+        # moves its history; the other document is not touched
+        pc = self._MenuPhotoCraft()
+        pc.before_play = lambda: setattr(pc, "active", 1)
+        self.assertEqual(menu.Watcher(pc, lambda _a: None).poll(), "panel")
+        a, b = pc.docs
+        self.assertEqual(a["history"], ["Open", "Rectangular Marquee"])
+        self.assertEqual((b["history"], b["redo"], b["revision"]), (["Open", "New Layer", "New Layer"], [], 7))
+
+        # the other tab is in front before the last look: the step stays where it is
+        pc = self._MenuPhotoCraft()
+        real_run = pc.run
+
+        def run(command, **params):
+            if command == "actions.insert" and params["id"] == "history.selectState":
+                pc.active = 1
+            return real_run(command, **params)
+
+        pc.run = run
+        self.assertEqual(menu.Watcher(pc, lambda _a: None).poll(), "panel")  # still reported
+        a, b = pc.docs
+        self.assertEqual(a["history"], ["Open", "Rectangular Marquee", "OpenFill"])
+        self.assertEqual((b["history"], b["revision"]), (["Open", "New Layer", "New Layer"], 7))
+        self.assertEqual(pc.actions, {})
+
+    def test_a_menu_step_is_left_when_the_document_changed_or_an_action_records(self):
+        from openfill_photocraft import menu
+
+        pc = self._MenuPhotoCraft()
+        real_run = pc.run
+
+        def run(command, **params):  # the user's own step lands after the first look
+            if command == "actions.record":
+                pc.docs[0]["history"].append("Brush Tool")
+                pc.docs[0]["revision"] += 1
+            return real_run(command, **params)
+
+        pc.run = run
+        menu.Watcher(pc, lambda _a: None).poll()
+        self.assertEqual(pc.docs[0]["history"], ["Open", "Rectangular Marquee", "OpenFill", "Brush Tool"])
+
+        pc = self._MenuPhotoCraft()
+        pc.recording = "Their action"
+        menu.Watcher(pc, lambda _a: None).poll()
+        self.assertEqual(pc.docs[0]["history"], ["Open", "Rectangular Marquee", "OpenFill"])
+        self.assertNotIn("actions.record", pc.commands)
 
 
 class InstallTests(unittest.TestCase):

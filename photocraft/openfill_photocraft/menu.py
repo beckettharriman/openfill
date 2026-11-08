@@ -5,8 +5,10 @@
 PhotoCraft's plug-ins are sandboxed WebAssembly filters that cannot reach anything
 outside the pixels they are given. So each OpenFill entry is a filter that changes
 nothing: picking it leaves a history step named after it, which ``Watcher`` sees on
-its next look at the document. The watcher deletes that step (so Undo and Redo never
-meet it) and tells the companion which entry was picked.
+its next look at the document. The watcher takes that step back (Undo never meets it;
+it stays as a redo step that changes nothing, as nothing is ever deleted from a history)
+and tells the companion which entry was picked. It does that on that document only, in
+one request, and only while that document is still unchanged in front.
 
 The modules are written here, byte by byte (ABI v1 in PhotoCraft's docs/plugins.md):
 no imports, a manifest in a data segment, a bump allocator and a ``pc_filter`` that
@@ -241,16 +243,14 @@ class Watcher:
         revision = int(active.get("revision") or 0)
         if self._seen.get(key) == revision and self.info.name == key[1]:
             return None
-        d = self.client.run("document.inspect") or {}
+        d = self.client.run("document.inspect", document=key[0]) or {}
         history = list(d.get("history") or [])
         picked = None
         if history and history[-1] in LABEL_ACTION:
             picked = LABEL_ACTION[history[-1]]
-            try:  # the entry changed nothing: take its step out of the history (and Redo)
-                self.client.run("history.deleteState", state=len(history) - 1)
-                d = self.client.run("document.inspect") or d
-            except ControlError:
-                pass
+            # The entry changed nothing: its step is taken back, on that document only
+            if self._take_back(key, history, int(d.get("revision") or revision)):
+                d = self.client.run("document.inspect", document=key[0]) or d
         bounds = d.get("selectionBounds") if d.get("hasSelection") else None
         layer_kind = ""
         for row in d.get("layers") or []:
@@ -274,6 +274,58 @@ class Watcher:
         if picked:
             self.on_pick(picked)
         return picked
+
+    def _take_back(self, key: tuple[int, str], history: list[str], revision: int) -> bool:
+        """Take the menu entry's step back on document ``key`` (tab index, name), which showed
+        ``history`` at ``revision``: the history moves back one state (``history.selectState``;
+        the step stays as a no-op redo state, nothing is deleted). It runs in one request, as an
+        action that shows that document and moves its history, so no tab click can make it
+        land on another document; and only while that document is still in front, unchanged
+        since it was looked at, with the entry's step last. Otherwise the step stays (it did
+        nothing). True when the step was taken back."""
+        index, name = key
+        action = None
+        try:
+            listed = self.client.run("actions.list") or {}
+            if listed.get("recording"):
+                return False  # the user is recording an action: leave theirs alone
+            taken = {a.get("name") for a in listed.get("actions") or []}
+            action = "OpenFill menu"
+            while action in taken:
+                action = f"OpenFill menu {len(taken)}-{int(time.time() * 1000) % 100000}"
+            self.client.run("actions.record", name=action)
+            stopped = self.client.run("actions.stop") or {}
+            for step in reversed(range(int(stopped.get("steps") or 0))):
+                self.client.run("actions.delete", action=action, step=step)  # the user's: never replayed
+            self.client.run("actions.insert", action=action, id="document.activate", params={"document": index})
+            self.client.run(
+                "actions.insert", action=action, id="history.selectState", params={"state": len(history) - 2}
+            )
+            # The last look before the one request that does it
+            session = self.client.call("ui.inspect").get("session") or {}
+            doc = next((d for d in session.get("documents") or [] if d.get("index") == index), None)
+            now = self.client.run("document.inspect", document=index) or {}
+            if (
+                doc is None
+                or doc.get("name") != name
+                or session.get("active") != index
+                or int(doc.get("revision") or -1) != revision
+                or list(now.get("history") or []) != history
+            ):
+                return False
+            played = self.client.run("actions.play", action=action) or {}
+            if played.get("failed"):
+                return False
+            after = self.client.run("document.inspect", document=index) or {}
+            return list(after.get("history") or []) == history[:-1]
+        except ControlError:
+            return False
+        finally:
+            if action is not None:
+                try:
+                    self.client.run("actions.delete", action=action)
+                except ControlError:
+                    pass
 
     def set_waiting(self, waiting: bool) -> None:
         with self.lock:

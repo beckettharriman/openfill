@@ -17,6 +17,7 @@ Working in PhotoCraft:
 - A failed or cancelled Expand leaves the canvas and layers as they were, also when it fails in a later round. OpenFill only takes a round back when the image is exactly as it left it, and it does so with the history (Edit > Redo still reaches it), never by deleting steps. When it can't, the panel says what is still in the image instead of "left unchanged".
 - If you click another image's tab at the very moment OpenFill changes yours, OpenFill notices, puts that other image back where it was in its history, and tries again.
 - When a dialog you opened keeps OpenFill from closing its temporary copy, it says so and closes it with the next job.
+- Picking OpenFill in Filter > Plug-ins: the step it leaves is taken back only on that image, while it is still in front and unchanged, and with the history (it stays as a redo step that does nothing). Before, switching tabs at that moment could delete another image's last step for good.
 - A result now always lands on top of the layer stack. Before, a job after a Fill with several variations put its layer inside that Fill's group.
 - OpenFill only ever saves or closes its own temporary documents, found by their own names. Before, clicking your own tab at the wrong moment during a job could get your image saved into OpenFill's folder or closed without asking.
 - The result goes into the right image when two open images share a name and another tab closes during the job.
