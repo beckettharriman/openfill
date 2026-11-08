@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version numbers below (0.2.x) are OpenFill for PhotoCraft's own, not PhotoCraft's.
 Each entry from now on says which PhotoCraft versions it works with.
 
+## [0.2.6] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
+
+Fixed (update recommended on Windows):
+- On Windows the installer said PhotoCraft is not installed when PhotoCraft 0.17 or newer was installed the default way (just for you, in AppData\Local\Programs\ArtCraft\PhotoCraft). OpenFill now finds it there and in Program Files\ArtCraft\PhotoCraft. 0.2.5 and earlier have this bug.
+
 ## [0.2.5] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
 
 Fixed (update recommended):

@@ -2,7 +2,7 @@
 
 # OpenFill
 
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) ![OpenFill for PhotoCraft 0.2.5](https://img.shields.io/badge/OpenFill%20for%20PhotoCraft-0.2.5-30a2ff.svg) ![Works with PhotoCraft 0.12 to 0.20](https://img.shields.io/badge/works%20with%20PhotoCraft-0.12%20to%200.20-444.svg) ![GIMP 3.2](https://img.shields.io/badge/GIMP-3.2-444.svg) ![Python + ComfyUI](https://img.shields.io/badge/made%20with-Python%20%2B%20ComfyUI-orange.svg) ![Local](https://img.shields.io/badge/100%25-local-30d158.svg) ![Beta](https://img.shields.io/badge/status-beta-e8a33d.svg)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) ![OpenFill for PhotoCraft 0.2.6](https://img.shields.io/badge/OpenFill%20for%20PhotoCraft-0.2.6-30a2ff.svg) ![Works with PhotoCraft 0.12 to 0.20](https://img.shields.io/badge/works%20with%20PhotoCraft-0.12%20to%200.20-444.svg) ![GIMP 3.2](https://img.shields.io/badge/GIMP-3.2-444.svg) ![Python + ComfyUI](https://img.shields.io/badge/made%20with-Python%20%2B%20ComfyUI-orange.svg) ![Local](https://img.shields.io/badge/100%25-local-30d158.svg) ![Beta](https://img.shields.io/badge/status-beta-e8a33d.svg)
 
 *Generative fill, expand and object removal for PhotoCraft and GIMP 3, running on your graphics card. Local generation stays on your computer.*
 
@@ -12,7 +12,7 @@
 </div>
 
 > [!IMPORTANT]
-> **Beta.** OpenFill for PhotoCraft is at 0.2.5 (that is OpenFill's version; it works with PhotoCraft 0.12 to 0.20) and the GIMP plug-in is at 2.0.0-beta.7, both now with support for AMD graphics cards. Both work end to end on Windows with an 8 GB NVIDIA laptop GPU, which is what I build and test on, and on Linux. A user has also tested all four operations on an RX 7800 XT; see [the report](https://github.com/beckettharriman/openfill/issues/3). The GIMP plug-in also runs on macOS. PhotoCraft supports Apple Silicon and passed all four tools on an M3. OpenFill for PhotoCraft 0.2.4 fixes Mac typing and model-menu focus, and can reuse ComfyUI's Python; [Mac setup and test results](docs/install.md#photocraft-on-macos). Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
+> **Beta.** OpenFill for PhotoCraft is at 0.2.6 (that is OpenFill's version; it works with PhotoCraft 0.12 to 0.20) and the GIMP plug-in is at 2.0.0-beta.7, both now with support for AMD graphics cards. Both work end to end on Windows with an 8 GB NVIDIA laptop GPU, which is what I build and test on, and on Linux. A user has also tested all four operations on an RX 7800 XT; see [the report](https://github.com/beckettharriman/openfill/issues/3). The GIMP plug-in also runs on macOS. PhotoCraft supports Apple Silicon and passed all four tools on an M3. OpenFill for PhotoCraft 0.2.4 fixes Mac typing and model-menu focus, and can reuse ComfyUI's Python; [Mac setup and test results](docs/install.md#photocraft-on-macos). Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
 
 ## Why I made this
 
@@ -44,10 +44,10 @@ You need an NVIDIA graphics card or an AMD Radeon RX 7000 or newer (8 GB for the
 
 The model manager in the steps below is where you get models: in PhotoCraft it's the gear icon in the OpenFill panel, Models section (the **Open model manager** button on the first run goes there too); in GIMP it's `Filters > OpenFill > Generative Fill...`, Models tab.
 
-**PhotoCraft: OpenFill for PhotoCraft 0.2.5 · works with PhotoCraft 0.12 to 0.20**
+**PhotoCraft: OpenFill for PhotoCraft 0.2.6 · works with PhotoCraft 0.12 to 0.20**
 
 1. Install PhotoCraft. You can [reuse ComfyUI's Python](docs/install.md#use-comfyuis-python), or install Python from [python.org](https://www.python.org/downloads/) if you need it.
-2. Download `openfill-photocraft-0.2.5.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it and run **Install OpenFill for PhotoCraft.cmd** (Linux and macOS: `sh install.sh`).
+2. Download `openfill-photocraft-0.2.6.zip` from the [Releases page](https://github.com/beckettharriman/openfill/releases), unzip it and run **Install OpenFill for PhotoCraft.cmd** (Linux and macOS: `sh install.sh`).
 3. Open **PhotoCraft with OpenFill**. The first time, the panel offers **Download ComfyUI** on Windows (or **Choose folder** if you have it) and then **Open model manager** to get LaMa (0.2 GB) and DreamShaper 8 Inpainting (2 GB).
 
 More in [photocraft/README.md](photocraft/README.md).

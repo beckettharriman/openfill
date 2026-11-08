@@ -4,7 +4,7 @@
 control channel and runs OpenFill's ComfyUI pipeline (the ``openfill`` package)."""
 
 # OpenFill for PhotoCraft's own version. It is not a PhotoCraft version.
-__version__ = "0.2.5"
+__version__ = "0.2.6"
 
 # The oldest and newest PhotoCraft releases this version was tested on.
 PHOTOCRAFT_TESTED = ("0.12", "0.20")
