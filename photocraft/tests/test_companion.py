@@ -3200,6 +3200,22 @@ class DefaultBrowserTests(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "Linux/macOS shell launchers")
+def _usr_bin_python_is_new_enough() -> bool:
+    """True when /usr/bin/python3 exists and is 3.10 or newer (macOS ships 3.9 there)."""
+    if not os.access("/usr/bin/python3", os.X_OK):
+        return False
+    try:
+        r = subprocess.run(
+            ["/usr/bin/python3", "-c", "import sys; print(sys.version_info >= (3, 10))"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.stdout.strip() == "True"
+
+
 class ShellInterpreterTests(unittest.TestCase):
     def run_script(self, script, explicit):
         with tempfile.TemporaryDirectory(prefix="openfill python reuse ") as temp:
@@ -3282,7 +3298,7 @@ class ShellInterpreterTests(unittest.TestCase):
                 self.assertNotIn("started with", r.stdout)
                 self.assertIn("OPENFILL_PYTHON is macOS's own Python 3.9", r.stderr)
 
-    @unittest.skipUnless(os.access("/usr/bin/python3", os.X_OK), "needs a /usr/bin/python3")
+    @unittest.skipUnless(_usr_bin_python_is_new_enough(), "needs a /usr/bin/python3 that is 3.10 or newer")
     def test_linux_explicit_usr_bin_python_is_used(self):
         r = self.run_as_mac("install.sh", system="Linux", OPENFILL_PYTHON="/usr/bin/python3")
         self.assertEqual(r.returncode, 0, r.stderr)
