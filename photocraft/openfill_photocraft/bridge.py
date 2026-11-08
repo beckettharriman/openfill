@@ -115,6 +115,7 @@ class PCImage:
     # or cancelled job takes them back (``discard``) if nothing else happened since.
     steps_added: int = 0
     history_after: list[str] | None = None
+    revision_after: int | None = None  # the document's revision then (any edit, undo or redo changes it)
 
     def _inspect(self) -> dict:
         self.bridge.activate(self)
@@ -179,6 +180,7 @@ class PhotoCraftBridge:
         self._names = itertools.count(1)
         self._known_images: list[PCImage] = []
         self._version: tuple[int, ...] | None = None
+        self._left_open: set[str] = set()  # OpenFill's documents PhotoCraft could not close yet
         self.exchange.mkdir(parents=True, exist_ok=True)
 
     # session ------------------------------------------------------------------
@@ -225,17 +227,24 @@ class PhotoCraftBridge:
         image.index = int(found["index"])
         return found
 
+    def _own(self, name: str, session: dict | None = None) -> int | None:
+        """The tab of OpenFill's own document ``name`` (its names are unique), None when it is
+        gone. Two tabs with that name (a user document named like it): BridgeError, so OpenFill
+        never saves, reads or closes one of them by mistake."""
+        found = [int(d["index"]) for d in (session or self.session()).get("documents") or [] if d.get("name") == name]
+        if len(found) > 1:
+            raise BridgeError(f"two documents are named '{name}': OpenFill leaves them alone")
+        return found[0] if found else None
+
     def _index_of(self, name: str) -> int | None:
-        """The tab named ``name``: one of OpenFill's own documents, whose names are unique."""
-        found = [int(d["index"]) for d in self.documents() if d.get("name") == name]
-        return found[-1] if found else None
+        return self._own(name)
 
     def _make_active(self, name: str) -> int:
         """Make OpenFill's own document ``name`` the active one (the user may have clicked
         another tab) and check that it is: its index. Nothing is saved or read otherwise."""
         for _ in range(3):
             session = self.session()
-            index = next((int(d["index"]) for d in session.get("documents") or [] if d.get("name") == name), None)
+            index = self._own(name, session)
             if index is None:
                 raise BridgeError(f"OpenFill's document '{name}' is gone")
             if session.get("active") == index:
@@ -247,11 +256,117 @@ class PhotoCraftBridge:
         raise BridgeError(f"PhotoCraft would not show OpenFill's document '{name}'")
 
     def _close_own(self, name: str) -> None:
-        """Close OpenFill's own document ``name``, found by its name at that moment: never
-        whatever happens to be active."""
-        index = self._index_of(name)
-        if index is not None:
-            self._close(index)
+        """Close OpenFill's own document ``name``, found by its name at that moment, never
+        whatever happens to be active, and only when exactly one tab has that name. When
+        PhotoCraft can't close it now (a dialog is open), it is closed at the next chance."""
+        try:
+            index = self._own(name)
+        except BridgeError:
+            self._left_open.add(name)
+            return
+        if index is None:
+            self._left_open.discard(name)
+            return
+        try:
+            self.client.run("file.close", document=index)
+            self._left_open.discard(name)
+        except ControlError:
+            if name not in self._left_open:
+                self.notify(
+                    f"OpenFill could not close its temporary document '{name}' (a dialog was open). "
+                    "It closes it with the next job, or close it yourself: it holds nothing of yours."
+                )
+            self._left_open.add(name)
+
+    def _close_left_open(self) -> None:
+        for name in sorted(self._left_open):
+            self._close_own(name)
+
+    def _job_document_active(self, image: PCImage) -> tuple[dict, int]:
+        """Make the job's document the active one and check that it is: (that session, its
+        index). BridgeError when another document stays in front."""
+        for _ in range(3):
+            session = self.session()
+            index = int(self._find(image, session)["index"])
+            if session.get("active") == index:
+                return session, index
+            try:
+                self.client.run("document.activate", document=index)
+            except ControlError:
+                pass
+        raise BridgeError(f"another image stayed in front of '{image.name}' in PhotoCraft")
+
+    def _states(self) -> dict[tuple, tuple[int, int]]:
+        """Every open document's (revision, number of history states before the redo ones),
+        by (tab index, name)."""
+        out = {}
+        for d in self.documents():
+            try:
+                n = len((self.client.run("document.inspect", document=int(d["index"])) or {}).get("history") or [])
+            except ControlError:
+                n = -1
+            out[(d.get("index"), d.get("name"))] = (d.get("revision"), n)
+        return out
+
+    def _put_back(self, key: tuple, states: int) -> bool:
+        """Take the user's document ``key`` back to the history state it was at (``states``
+        states before the redo ones) after an OpenFill command landed on it. Only ever moves
+        through its history (``history.selectState``): nothing of it is deleted."""
+        for _ in range(3):
+            docs = self.documents()
+            index = next((int(d["index"]) for d in docs if (d.get("index"), d.get("name")) == key), None)
+            if index is None or states < 1:
+                return False
+            try:
+                self.client.run("document.activate", document=index)
+                if self.session().get("active") != index:
+                    continue
+                self.client.run("history.selectState", state=states - 1)
+                now = (self.client.run("document.inspect", document=index) or {}).get("history") or []
+                if len(now) == states:
+                    return True
+            except ControlError:
+                pass
+        return False
+
+    def _on_document(self, image: PCImage, command: str, edits: bool = True, **params):
+        """Run ``command``, which acts on whatever document is in front, on the job's document
+        only. PhotoCraft can't run it on a named document, so the job's document is made the
+        active one and checked right before it; a click on another tab in the moment between
+        can still land it there. Afterwards every document's revision is compared: if it landed
+        elsewhere, that document is put back where it was in its history (a move, never a
+        deletion: Edit > Redo would still reach anything) and the command is tried again.
+        ``edits`` False: the command changes no revision (snapshots), so only the tab in front
+        before and after can be checked."""
+        for _ in range(5):
+            before = self._states() if edits else {}
+            session, index = self._job_document_active(image)
+            job = next(
+                (d.get("index"), d.get("name")) for d in session.get("documents") or [] if d.get("index") == index
+            )
+            if edits and job not in before:
+                continue
+            out = self.client.run(command, **params)
+            after = self.session()
+            if not edits:
+                if after.get("active") == index:
+                    return out
+                raise BridgeError(
+                    f"another image came to the front while OpenFill changed '{image.name}', so it stopped"
+                )
+            revisions = {(d.get("index"), d.get("name")): d.get("revision") for d in after.get("documents") or []}
+            if revisions.get(job) != before[job][0]:
+                return out  # it changed the job's document (anything else that changed is the user's own)
+            landed = [key for key, rev in revisions.items() if key != job and key in before and rev != before[key][0]]
+            if not landed and after.get("active") == index:
+                return out  # it changed nothing (already so)
+            for key in landed:
+                if not self._put_back(key, before[key][1]):
+                    raise BridgeError(
+                        f"OpenFill's change for '{image.name}' landed on '{key[1]}' when another tab came to "
+                        "the front. Edit > Undo or Redo there takes it back."
+                    )
+        raise BridgeError(f"another image kept coming to the front while OpenFill changed '{image.name}'")
 
     def activate(self, image: PCImage) -> None:
         session = self.session()
@@ -403,6 +518,7 @@ class PhotoCraftBridge:
         document's pixels and is shown at the document's zoom and position, so the canvas
         looks the same; only its tab shows, for as long as the saves take."""
         self.commit(image)
+        self._close_left_open()
         revision = self._revision(image)
         if image._snapshot and image._snapshot[0] == revision:
             return image._snapshot[1], image._snapshot[2]
@@ -441,12 +557,30 @@ class PhotoCraftBridge:
         """Save OpenFill's own document ``name`` (app.save saves the active one): checked to be
         the active one before, and again after, so a file never holds the user's document."""
         for _ in range(3):
-            self._make_active(name)
+            index = self._make_active(name)
+            size = next(((d.get("width"), d.get("height")) for d in self.documents() if d.get("index") == index), None)
             self.client.call("app.save", path=rel, **options)
-            if self.session().get("active") == self._index_of(name):
+            known = size if size and None not in size else None  # PhotoCraft 0.16 on reports sizes
+            if self.session().get("active") == self._own(name) and (
+                known is None or self._saved_size(rel) in (known, None)
+            ):
                 return
             self._forget(rel)  # another document came to the front meanwhile: once more
         raise BridgeError("PhotoCraft kept showing another document while OpenFill read the image")
+
+    def _saved_size(self, rel: str) -> tuple[int, int] | None:
+        """The size of the picture saved at ``rel`` (None if it can't be read: then the reader
+        reports it)."""
+        path = self.exchange / rel
+        for _ in range(50):
+            if path.is_file():
+                break
+            time.sleep(0.05)
+        try:
+            with Image.open(path) as im:
+                return im.size
+        except (OSError, ValueError, SyntaxError):
+            return None
 
     def _visible(self, copy: str, eight_bit: bool = True) -> Image.Image:
         """The duplicate's pixels (RGBA). From PhotoCraft 0.18 on, for 8-bit documents, an
@@ -768,14 +902,14 @@ class PhotoCraftBridge:
             image._snapshot = None
         if canvas and image.pending_crop is not None:
             new_w, new_h, off_x, off_y = image.pending_crop
-            self.activate(image)
-            self.client.run("image.crop", x=-off_x, y=-off_y, width=new_w, height=new_h)
+            self._on_document(image, "image.crop", x=-off_x, y=-off_y, width=new_w, height=new_h)
             image.steps_added += 1
             changed = True
             image.pending_crop = None
             image._snapshot = None
         if changed:
             image.history_after = self.history(image)
+            image.revision_after = self._revision(image)
 
     def _select_top(self, image: PCImage) -> Callable[[], None]:
         """Make the next copy land on top of the stack, outside any group: select the topmost
@@ -878,25 +1012,28 @@ class PhotoCraftBridge:
         return list((self.client.run("document.inspect") or {}).get("history") or [])
 
     def rewind(self, image: PCImage, state: int) -> None:
-        """Take the document back to before history step ``state`` (it and every later step go)."""
-        self.activate(image)
-        self.client.run("history.deleteState", state=int(state))
+        """Take the document back to before history step ``state``: that state and the later
+        ones become redo states (``history.selectState``), so nothing is ever deleted, even if
+        another tab came to the front at that moment."""
+        self._on_document(image, "history.selectState", state=max(0, int(state) - 1))
         image._snapshot = None
 
     def collapse(self, image: PCImage, since: int, name: str) -> None:
         """Make history steps ``since``.. one step named ``name``: a snapshot of the document as
-        it is, the steps taken back, and the snapshot selected (PhotoCraft adds that as one
-        step). The snapshot itself is deleted afterwards (the document does not change)."""
-        self.activate(image)
-        snap = (self.client.run("history.newSnapshot", name=name, **{"from": "fullDocument"}) or {})["snapshot"]
-        self.client.run("history.deleteState", state=int(since))
+        it is, the steps taken back (to redo states), and the snapshot selected (PhotoCraft adds
+        that as one step, which drops those redo states). The snapshot itself is deleted
+        afterwards (the document does not change). Each on the job's document only."""
+        snap = (
+            self._on_document(image, "history.newSnapshot", edits=False, name=name, **{"from": "fullDocument"}) or {}
+        )["snapshot"]
+        self._on_document(image, "history.selectState", state=max(0, int(since) - 1))
         try:
-            self.client.run("history.selectSnapshot", snapshot=snap)
+            self._on_document(image, "history.selectSnapshot", snapshot=snap)
         except ControlError:
             # Once more; if that fails too the snapshot stays in the History panel, so the
-            # result can still be brought back by hand.
-            self.client.run("history.selectSnapshot", snapshot=snap)
-        self.client.run("history.deleteSnapshot", snapshot=snap)
+            # result can still be brought back by hand (or with Edit > Redo).
+            self._on_document(image, "history.selectSnapshot", snapshot=snap)
+        self._on_document(image, "history.deleteSnapshot", edits=False, snapshot=snap)
         image._snapshot = None
 
     def keep_one(self, image: PCImage, since: int, layers: list[PCLayer], chosen: PCLayer, name: str) -> None:
@@ -1035,22 +1172,37 @@ class PhotoCraftBridge:
             image._snapshot = None
             image.steps_added, image.history_after = 0, None  # the job's steps are its result now
 
-    def discard(self, image: PCImage) -> None:
-        """A failed or cancelled job: forget results that never reached the document."""
+    def discard(self, image: PCImage) -> str:
+        """A failed or cancelled job: forget results that never reached the document, and take
+        back what earlier rounds of it put in (a multi-round expand), but only when the
+        document is exactly as the job left it (its history and its revision, which any edit,
+        undo or redo changes) and it is the one in front. Taking back moves the history to
+        before the job (redo states), it never deletes a state.
+
+        "" nothing of the job was in the document, "undone" it was taken back, "kept" it is
+        still in the document (Edit > Undo takes it back)."""
         image.pending, image.pending_group = [], ""
         image.pending_crop = None  # the canvas stays as it was
         image.selection = None
         image._snapshot = None
-        steps, expected = image.steps_added, image.history_after
-        image.steps_added, image.history_after = 0, None
-        if steps and expected:
-            # What the job put in already (a multi-round expand's first rounds) goes too, when
-            # the document is still exactly as the job left it: nothing of the user's is undone.
-            try:
-                if self.history(image) == expected and len(expected) > steps:
-                    self.rewind(image, len(expected) - steps)
-            except (ControlError, BridgeError):
-                pass
+        steps, expected, revision = image.steps_added, image.history_after, image.revision_after
+        image.steps_added, image.history_after, image.revision_after = 0, None, None
+        if not (steps and expected):
+            return ""
+        try:
+            session, index = self._job_document_active(image)
+            d = next(d for d in session.get("documents") or [] if d.get("index") == index)
+            if (
+                revision is not None
+                and d.get("revision") == revision
+                and len(expected) > steps
+                and list((self.client.run("document.inspect") or {}).get("history") or []) == expected
+            ):
+                self.rewind(image, len(expected) - steps)
+                return "undone"
+        except (ControlError, BridgeError, StopIteration):
+            pass
+        return "kept"
 
 
 def _octagon(img: Image.Image, reach: float) -> Image.Image:

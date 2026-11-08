@@ -460,9 +460,23 @@ class Service:
                     self.state.message = describe(err)
         finally:
             if image is not None:
-                self.bridge.discard(image)  # whatever did not reach the document is dropped
+                # whatever did not reach the document is dropped
+                self._say_what_is_left(self.bridge.discard(image))
             with self.state.lock:
                 self.state.finished = time.time()
+
+    def _say_what_is_left(self, outcome: object) -> None:
+        """After a failed or cancelled job: when what an earlier round put in is still in the
+        image (``bridge.discard`` could not take it back safely), the message says so instead
+        of "left unchanged"."""
+        if outcome != "kept":
+            return
+        kept = "What OpenFill had already added is still in the image: Edit > Undo takes it back."
+        with self.state.lock:
+            if self.state.state == "cancelled":
+                self.state.message = "Cancelled. " + kept
+            elif self.state.state == "error":
+                self.state.message = f"{self.state.message} {kept}".strip()
 
     # Remove values of older menus (saved in the panel's settings): LaMa or MAT alone, and the
     # two-pass "LaMa + a generation model", which LaMa at full resolution replaced.
