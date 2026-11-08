@@ -72,11 +72,14 @@ def find_photocraft(explicit: str | None) -> list[str] | None:
             candidates += sorted(folder.glob("photocraft-*.AppImage"), reverse=True)
     if sys.platform == "win32":
         local = Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
-        installed = _registry_install_dir()
-        if installed:
-            candidates.append(Path(installed) / "photocraft.exe")
+        candidates += _registry_photocraft()
+        programs = Path(os.environ.get("PROGRAMFILES") or r"C:\Program Files")
         candidates += [
-            Path(os.environ.get("PROGRAMFILES") or r"C:\Program Files") / "PhotoCraft" / "photocraft.exe",
+            # PhotoCraft 0.17 and later: a per-user install by default, in an ArtCraft folder
+            local / "Programs" / "ArtCraft" / "PhotoCraft" / "photocraft.exe",
+            programs / "ArtCraft" / "PhotoCraft" / "photocraft.exe",
+            # PhotoCraft 0.16 and earlier: always for all users
+            programs / "PhotoCraft" / "photocraft.exe",
             local / "Programs" / "PhotoCraft" / "photocraft.exe",
         ]
         for folder in (home / "Downloads", home / "Desktop", home / "Documents", home, Path("C:/"), Path("C:/AI")):
@@ -92,22 +95,38 @@ def find_photocraft(explicit: str | None) -> list[str] | None:
     return None
 
 
-def _registry_install_dir() -> str | None:
-    """Where PhotoCraft's Windows installer put it (HKLM\\Software\\PhotoCraft InstallDir)."""
-    try:
-        import winreg
-
-        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
-            try:
-                with winreg.OpenKey(
-                    winreg.HKEY_LOCAL_MACHINE, r"Software\PhotoCraft", 0, winreg.KEY_READ | view
-                ) as key:
-                    return str(winreg.QueryValueEx(key, "InstallDir")[0])
-            except OSError:
-                continue
-    except ImportError:
-        pass
-    return None
+def _registry_photocraft(winreg=None) -> list[Path]:
+    """photocraft.exe where PhotoCraft's Windows installer says it put it. PhotoCraft 0.16 and
+    earlier install for all users and write HKLM\\Software\\PhotoCraft InstallDir. From 0.17
+    the installer asks: per user by default (HKCU, under %LOCALAPPDATA%\\Programs\\ArtCraft) or
+    for all users (HKLM, under Program Files\\ArtCraft). Both hives are read, the user's first,
+    with the InstallDir/InstallFolder values and the App Paths entry each version writes."""
+    if winreg is None:
+        try:
+            import winreg  # noqa: PLC0415 - Windows only
+        except ImportError:
+            return []
+    found: list[Path] = []
+    app_paths = r"Software\Microsoft\Windows\CurrentVersion\App Paths\photocraft.exe"
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for key_name, value, is_exe in (
+            (r"Software\PhotoCraft", "InstallDir", False),
+            (r"Software\PhotoCraft", "InstallFolder", False),
+            (app_paths, "", True),
+        ):
+            for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+                try:
+                    with winreg.OpenKey(hive, key_name, 0, winreg.KEY_READ | view) as key:
+                        data = winreg.QueryValueEx(key, value)[0]
+                except OSError:
+                    continue
+                if isinstance(data, str) and data.strip():
+                    path = Path(data.strip().strip('"'))
+                    path = path if is_exe else path / "photocraft.exe"
+                    if path not in found:
+                        found.append(path)
+                break
+    return found
 
 
 def open_panel(url: str) -> bool:

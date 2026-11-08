@@ -1874,6 +1874,119 @@ class MacInstallTests(unittest.TestCase):
                 self.assertEqual((bundle / "keep").read_text(), "user file")
 
 
+class WindowsDiscoveryTests(unittest.TestCase):
+    """PhotoCraft's .msi: 0.12 to 0.16 for all users (HKLM, Program Files\\PhotoCraft); from 0.17
+    per user by default (HKCU, %LOCALAPPDATA%\\Programs\\ArtCraft\\PhotoCraft) or for all users
+    (HKLM, Program Files\\ArtCraft\\PhotoCraft). Read from the .msi files' Registry, Directory
+    and CustomAction tables."""
+
+    APP_PATHS = r"Software\Microsoft\Windows\CurrentVersion\App Paths\photocraft.exe"
+
+    def fake_winreg(self, values):
+        """A stand-in for winreg holding ``values``: {(hive, key, value name): data}."""
+        from types import SimpleNamespace
+
+        opened = []
+
+        class Key:
+            def __init__(self, hive, name):
+                self.hive, self.name = hive, name
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def open_key(hive, name, _reserved, _access):
+            opened.append((hive, name))
+            if not any(h == hive and k == name for h, k, _v in values):
+                raise FileNotFoundError(name)
+            return Key(hive, name)
+
+        def query(key, name):
+            try:
+                return values[(key.hive, key.name, name)], 1
+            except KeyError:
+                raise FileNotFoundError(name) from None
+
+        fake = SimpleNamespace(
+            HKEY_CURRENT_USER="HKCU",
+            HKEY_LOCAL_MACHINE="HKLM",
+            KEY_READ=1,
+            KEY_WOW64_64KEY=2,
+            KEY_WOW64_32KEY=4,
+            OpenKey=open_key,
+            QueryValueEx=query,
+        )
+        return fake, opened
+
+    def test_photocraft_0_12_to_0_16_machine_install(self):
+        from openfill_photocraft import __main__ as launch
+
+        fake, _ = self.fake_winreg({("HKLM", r"Software\PhotoCraft", "InstallDir"): "C:/Program Files/PhotoCraft/"})
+        self.assertEqual(launch._registry_photocraft(fake), [Path("C:/Program Files/PhotoCraft/photocraft.exe")])
+
+    def test_photocraft_0_17_and_later_per_user_install(self):
+        """What a plain double click or msiexec /qn gives from 0.17: nothing in HKLM at all."""
+        from openfill_photocraft import __main__ as launch
+
+        folder = "C:/Users/me/AppData/Local/Programs/ArtCraft/PhotoCraft/"
+        fake, opened = self.fake_winreg(
+            {
+                ("HKCU", r"Software\PhotoCraft", "InstallDir"): folder,
+                ("HKCU", self.APP_PATHS, ""): folder + "photocraft.exe",
+            }
+        )
+        self.assertEqual(launch._registry_photocraft(fake), [Path(folder) / "photocraft.exe"])
+        self.assertIn(("HKLM", r"Software\PhotoCraft"), opened)  # both hives are looked at
+
+    def test_the_users_own_install_comes_first_and_app_paths_alone_is_enough(self):
+        from openfill_photocraft import __main__ as launch
+
+        fake, _ = self.fake_winreg(
+            {
+                ("HKLM", r"Software\PhotoCraft", "InstallDir"): "C:/Program Files/PhotoCraft",
+                ("HKCU", self.APP_PATHS, ""): '"D:/Apps/ArtCraft/PhotoCraft/photocraft.exe"',
+                ("HKCU", r"Software\PhotoCraft", "InstallFolder"): "",
+            }
+        )
+        self.assertEqual(
+            launch._registry_photocraft(fake),
+            [Path("D:/Apps/ArtCraft/PhotoCraft/photocraft.exe"), Path("C:/Program Files/PhotoCraft/photocraft.exe")],
+        )
+        self.assertEqual(launch._registry_photocraft(self.fake_winreg({})[0]), [])
+
+    def find_on_windows(self, exe, registry=()):
+        from openfill_photocraft import __main__ as launch
+
+        home = Path("/test/me")
+        env = {"PHOTOCRAFT_BIN": "", "LOCALAPPDATA": str(home / "AppData/Local"), "PROGRAMFILES": "/test/pf"}
+        with (
+            mock.patch.object(launch.sys, "platform", "win32"),
+            mock.patch.object(launch.shutil, "which", return_value=None),
+            mock.patch.dict(launch.os.environ, env),
+            mock.patch.object(launch.Path, "home", return_value=home),
+            mock.patch.object(launch.Path, "is_dir", return_value=False),
+            mock.patch.object(launch.Path, "is_file", autospec=True, side_effect=lambda p: p == exe),
+            mock.patch.object(launch.os, "access", return_value=True),
+            mock.patch.object(launch, "_registry_photocraft", return_value=list(registry)),
+        ):
+            return launch.find_photocraft(None)
+
+    def test_find_photocraft_in_every_install_folder(self):
+        for exe in (
+            Path("/test/me/AppData/Local/Programs/ArtCraft/PhotoCraft/photocraft.exe"),  # 0.17+, per user
+            Path("/test/pf/ArtCraft/PhotoCraft/photocraft.exe"),  # 0.17+, all users
+            Path("/test/pf/PhotoCraft/photocraft.exe"),  # 0.12 to 0.16
+        ):
+            with self.subTest(exe=exe):
+                self.assertEqual(self.find_on_windows(exe), [str(exe)])
+        moved = Path("/test/E/PhotoCraft/photocraft.exe")  # a folder picked in the installer
+        self.assertIsNone(self.find_on_windows(moved))
+        self.assertEqual(self.find_on_windows(moved, [moved]), [str(moved)])
+
+
 class BarLogicTests(unittest.TestCase):
     FACTS = {
         "active": "realvisxl-v5",
