@@ -377,6 +377,16 @@ class CatalogTests(unittest.TestCase):
     def status(self, entry, entries):
         return cat.install_status(entry, self.own, None, list(entries.values()))
 
+    def test_a_shared_birefnet_is_installed_and_given_to_comfyui(self):
+        # PR #11: a BiRefNet in another install's background_removal folder counts as installed,
+        # and the yaml maps that folder, so ComfyUI's RemoveBackground can load it.
+        f = catalog_file("birefnet", "bg_removal_model")
+        sized(self.server / "models" / f.dest, f.size)
+        self.shared = sm.roots_for(str(self.server), self.own)
+        entries, _found, _skipped = self.build()
+        self.assertTrue(self.status(entries["birefnet"], entries).installed)
+        self.assertIn("background_removal", sm.yaml_text(self.shared))
+
     def test_krita_models_count_as_installed(self):
         entries, _found, _skipped = self.build()
         for model_id in ("realvisxl-v5", "fooocus-inpaint-patch", "mat-places512"):

@@ -43,6 +43,7 @@ MODEL_FOLDERS = (
     "vae_approx",
     "inpaint",
     "loras",
+    "background_removal",  # BiRefNet for Remove Background (PR #11)
 )
 
 
