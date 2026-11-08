@@ -10,6 +10,19 @@ Each entry from now on says which PhotoCraft versions it works with.
 
 ## [Unreleased] - OpenFill for PhotoCraft · works with PhotoCraft 0.12 to 0.20
 
+Working in PhotoCraft:
+- Fill, Remove, Expand and Create no longer flash OpenFill's temporary documents in PhotoCraft. The results come in as one PSD with their masks and group already in it, so there is one temporary document per job instead of one per layer and mask, and it is never worked on in view. PhotoCraft is back on your image right after it opens.
+- The copy OpenFill reads your image from is shown at your zoom and position, and from PhotoCraft 0.18 on the selection is read from that same copy, so the black and white mask document is gone. Its tab still shows for about a second, because PhotoCraft can only save the document in front.
+- Expand no longer shows the bigger canvas empty (white) while the result is finished: the canvas grows when the new layers go in.
+- A failed or cancelled Expand leaves the canvas and layers as they were, also when it fails in a later round. OpenFill only takes a round back when the image is exactly as it left it, and it does so with the history (Edit > Redo still reaches it), never by deleting steps. When it can't, the panel says what is still in the image instead of "left unchanged".
+- If you click another image's tab at the very moment OpenFill changes yours, OpenFill notices, puts that other image back where it was in its history, and tries again.
+- When a dialog you opened keeps OpenFill from closing its temporary copy, it says so and closes it with the next job.
+- Picking OpenFill in Filter > Plug-ins: the step it leaves is taken back only on that image, while it is still in front and unchanged, and with the history (it stays as a redo step that does nothing). Before, switching tabs at that moment could delete another image's last step for good.
+- A result now always lands on top of the layer stack. Before, a job after a Fill with several variations put its layer inside that Fill's group.
+- OpenFill only ever saves or closes its own temporary documents, found by their own names. Before, clicking your own tab at the wrong moment during a job could get your image saved into OpenFill's folder or closed without asking.
+- The result goes into the right image when two open images share a name and another tab closes during the job.
+- Bigger selections on big images: the grown mask is made once per job, in about half a second on a 24 MP image instead of several seconds per variation.
+
 PhotoCraft versions:
 - Tested on PhotoCraft 0.17.0, 0.18.0, 0.19.0, 0.20.1 and 0.20.2 (install, Fill, Remove, Expand and Create). No changes were needed, so the supported range is now PhotoCraft 0.12 to 0.20.
 - The Engine section of the panel shows an About line: "OpenFill for PhotoCraft 0.2.x · works with PhotoCraft 0.12 to 0.20".

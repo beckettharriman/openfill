@@ -31,6 +31,77 @@ from PIL import Image  # noqa: E402
 from openfill.geometry import Rect  # noqa: E402
 
 
+def read_psd(data: bytes) -> tuple[tuple[int, int], list[dict]]:
+    """The canvas size and the layers (top first; groups with ``children``) of a PSD that
+    ``openfill_photocraft.psd`` wrote: what PhotoCraft reads from it."""
+    import struct
+
+    assert data[:4] == b"8BPS"
+    height, width = struct.unpack(">II", data[14:22])
+    pos = 26
+    for _ in range(2):  # colour mode data, image resources
+        pos += 4 + struct.unpack(">I", data[pos : pos + 4])[0]
+    pos += 8  # section length, layer info length
+    (count,) = struct.unpack(">h", data[pos : pos + 2])
+    pos += 2
+    records = []
+    for _ in range(abs(count)):
+        top, left, bottom, right = struct.unpack(">4i", data[pos : pos + 16])
+        (channels,) = struct.unpack(">H", data[pos + 16 : pos + 18])
+        pos += 18
+        lengths = []
+        for _ in range(channels):
+            cid, length = struct.unpack(">hI", data[pos : pos + 6])
+            lengths.append((cid, length))
+            pos += 6
+        flags = data[pos + 10]
+        (extra,) = struct.unpack(">I", data[pos + 12 : pos + 16])
+        body, pos = data[pos + 16 : pos + 16 + extra], pos + 16 + extra
+        (mask_len,) = struct.unpack(">I", body[:4])
+        mask = struct.unpack(">4i", body[4:20]) if mask_len else None
+        at = 4 + mask_len
+        at += 4 + struct.unpack(">I", body[at : at + 4])[0]
+        name_len = body[at]
+        name = body[at + 1 : at + 1 + name_len].decode("latin-1")
+        divider = 0
+        if b"8BIMluni" in body:
+            i = body.index(b"8BIMluni") + 12
+            (n,) = struct.unpack(">I", body[i : i + 4])
+            name = body[i + 4 : i + 4 + 2 * n].decode("utf-16-be")
+        if b"8BIMlsct" in body:
+            i = body.index(b"8BIMlsct") + 12
+            (divider,) = struct.unpack(">I", body[i : i + 4])
+        records.append(
+            {
+                "rect": (left, top, right - left, bottom - top),
+                "visible": not flags & 2,
+                "name": name,
+                "mask": None if mask is None else (mask[1], mask[0], mask[3] - mask[1], mask[2] - mask[0]),
+                "divider": divider,
+                "lengths": lengths,
+            }
+        )
+    planes = {}
+    for index, record in enumerate(records):
+        for cid, length in record["lengths"]:
+            planes[(index, cid)] = data[pos + 2 : pos + length]
+            pos += length
+    stack: list[list[dict]] = [[]]
+    for index, record in enumerate(records):  # bottom first
+        if record["divider"] == 3:
+            stack.append([])
+            continue
+        row = {"name": record["name"], "visible": record["visible"], "rect": record["rect"]}
+        if record["divider"] in (1, 2):
+            row["kind"], row["children"] = "Group", list(reversed(stack.pop()))
+        else:
+            row["alpha"] = planes[(index, -1)]
+            if record["mask"] is not None:
+                row["mask"], row["mask_rect"], row["mask_pixels"] = True, record["mask"], planes[(index, -2)]
+        stack[-1].append(row)
+    return (width, height), list(reversed(stack[0]))
+
+
 class FakeServer:
     """A loopback server speaking the control protocol's JSON lines."""
 
@@ -149,13 +220,17 @@ class FakePhotoCraft:
 
     NEEDS_SELECTION = ("select.modify.expand", "select.modify.feather", "layer.layerMask.revealSelection")
 
-    def __init__(self, exchange: Path, size=(64, 48)) -> None:
+    def __init__(self, exchange: Path, size=(64, 48), version: str | None = None, actions: bool = True) -> None:
         self.exchange = exchange
+        self.actions = {} if actions else None  # recorded actions; None: a PhotoCraft without them
+        self.version = version  # what ui.inspect reports; None as PhotoCraft before 0.16
+        self.views: list[dict] = []
         self.calls: list[tuple[str, dict]] = []
         self.next_id = 10
         self.docs = [self._doc("photo.png", size, [{"id": 2, "name": "Background", "visible": True}])]
         self.docs[0]["selection"] = [8, 6, 20, 10]
         self.active = 0
+        self.opened_psds: list[list[dict]] = []  # the layers of every PSD OpenFill opened
         # The user clicking to deselect in PhotoCraft while OpenFill works: before each of the
         # next ``deselects`` selection-using commands, the active document loses its selection.
         self.deselects = 0
@@ -181,23 +256,62 @@ class FakePhotoCraft:
 
     def call(self, method: str, **params):
         self.calls.append((method, params))
+        if method == "ui.set":
+            self.views.append({"document": self.active, **params})
+            return None
         if method == "ui.inspect":
             return {
+                "updates": {"currentVersion": self.version} if self.version else None,
+                "views": [{"zoom": 0.5 + i, "center": [10.0 * i, 20.0]} for i in range(len(self.docs))],
                 "session": {
                     "active": self.active,
                     "documents": [
                         {"index": i, "name": d["name"], "revision": d["revision"]} for i, d in enumerate(self.docs)
                     ],
-                }
+                },
             }
+        if method == "app.save" and params["path"].endswith(".tif"):
+            # a flat TIFF: red, green, blue and the document's alpha channel (as PhotoCraft 0.18 on)
+            if not self.doc["channels"]:  # the colours alone
+                Image.new("RGB", self.doc["size"], self.doc.get("colour", (200, 200, 200))).save(
+                    self.exchange / params["path"]
+                )
+                return {"path": params["path"]}
+            colour = self.doc.get("colour", (200, 200, 200))
+            im = Image.new("RGBA", self.doc["size"], (*colour, 0))
+            for channel in self.doc["channels"]:
+                x, y, w, h = channel["rect"]
+                im.paste((*colour, 255), (x, y, x + w, y + h))
+            im.save(self.exchange / params["path"], compression="raw")
+            return {"path": params["path"]}
         if method == "app.save":
             kind = "L" if self.doc["name"] == "OpenFill mask" else "RGBA"
-            im = Image.new(kind, self.doc["size"], 0 if kind == "L" else (200, 200, 200, 255))
+            im = Image.new(
+                kind, self.doc["size"], 0 if kind == "L" else (*self.doc.get("colour", (200, 200, 200)), 255)
+            )
             if kind == "L":
                 x, y, w, h = self.doc["selection_source"]
                 im.paste(255, (x, y, x + w, y + h))
             im.save(self.exchange / params["path"])
             return {"path": params["path"]}
+        if method == "app.open" and params["path"].endswith(".psd"):
+            path = self.exchange / params["path"]
+            size, rows = read_psd((path if path.exists() else self.exchange.parent / params["path"]).read_bytes())
+            self.opened_psds.append(rows)
+
+            def ids(rows):  # the document's rows: what layer.list shows, without the pixels
+                out = []
+                for row in rows:
+                    kept = {k: v for k, v in row.items() if not isinstance(v, bytes) and k != "children"}
+                    kept["id"] = self._new_id()
+                    if "children" in row:
+                        kept["children"] = ids(row["children"])
+                    out.append(kept)
+                return out
+
+            self.docs.append(self._doc(Path(params["path"]).name, size, ids(rows)))
+            self.active = len(self.docs) - 1
+            return {"name": Path(params["path"]).name}
         if method == "app.open":
             with Image.open(
                 self.exchange.parent / params["path"]
@@ -216,12 +330,44 @@ class FakePhotoCraft:
 
     def _edit(self, doc, command) -> None:
         if command in self.EDITS:
+            doc["redo"] = []
             doc["history"].append(self.EDITS[command])
             doc["revision"] += 1
 
     def run(self, command: str, **params):
         self.calls.append((command, params))
         doc = self.doc
+        if command == "document.inspect" and "document" in params:  # it takes a document; most commands don't
+            doc = self.docs[params["document"]]
+        if command.startswith("actions."):
+            if self.actions is None:
+                raise control.ControlError(f"engine.execute: unknown command `{command}`")
+            if command == "actions.list":
+                return {"actions": [{"name": n} for n in self.actions], "recording": None}
+            if command == "actions.record":
+                self.actions[params["name"]] = []
+                return {"action": params["name"]}
+            if command == "actions.stop":  # what was done while recording (``recorded``), as PhotoCraft does
+                steps = getattr(self, "recorded", [])
+                self.actions[next(reversed(self.actions))] = list(steps)
+                self.recorded = []
+                return {"steps": len(steps)}
+            if command == "actions.insert":
+                self.actions[params["action"]].append((params["id"], params.get("params") or {}))
+                return {}
+            if command == "actions.delete":
+                if "step" in params:
+                    del self.actions[params["action"]][params["step"]]
+                    return {"action": params["action"]}
+                del self.actions[params["action"]]
+                return {"deleted": params["action"]}
+            if command == "actions.play":  # in one go: nothing (no click) comes between its steps
+                for step, step_params in self.actions[params["action"]]:
+                    try:
+                        FakePhotoCraft.run(self, step, **step_params)
+                    except control.ControlError as err:
+                        return {"ran": 0, "failed": {"id": step, "error": str(err)}}
+                return {"ran": len(self.actions[params["action"]])}
         if command in self.NEEDS_SELECTION:
             if self.deselects > 0:
                 self.deselects -= 1
@@ -238,6 +384,20 @@ class FakePhotoCraft:
             del doc["history"][params["state"] :]
             doc["revision"] += 1
             return {"states": len(doc["history"])}
+        if command == "history.selectState":  # move to that state; the later ones are redo states
+            k = int(params["state"])
+            full = doc["history"] + doc.get("redo", [])
+            saved = doc.setdefault("saved", {})
+            saved[len(doc["history"]) - 1] = (json.loads(json.dumps(doc["layers"])), doc["size"])
+            if k < len(doc["history"]):
+                layers = doc["before"][k + 1]
+                size = doc.setdefault("sizes", {}).get(k + 1, doc["size"])
+            else:
+                layers, size = saved[k]
+            doc["layers"], doc["size"] = json.loads(json.dumps(layers)), size
+            doc["history"], doc["redo"] = full[: k + 1], full[k + 1 :]
+            doc["revision"] += 1
+            return {"state": k, "changed": True}
         if command == "history.newSnapshot":
             snaps = doc.setdefault("snapshots", {})
             snaps[len(snaps) + 1] = (params["name"], json.loads(json.dumps(doc["layers"])), doc["size"])
@@ -257,21 +417,28 @@ class FakePhotoCraft:
             return {
                 "width": doc["size"][0],
                 "height": doc["size"][1],
+                "depth": doc.get("depth", 8),
                 "hasSelection": bool(doc["selection"]),
                 "selectionBounds": doc["selection"],
                 "history": list(doc["history"]),
+                "snapshots": [{"id": k, "name": v[0]} for k, v in doc.get("snapshots", {}).items()],
                 "revision": doc["revision"],
                 "activeLayer": doc["layers"][0]["id"] if doc["layers"] else None,
                 "layers": doc["layers"],
                 "channels": {"alpha": doc["channels"]},
             }
         if command == "image.duplicate":
-            self.docs.append(self._doc(params.get("name", "copy"), doc["size"], [{"id": self._new_id(), "name": "x"}]))
+            copy = self._doc(params.get("name", "copy"), doc["size"], [{"id": self._new_id(), "name": "x"}])
+            copy["selection"] = doc["selection"]  # a duplicate keeps the selection
+            self.docs.append(copy)
             self.active = len(self.docs) - 1
             return {}
         if command == "select.saveSelection":
-            self.docs[params["document"]]["channels"].append({"name": params["name"], "rect": doc["selection"]})
-            return {}
+            if not doc["selection"]:
+                raise control.ControlError(f"engine.execute: {command} is not available right now: no selection")
+            target = self.docs[params.get("document", self.active)]
+            target["channels"].append({"name": params["name"], "rect": doc["selection"]})
+            return {"channel": len(target["channels"]) - 1}
         if command == "channel.duplicate":
             rect = next(c["rect"] for c in doc["channels"] if c["name"] == params["channel"])
             new = self._doc("OpenFill mask", doc["size"], [{"id": self._new_id(), "name": "mask"}])
@@ -297,18 +464,38 @@ class FakePhotoCraft:
         if command == "layer.copyToDocument":
             src, dest = self.docs[params.get("source", self.active)], self.docs[params["document"]]
             ids = []
+            # As PhotoCraft places a copy: above the selected layer, into a selected (open)
+            # group as its top child, on top of the stack with no layer selected.
+            siblings, at = dest["layers"], 0
+            anchor = dest.get("selected")
+            for row in self._all(dest):
+                if row["id"] == anchor:
+                    if "children" in row and row.get("expanded", True):
+                        siblings, at = row["children"], 0
+                    else:
+                        siblings = next(
+                            (g["children"] for g in dest["layers"] if row in g.get("children", [])), dest["layers"]
+                        )
+                        at = siblings.index(row)
             for layer_id in params["layers"]:
                 layer = next(row for row in src["layers"] if row["id"] == layer_id)
                 copy = json.loads(json.dumps(layer))
                 copy["id"] = self._new_id()
                 for child in copy.get("children", []):
                     child["id"] = self._new_id()
-                dest["layers"].insert(0, copy)
+                siblings.insert(at, copy)
                 ids.append(copy["id"])
+            dest["selected"] = ids[-1] if ids else anchor
             self.active = params["document"]
             self._edit(dest, command)
             return {"document": params["document"], "layers": ids}
-        if command == "select.loadSelection":
+        if command == "layer.select":
+            doc["selected"] = params.get("layer")
+        elif command == "layer.setExpanded":  # a view setting, not a history step
+            next(r for r in doc["layers"] if r["id"] == params["layer"])["expanded"] = params["expanded"]
+        elif command == "select.deselectLayers":
+            doc["selected"] = None
+        elif command == "select.loadSelection":
             doc["selection"] = [0, 0, *doc["size"]]
         elif command == "layer.layerMask.revealSelection":
             doc["selection"] = None  # adding a mask uses the selection up, as in PhotoCraft
@@ -317,7 +504,7 @@ class FakePhotoCraft:
             row = next(r for r in self._all(doc) if r["id"] == params["layer"])
             row.update({k: v for k, v in params.items() if k in ("name", "visible")})
         elif command == "layer.new.group":
-            group = {"id": self._new_id(), "name": params.get("name"), "visible": True, "children": []}
+            group = {"id": self._new_id(), "name": params.get("name"), "kind": "Group", "visible": True, "children": []}
             doc["layers"].insert(0, group)
             self._edit(doc, command)
             return {"layer": group["id"]}
@@ -408,10 +595,23 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual([layer.id for layer in layers], [c["id"] for c in group["children"]])
         self.assertEqual(len(self.pc.docs), 1)  # scratch documents closed
         self.assertEqual(self.target["selection"], [8, 6, 20, 10])  # the user's selection is untouched
-        expand = [p for c, p in self.pc.calls if c == "select.modify.expand"]
-        self.assertEqual(len(expand), 3)  # the selection is loaded again for each mask
-        self.assertEqual((expand[0]["radius"], expand[0]["applyAtCanvasBounds"]), (4, False))
         self.assertNotIn("edit.copy", self.pc.commands())  # the clipboard is never used
+        # One scratch document holds all three, masks included: nothing is built inside it.
+        commands = self.pc.commands()
+        self.assertEqual(len(self.pc.opened_psds), 1)
+        for command in ("select.loadSelection", "select.modify.expand", "layer.layerMask.revealSelection"):
+            self.assertNotIn(command, commands)
+        # the document is the active one again right after the open, before anything else
+        opened = commands.index("app.open")
+        self.assertEqual(self.pc.calls[opened + 1], ("document.activate", {"document": 0}))
+        (group, backdrop) = self.pc.opened_psds[0]
+        self.assertEqual(backdrop["name"], "OpenFill backdrop")  # looks like the document; never copied
+        self.assertNotIn("OpenFill backdrop", [r["name"] for r in self.target["layers"]])
+        first = group["children"][0]
+        # the selection (8, 6, 20 x 10) grown by 4 and feathered: wider than it, opaque in the middle
+        x, y, w, h = first["mask_rect"]
+        self.assertTrue(x <= 4 and y <= 2 and x + w >= 32 and y + h >= 20, first["mask_rect"])
+        self.assertGreater(first["mask_pixels"][(10 - y) * w + (17 - x)], 200)
 
     def test_keep_and_discard_leave_one_step_or_none(self):
         from types import SimpleNamespace
@@ -511,7 +711,14 @@ class BridgeTests(unittest.TestCase):
         service.show_variation(2)
         before = json.loads(json.dumps(self.target["layers"]))
         history = list(self.target["history"])  # the job's step and the picker's two
-        self.pc.deselects = 1000  # every try loses the selection
+        real_call = self.pc.call
+
+        def call(method, **params):  # PhotoCraft can't open OpenFill's layers
+            if method == "app.open":
+                raise control.ControlError("app.open: no")
+            return real_call(method, **params)
+
+        self.pc.call = call
         with self.assertRaises(control.ControlError):
             service.keep("selected")
         self.assertEqual(self.target["history"], history)
@@ -519,7 +726,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(len(self.pc.docs), 1)  # scratch documents closed
         self.assertEqual(service.layers, layers)  # and still in the picker
         self.assertEqual(len(service.state.variations), 3)
-        self.pc.deselects = 0
+        self.pc.call = real_call
         service.keep("selected")  # Keep again works
         self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])
         self.assertEqual(self.target["layers"][0]["name"], "Fill")
@@ -652,8 +859,475 @@ class BridgeTests(unittest.TestCase):
             self.image, [png_bytes("red")], Rect(0, 0, 64, 48), "E", 0.0, None, use_selection_mask=False
         )
         self.bridge.resize_canvas(self.image, 100, 80, 10, 20)
-        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer", "Crop"])
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer"])  # the earlier round is in
+        self.assertNotIn("image.crop", self.pc.commands())  # the canvas waits for its layers
+        self.assertEqual((self.image.get_width(), self.image.get_height()), (100, 80))
+        self.bridge.insert_results(
+            self.image, [png_bytes("blue", (100, 80))], Rect(0, 0, 100, 80), "E", 0.0, None, False
+        )
+        self.bridge.finish(self.image)
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer", "Duplicate Layer", "Crop"])
+        commands = self.pc.commands()
+        last_copy = len(commands) - 1 - commands[::-1].index("layer.copyToDocument")
+        self.assertGreater(commands.index("image.crop"), last_copy)  # the layers first, then the canvas
+        copy = [p for c, p in self.pc.calls if c == "layer.copyToDocument"][-1]
+        self.assertEqual(copy["offset"], [-10, -20])  # placed for the new canvas before it grows
         self.assertIn(("image.crop", {"x": -10, "y": -20, "width": 100, "height": 80}), self.pc.calls)
+        self.assertEqual(self.target["size"], (100, 80))
+
+    def test_a_failed_expand_leaves_the_canvas_as_it_was(self):
+        self.bridge.resize_canvas(self.image, 100, 80, 10, 20)
+        self.bridge.discard(self.image)
+        self.bridge.finish(self.image)
+        self.assertEqual((self.target["size"], self.target["history"]), ((64, 48), ["Open"]))
+        self.assertNotIn("image.crop", self.pc.commands())
+
+    def test_the_selection_comes_from_a_tiff_from_photocraft_0_18(self):
+        pc = FakePhotoCraft(self.exchange, version="0.20.2")
+        bridge = PhotoCraftBridge(pc, self.exchange, Path(self.tmp.name))
+        image = bridge.track(bridge.active_image())
+        _png, raw = bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.assertEqual((raw[6 * 64 + 8], raw[15 * 64 + 28], raw[0], raw[15 * 64 + 27]), (255, 0, 0, 255))
+        _png, flat = bridge.export_region(image, Rect(0, 0, 64, 48))
+        self.assertEqual(flat[:4], bytes((200, 200, 200, 255)))  # the colours, opaque
+        saves = [p["path"] for c, p in pc.calls if c == "app.save"]
+        self.assertTrue(all(path.endswith(".tif") for path in saves), saves)  # no slow PNG
+        commands = pc.commands()
+        self.assertNotIn("channel.duplicate", commands)  # no black and white document
+        self.assertEqual(commands.count("image.duplicate"), 1)
+        self.assertEqual(len(pc.docs), 1)
+        self.assertEqual(pc.docs[0]["history"], ["Open"])
+        # the duplicate is shown where the document was, at its zoom
+        self.assertEqual(pc.views, [{"document": 1, "zoom": 0.5, "center": [0.0, 20.0]}])
+        self.assertEqual(list(self.exchange.iterdir()), [])
+
+    def test_the_copy_takes_the_view_after_photocraft_fitted_it(self):
+        pc = FakePhotoCraft(self.exchange, version="0.20.2")
+        real_call, pending = pc.call, [2]
+
+        def call(method, **params):  # a new document fits itself to the window on its first frames
+            reply = real_call(method, **params)
+            if method == "ui.inspect" and len(pc.docs) > 1 and pending[0]:
+                pending[0] -= 1
+                reply["views"][-1]["fit_pending"] = True
+            return reply
+
+        pc.call = call
+        bridge = PhotoCraftBridge(pc, self.exchange, Path(self.tmp.name))
+        image = bridge.track(bridge.active_image())
+        bridge.export_region(image, Rect(0, 0, 64, 48))
+        self.assertEqual(pending, [0])  # asked until the fit was done
+        self.assertEqual(pc.views, [{"document": 1, "zoom": 0.5, "center": [0.0, 20.0]}])
+
+    def test_the_version_photocraft_reports(self):
+        for reported, expected in (("0.20.2", (0, 20, 2)), ("0.18.0-beta.1", (0, 18, 0)), (None, (0,))):
+            pc = FakePhotoCraft(self.exchange, version=reported)
+            self.assertEqual(PhotoCraftBridge(pc, self.exchange, Path(self.tmp.name)).photocraft_version(), expected)
+
+    def test_a_tiff_without_the_selection_falls_back_to_a_mask_document(self):
+        pc = FakePhotoCraft(self.exchange, version="0.18.0")
+        real_call = pc.call
+
+        def call(method, **params):  # a PhotoCraft that leaves the alpha channel out
+            if method == "app.save" and params["path"].endswith(".tif"):
+                Image.new("RGB", pc.doc["size"]).save(self.exchange / params["path"], compression="raw")
+                return {"path": params["path"]}
+            return real_call(method, **params)
+
+        pc.call = call
+        bridge = PhotoCraftBridge(pc, self.exchange, Path(self.tmp.name))
+        image = bridge.track(bridge.active_image())
+        _png, raw = bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.assertEqual((raw[6 * 64 + 8], raw[0]), (255, 0))
+        self.assertIn("channel.duplicate", pc.commands())
+        self.assertEqual(len(pc.docs), 1)
+        self.assertEqual(list(self.exchange.iterdir()), [])
+
+    def _bridge(self, version=None):
+        pc = FakePhotoCraft(self.exchange, version=version)
+        bridge = PhotoCraftBridge(pc, self.exchange, Path(self.tmp.name))
+        return pc, bridge, bridge.track(bridge.active_image())
+
+    def test_a_tab_click_during_the_export_never_writes_into_the_users_document(self):
+        # PhotoCraft 0.18 on: the user clicks their own tab while the copy is saved. The selection
+        # goes into the copy by name, and every save checks the copy is the one in front.
+        pc, bridge, image = self._bridge("0.20.2")
+        real_call, fired = pc.call, []
+
+        def call(method, **params):
+            out = real_call(method, **params)
+            if method == "app.save" and params["path"].endswith(".tif") and not fired:
+                fired.append(params["path"])
+                pc.active = 0  # the user's click on their own tab
+            return out
+
+        pc.call = call
+        _png, raw = bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.assertTrue(fired)
+        self.assertEqual(pc.docs[0]["channels"], [])  # the user's document got nothing
+        self.assertEqual(pc.docs[0]["history"], ["Open"])
+        self.assertEqual((raw[6 * 64 + 8], raw[0]), (255, 0))
+        self.assertEqual([d["name"] for d in pc.docs], ["photo.png"])
+        self.assertEqual(list(self.exchange.iterdir()), [])
+
+    def test_a_tab_click_right_after_the_duplicate_never_closes_the_users_document(self):
+        # The copy is found by its own name, never as "the active document": a click on the
+        # user's tab right after image.duplicate must not get the user's document saved or closed.
+        for version in ("0.20.2", None):
+            pc, bridge, image = self._bridge(version)
+            real_run, real_call, saved = pc.run, pc.call, []
+
+            def run(command, _pc=pc, _real=real_run, **params):
+                out = _real(command, **params)
+                if command == "image.duplicate":
+                    _pc.active = 0  # the user's click on their own tab
+                return out
+
+            def call(method, _pc=pc, _real=real_call, _saved=saved, **params):
+                if method == "app.save":
+                    _saved.append(_pc.doc["name"])
+                return _real(method, **params)
+
+            pc.run, pc.call = run, call
+            bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+            self.assertEqual([d["name"] for d in pc.docs], ["photo.png"], version)
+            self.assertNotIn("photo.png", saved, version)
+            self.assertEqual(pc.docs[0]["channels"], [], version)
+
+    def test_two_tabs_with_the_same_name_after_a_tab_left_of_them_closes(self):
+        # Tabs [x.png, photo.png (the job's), photo.png (another)]; x.png closes mid-job, so
+        # the other photo.png takes the job's old index: the result still goes to the job's.
+        pc = self.pc
+        pc.docs.insert(0, pc._doc("x.png", (64, 48), [{"id": 90, "name": "X", "visible": True}]))
+        pc.docs.append(pc._doc("photo.png", (64, 48), [{"id": 91, "name": "Other", "visible": True}]))
+        pc.active = 1
+        image = self.bridge.track(self.bridge.active_image())
+        mine, other = pc.docs[1], pc.docs[2]
+        self.bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.bridge.insert_results(image, [png_bytes("red")], Rect(0, 0, 64, 48), "Fill", 0.0, None)
+        pc.docs.pop(0)  # the user closes x.png while the job runs
+        pc.active = 0
+        self.bridge.finish(image)
+        self.assertEqual(other["history"], ["Open"])
+        self.assertEqual(mine["history"], ["Open", "Duplicate Layer"])
+
+    def test_a_two_round_expand_that_fails_in_round_two_leaves_the_canvas(self):
+        # Round 2 reads the document, so round 1 (its layer and the bigger canvas) is in it
+        # already; a failure or Cancel in round 2 takes that back too.
+        bridge, target = self.bridge, self.target
+        bridge.export_region(self.image, Rect(-10, 0, 84, 48), transparent_outside=True)
+        bridge.resize_canvas(self.image, 84, 48, 10, 0)
+        bridge.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
+        bridge.export_region(self.image, Rect(-10, 0, 104, 48), transparent_outside=True)  # round 2 reads
+        self.assertEqual(target["size"], (84, 48))
+        bridge.discard(self.image)  # round 2 failed or was cancelled
+        self.assertEqual((target["size"], target["history"]), ((64, 48), ["Open"]))
+        self.assertEqual([r["name"] for r in target["layers"]], ["Background"])
+
+    def test_a_failed_expand_keeps_what_the_user_did_meanwhile(self):
+        bridge, target = self.bridge, self.target
+        bridge.export_region(self.image, Rect(-10, 0, 84, 48), transparent_outside=True)
+        bridge.resize_canvas(self.image, 84, 48, 10, 0)
+        bridge.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
+        bridge.export_region(self.image, Rect(-10, 0, 104, 48), transparent_outside=True)
+        self.pc.run("layer.setProps", layer=2, name="Renamed")  # the user, between the rounds
+        history = list(target["history"])
+        bridge.discard(self.image)
+        self.assertEqual(target["history"], history)  # nothing of theirs is undone
+
+    def test_a_finished_job_is_not_taken_back(self):
+        self.bridge.resize_canvas(self.image, 84, 48, 10, 0)
+        self.bridge.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
+        self.bridge.finish(self.image)
+        self.bridge.discard(self.image)  # what Service._job's finally does after every job
+        self.assertEqual(self.target["size"], (84, 48))
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer", "Crop"])
+
+    def test_the_same_mask_is_made_once_for_all_variations(self):
+        from openfill_photocraft import bridge as bridge_mod
+
+        self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        self.bridge.insert_results(
+            self.image,
+            [png_bytes("red"), png_bytes("blue"), png_bytes("green")],
+            Rect(0, 0, 64, 48),
+            "Fill",
+            6.0,
+            None,
+            grow=4,
+        )
+        with mock.patch.object(bridge_mod, "_grow", wraps=bridge_mod._grow) as grow:
+            self.bridge.finish(self.image)
+        self.assertEqual(grow.call_count, 1)
+        masks = [c["mask_pixels"] for c in self.pc.opened_psds[-1][0]["children"]]
+        self.assertEqual(len(set(masks)), 1)
+
+    def test_a_result_after_a_variations_group_lands_on_top_not_in_it(self):
+        self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        self.bridge.insert_results(
+            self.image, [png_bytes("red"), png_bytes("blue"), png_bytes("green")], Rect(0, 0, 64, 48), "Fill", 0.0, None
+        )
+        self.bridge.finish(self.image)
+        group = self.target["layers"][0]
+        self.assertEqual(len(group["children"]), 3)
+        self.pc.run("layer.select", layer=group["children"][0]["id"])  # what the picker leaves
+        self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        (layer,) = self.bridge.insert_results(self.image, [png_bytes("blue")], Rect(0, 0, 64, 48), "Next", 0.0, None)
+        self.bridge.finish(self.image)
+        self.assertEqual([r["name"] for r in self.target["layers"]], ["Next", "Fill", "Background"])
+        self.assertEqual(self.target["layers"][0]["id"], layer.id)
+        self.assertEqual(len(self.target["layers"][1]["children"]), 3)  # the group keeps its three
+        self.assertTrue(self.target["layers"][1]["expanded"])  # closed for the copy only
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer", "Duplicate Layer"])
+
+    def test_deep_documents_skip_the_tiff_reads(self):
+        pc, bridge, image = self._bridge("0.20.2")
+        pc.docs[0]["depth"] = 16
+        _png, raw = bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.assertEqual(raw[6 * 64 + 8], 255)
+        self.assertFalse(any(p.get("path", "").endswith(".tif") for _c, p in pc.calls))
+
+    # -- second review: the rollback never loses the user's history, and acts on the job's document only
+
+    def _with(self, actions=True):
+        """setUp's document again, on a PhotoCraft with or without actions."""
+        self.pc = FakePhotoCraft(self.exchange, actions=actions)
+        self.bridge = PhotoCraftBridge(self.pc, self.exchange, Path(self.tmp.name))
+        self.image = self.bridge.track(self.bridge.active_image())
+        self.target = self.pc.docs[0]
+
+    def _other_doc(self, steps=3):
+        """Another document of the user's, with ``steps`` history steps of its own."""
+        other = self.pc._doc("other.png", (64, 48), [{"id": 70, "name": "Mine", "visible": True}])
+        self.pc.docs.append(other)
+        for _ in range(steps):
+            other["before"] = other.get("before", {}) | {len(other["history"]): [dict(r) for r in other["layers"]]}
+            other["history"].append("Layer Properties")
+            other["revision"] += 1
+        return other
+
+    def _round_one_in(self):
+        """A 2-round expand with round 1 in the document (round 2's read commits it)."""
+        b = self.bridge
+        b.export_region(self.image, Rect(-10, 0, 84, 48), transparent_outside=True)
+        b.resize_canvas(self.image, 84, 48, 10, 0)
+        b.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
+        b.export_region(self.image, Rect(-10, 0, 104, 48), transparent_outside=True)
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer", "Crop"])
+
+    def _click_before(self, command, times=1000, where=1, then=None):
+        """The user clicks tab ``where`` right before each ``command`` OpenFill sends (``times``)."""
+        real_run, left = self.pc.run, [times]
+
+        def run(cmd, **params):
+            if cmd == command and left[0]:
+                left[0] -= 1
+                self.pc.active = where
+                if then:
+                    then()
+            return real_run(cmd, **params)
+
+        self.pc.run = run
+
+    def test_the_rollback_is_one_request_no_click_can_split(self):
+        # "Show the job's document" and the history move are played as one throwaway action.
+        other = self._other_doc()
+        self._round_one_in()
+        self._click_before("actions.play")  # every click lands just before the play
+        self.assertEqual(self.bridge.discard(self.image), "undone")
+        self.assertEqual((self.target["size"], self.target["history"]), ((64, 48), ["Open"]))
+        self.assertEqual(self.target["redo"], ["Duplicate Layer", "Crop"])  # moved, never deleted
+        self.assertEqual(other["history"], ["Open"] + ["Layer Properties"] * 3)
+        self.assertEqual(self.pc.actions, {})  # the throwaway action is gone
+        self.assertNotIn("history.deleteState", self.pc.commands())
+
+    def test_the_collapsed_step_is_selected_outside_an_action(self):
+        # PhotoCraft 0.20 names an edit played from an action "Action: <name>": the one step a
+        # job leaves is selected directly, so it carries the job's name.
+        self._round_one_in()
+        self.bridge.collapse(self.image, 1, "Generative Expand")
+        self.assertEqual(self.target["history"], ["Open", "Generative Expand"])
+        self.assertIn("history.selectSnapshot", self.pc.commands())
+        self.assertNotIn("history.selectSnapshot", [p["id"] for c, p in self.pc.calls if c == "actions.insert"])
+
+    def test_a_click_recorded_into_openfills_action_is_never_replayed(self):
+        other = self._other_doc()
+        self._round_one_in()
+        self.pc.recorded = [("document.activate", {"document": 1}), ("layer.setProps", {"layer": 70, "name": "x"})]
+        self.assertEqual(self.bridge.discard(self.image), "undone")
+        self.assertEqual(other["history"], ["Open"] + ["Layer Properties"] * 3)  # nothing replayed on it
+        self.assertEqual(self.pc.actions, {})
+
+    def test_without_actions_a_rollback_that_lands_elsewhere_is_put_back(self):
+        self._with(actions=False)
+        other = self._other_doc()
+        self._round_one_in()
+        self._click_before("history.selectState")  # the user keeps clicking their other tab
+        self.assertEqual(self.bridge.discard(self.image), "kept")  # said so, never "unchanged"
+        self.assertEqual(other["history"], ["Open"] + ["Layer Properties"] * 3)  # put back each time
+        self.assertNotIn("history.deleteState", self.pc.commands())
+
+    def test_without_actions_one_click_during_the_rollback_is_put_right(self):
+        self._with(actions=False)
+        other = self._other_doc()
+        self._round_one_in()
+        self._click_before("history.selectState", times=1)
+        self.assertEqual(self.bridge.discard(self.image), "undone")
+        self.assertEqual(other["history"], ["Open"] + ["Layer Properties"] * 3)
+        self.assertEqual((self.target["size"], self.target["history"]), ((64, 48), ["Open"]))
+
+    def test_a_step_of_the_users_between_the_jobs_steps_is_never_taken_back(self):
+        # The user adds a step while round 1's layer is copied in and before its crop: the
+        # job's steps are no longer the last ones together, so nothing is taken back.
+        self._click_before(
+            "actions.play", times=1, where=0, then=lambda: self.pc.run("layer.setProps", layer=2, name="x")
+        )
+        b = self.bridge
+        b.export_region(self.image, Rect(-10, 0, 84, 48), transparent_outside=True)
+        b.resize_canvas(self.image, 84, 48, 10, 0)
+        b.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
+        b.export_region(self.image, Rect(-10, 0, 104, 48), transparent_outside=True)
+        history = list(self.target["history"])
+        self.assertEqual(history, ["Open", "Duplicate Layer", "Layer Properties", "Crop"])
+        self.assertEqual(b.discard(self.image), "kept")
+        self.assertEqual(self.target["history"], history)
+
+    def test_rollback_never_undoes_a_same_labelled_step_of_the_users(self):
+        # The user undoes the job's Crop mid-job and crops the image themselves: the labels are
+        # the same, the revision is not, so nothing is taken back.
+        self._round_one_in()
+        doc = self.target
+        doc["history"].pop()  # Edit > Undo of the job's crop
+        doc["size"] = doc["sizes"][2]
+        doc["revision"] += 1
+        self.pc.run("image.crop", x=0, y=0, width=80, height=40)  # their own crop
+        self.assertEqual(self.bridge.discard(self.image), "kept")
+        self.assertEqual(doc["size"], (80, 40))
+
+    def test_rollback_never_deletes_a_step_made_after_the_check(self):
+        # A step of the user's that lands between the checks and the rollback is not deleted:
+        # it becomes a redo state with the job's, so Edit > Redo brings it back.
+        for actions in (True, False):
+            self._with(actions)
+            self._round_one_in()
+            command = "actions.play" if actions else "history.selectState"
+            self._click_before(command, times=1, where=0, then=lambda: self.pc.run("layer.setProps", layer=2, name="x"))
+            self.bridge.discard(self.image)
+            self.assertIn("Layer Properties", self.target["history"] + self.target.get("redo", []), actions)
+
+    def test_a_user_document_named_like_the_copy_is_never_closed(self):
+        real_run = self.pc.run
+
+        def run(command, **params):
+            out = real_run(command, **params)
+            if command == "image.duplicate":
+                name = self.pc.docs[-1]["name"]
+                theirs = self.pc._doc(name, (32, 32), [{"id": 80, "name": "their work", "visible": True}])
+                self.pc.docs.append(theirs)
+                self.pc.active = 1
+            return out
+
+        self.pc.run = run
+        with self.assertRaises(BridgeError):  # two tabs with OpenFill's name: hands off both
+            self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        self.assertIn("their work", [r["name"] for d in self.pc.docs for r in d["layers"]])
+
+    def test_a_click_right_before_the_crop_never_crops_another_document(self):
+        for actions in (True, False):
+            self._with(actions)
+            other = self._other_doc(0)
+            self.bridge.export_region(self.image, Rect(-10, 0, 84, 48), transparent_outside=True)
+            self.bridge.resize_canvas(self.image, 84, 48, 10, 0)
+            self.bridge.insert_results(
+                self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False
+            )
+            self._click_before("actions.play" if actions else "image.crop", times=1)
+            self.bridge.finish(self.image)  # the crop lands on the job's document all the same
+            self.assertEqual((other["size"], other["history"]), ((64, 48), ["Open"]), actions)
+            self.assertEqual(self.target["size"], (84, 48), actions)
+
+    def test_a_crop_that_keeps_landing_elsewhere_stops_and_leaves_that_image_as_it_was(self):
+        self._with(actions=False)
+        other = self._other_doc(0)
+        self.bridge.export_region(self.image, Rect(-10, 0, 84, 48), transparent_outside=True)
+        self.bridge.resize_canvas(self.image, 84, 48, 10, 0)
+        self.bridge.insert_results(self.image, [png_bytes("red", (84, 48))], Rect(0, 0, 84, 48), "E", 0.0, None, False)
+        self._click_before("image.crop")
+        with self.assertRaises(BridgeError):  # it stops, and says why
+            self.bridge.finish(self.image)
+        self.assertEqual((other["size"], other["history"]), ((64, 48), ["Open"]))
+
+    def test_a_picture_read_from_another_tab_is_noticed_and_read_again(self):
+        # The user's other tab comes to the front just before the copy is saved, and the copy's
+        # tab just after: the check around the save passes. The selection's file, which holds
+        # the copy's own channel, shows the picture was another image's: it is read again.
+        pc, bridge, image = self._bridge("0.20.2")
+        other = pc._doc("other.png", (64, 48), [{"id": 70, "name": "Mine", "visible": True}])
+        other["colour"] = (0, 128, 128)
+        pc.docs.insert(1, other)
+        real_call, flips = pc.call, [1]
+
+        def call(method, **params):
+            if method == "app.save" and "visible" in params["path"] and flips:
+                flips.pop()
+                copy = pc.active
+                pc.active = 1  # their other image
+                out = real_call(method, **params)
+                pc.active = copy  # and the copy again before OpenFill looks
+                return out
+            return real_call(method, **params)
+
+        pc.call = call
+        _png, flat = bridge.export_region(image, Rect(0, 0, 64, 48))
+        bridge.export_selection_mask(image, Rect(0, 0, 64, 48))
+        self.assertEqual(flat[:3], bytes((200, 200, 200)))  # the job's picture, not theirs
+        self.assertFalse(flips)
+
+    def test_the_page_says_what_a_failed_rollback_left(self):
+        from openfill_photocraft.service import JobState, Service
+
+        service = Service.__new__(Service)
+        service.state = JobState()
+        for outcome, expected in (
+            ("undone", "Cancelled - the image was left unchanged."),
+            ("", "Cancelled - the image was left unchanged."),
+        ):
+            service.state.state, service.state.message = "cancelled", "Cancelled - the image was left unchanged."
+            service._say_what_is_left(outcome)
+            self.assertEqual(service.state.message, expected)
+        service._say_what_is_left("kept")
+        self.assertEqual(
+            service.state.message,
+            "Cancelled. What OpenFill had already added is still in the image: Edit > Undo takes it back.",
+        )
+        service.state.state, service.state.message = "error", "ComfyUI stopped."
+        service._say_what_is_left("kept")
+        self.assertTrue(service.state.message.startswith("ComfyUI stopped. What OpenFill had already added"))
+
+    def test_a_copy_photocraft_could_not_close_is_closed_next_time(self):
+        real_run, refused = self.pc.run, []
+
+        def run(command, **params):
+            if command == "file.close" and not refused:
+                refused.append(1)
+                raise control.ControlError("engine.execute: unavailable while a modal dialog is open")
+            return real_run(command, **params)
+
+        self.pc.run = run
+        notes = []
+        self.bridge.notify = notes.append
+        self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        self.assertEqual(len(self.pc.docs), 2)  # the copy is still open (the dialog)
+        self.assertTrue(notes and "temporary document" in notes[0])
+        self.bridge.insert_results(self.image, [png_bytes("red")], Rect(0, 0, 64, 48), "Fill", 0.0, None)
+        self.image._snapshot = None
+        self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))  # the next read closes it
+        self.assertEqual([d["name"] for d in self.pc.docs], ["photo.png"])
+
+    def test_older_photocraft_never_tries_the_tiff(self):
+        _png, raw = self.bridge.export_selection_mask(self.image, Rect(0, 0, 64, 48))
+        self.assertEqual(raw[6 * 64 + 8], 255)
+        self.assertFalse(any(p.get("path", "").endswith(".tif") for _c, p in self.pc.calls))
 
     def test_a_cancelled_job_leaves_nothing(self):
         self.bridge.insert_results(self.image, [png_bytes("red")], Rect(0, 0, 64, 48), "Fill", 0.0, None)
@@ -672,6 +1346,73 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(bridge.open_file(str(picture))["name"], "holiday.png")
         with self.assertRaises(BridgeError):
             bridge.open_file("/etc/hostname")
+
+
+class PsdTests(unittest.TestCase):
+    def test_layers_masks_names_and_groups_survive(self):
+        from openfill_photocraft import psd
+
+        red, blue = bytes((255, 0, 0, 255)) * 6, bytes((0, 0, 255, 128)) * 4
+        data = psd.encode(
+            10,
+            8,
+            [
+                psd.PsdLayer(
+                    "Fill",
+                    children=[
+                        psd.PsdLayer("Fill (1) é", 1, 2, 3, 2, red, True, (0, 1, 4, 3, bytes(range(12)))),
+                        psd.PsdLayer("Fill (2)", -2, 0, 2, 2, blue, False),
+                    ],
+                ),
+                psd.PsdLayer("Below", 0, 0, 2, 2, blue),
+            ],
+        )
+        size, rows = read_psd(data)
+        self.assertEqual(size, (10, 8))
+        self.assertEqual([r["name"] for r in rows], ["Fill", "Below"])
+        first, second = rows[0]["children"]
+        self.assertEqual((first["name"], first["visible"], first["rect"]), ("Fill (1) é", True, (1, 2, 3, 2)))
+        self.assertEqual((first["mask_rect"], first["mask_pixels"]), ((0, 1, 4, 3), bytes(range(12))))
+        self.assertEqual(first["alpha"], bytes([255]) * 6)
+        self.assertEqual((second["visible"], second["rect"], "mask" in second), (False, (-2, 0, 2, 2), False))
+        self.assertEqual(len(data) % 2, 0)
+        with self.assertRaises(ValueError):
+            psd.encode(4, 4, [psd.PsdLayer("x", 0, 0, 2, 2, b"short")])
+
+    def test_written_to_a_file_it_is_the_same_psd(self):
+        from openfill_photocraft import psd
+
+        layers = [psd.PsdLayer("A", 0, 0, 3, 2, bytes(range(24)), True, (0, 0, 3, 2, bytes(6)))]
+        out = io.BytesIO()
+        psd.write(out, 5, 4, layers)
+        self.assertEqual(out.getvalue(), psd.encode(5, 4, layers))
+        self.assertEqual(read_psd(out.getvalue())[1][0]["alpha"], bytes(range(3, 24, 4)))
+
+    def test_grow_is_fast_on_a_big_picture(self):
+        import time
+
+        from openfill_photocraft.bridge import _grow
+
+        big = Image.new("L", (6000, 4000), 0)
+        big.paste(255, (400, 400, 5600, 3600))
+        start = time.monotonic()
+        grown = _grow(big, 48)
+        self.assertLess(time.monotonic() - start, 5.0)  # about 0.5 s here; it was 16 s
+        self.assertEqual(grown.getpixel((352, 2000)), 255)  # straight out: the full radius
+        self.assertEqual(grown.getpixel((340, 2000)), 0)
+
+    def test_grow_is_round_and_stays_inside_the_canvas(self):
+        from openfill_photocraft.bridge import _grow
+
+        mask = Image.new("L", (40, 40), 0)
+        mask.paste(255, (18, 18, 22, 22))
+        grown = _grow(mask, 6)
+        self.assertEqual(grown.getbbox(), (12, 12, 28, 28))
+        self.assertEqual(grown.getpixel((12, 20)), 255)  # straight out: the full radius
+        self.assertEqual(grown.getpixel((12, 12)), 0)  # the corner is cut: not a square
+        edge = Image.new("L", (10, 10), 0)
+        edge.paste(255, (0, 0, 2, 2))
+        self.assertEqual(_grow(edge, 3).getbbox(), (0, 0, 5, 5))
 
 
 class MenuTests(unittest.TestCase):
@@ -697,28 +1438,73 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(menu._sleb(-1), b"\x7f")
         self.assertEqual(menu._sleb(64), b"\xc0\x00")
 
-    def test_watcher_reports_a_pick_and_removes_its_step(self):
-        from openfill_photocraft import menu
+    class _MenuPhotoCraft:
+        """Two documents, the active one with OpenFill's menu step on top; PhotoCraft's history
+        moves (selectState, with redo states), actions played in one go, and hooks to play the
+        user: ``before_play`` runs right before an action plays."""
 
-        state = {"history": ["Open", "Rectangular Marquee", "OpenFill"], "revision": 3}
+        def __init__(self):
+            self.docs = [
+                {"name": "a.png", "history": ["Open", "Rectangular Marquee", "OpenFill"], "redo": [], "revision": 3},
+                {"name": "b.png", "history": ["Open", "New Layer", "New Layer"], "redo": [], "revision": 7},
+            ]
+            self.active, self.actions, self.recording, self.before_play = 0, {}, None, None
+            self.commands = []
 
-        class Client:
-            def call(self, method, **params):
-                return {
-                    "session": {
-                        "active": 0,
-                        "documents": [{"index": 0, "name": "a.png", "revision": state["revision"]}],
-                    }
+        def call(self, method, **params):
+            return {
+                "session": {
+                    "active": self.active,
+                    "documents": [
+                        {"index": i, "name": d["name"], "revision": d["revision"]} for i, d in enumerate(self.docs)
+                    ],
                 }
+            }
 
-            def run(self, command, **params):
-                if command == "history.deleteState":
-                    del state["history"][params["state"] :]
-                    state["revision"] += 1
-                    return {}
+        def run(self, command, **params):
+            self.commands.append(command)
+            if command == "actions.list":
+                return {"actions": [{"name": n} for n in self.actions], "recording": self.recording}
+            if command == "actions.record":
+                self.actions[params["name"]] = []
+                return {}
+            if command == "actions.stop":
+                return {"steps": 0}
+            if command == "actions.insert":
+                self.actions[params["action"]].append((params["id"], params["params"]))
+                return {}
+            if command == "actions.delete":
+                self.actions.pop(params["action"], None)
+                return {}
+            if command == "actions.play":
+                if self.before_play:
+                    self.before_play()
+                for step, step_params in self.actions[params["action"]]:
+                    self._engine(step, step_params)
+                return {"ran": 2}
+            if command == "history.deleteState":
+                raise AssertionError("history.deleteState can't be undone: never used")
+            return self._engine(command, params)
+
+        def _engine(self, command, params):
+            doc = (
+                self.docs[params.get("document", self.active)]
+                if command == "document.inspect"
+                else self.docs[self.active]
+            )
+            if command == "document.activate":
+                self.active = params["document"]
+                return {}
+            if command == "history.selectState":
+                full = doc["history"] + doc["redo"]
+                k = params["state"]
+                doc["history"], doc["redo"] = full[: k + 1], full[k + 1 :]
+                doc["revision"] += 1
+                return {}
+            if command == "document.inspect":
                 return {
-                    "history": list(state["history"]),
-                    "revision": state["revision"],
+                    "history": list(doc["history"]),
+                    "revision": doc["revision"],
                     "width": 10,
                     "height": 8,
                     "hasSelection": True,
@@ -726,14 +1512,72 @@ class MenuTests(unittest.TestCase):
                     "layers": [],
                     "activeLayer": None,
                 }
+            raise AssertionError(command)
 
+    def test_watcher_reports_a_pick_and_removes_its_step(self):
+        from openfill_photocraft import menu
+
+        pc = self._MenuPhotoCraft()
         picks = []
-        watcher = menu.Watcher(Client(), picks.append)
+        watcher = menu.Watcher(pc, picks.append)
         self.assertEqual(watcher.poll(), "panel")
         self.assertEqual(picks, ["panel"])
-        self.assertEqual(state["history"], ["Open", "Rectangular Marquee"])
+        a, b = pc.docs
+        self.assertEqual((a["history"], a["redo"]), (["Open", "Rectangular Marquee"], ["OpenFill"]))  # never deleted
+        self.assertEqual(b["history"], ["Open", "New Layer", "New Layer"])
+        self.assertEqual(pc.actions, {})  # the throwaway action is gone
         self.assertEqual(watcher.snapshot()["selection"], [1, 2, 3, 4])
         self.assertIsNone(watcher.poll())  # nothing new
+
+    def test_a_tab_click_during_a_menu_pick_never_touches_another_document(self):
+        from openfill_photocraft import menu
+
+        # the click lands right before the one request: it shows the menu's document again and
+        # moves its history; the other document is not touched
+        pc = self._MenuPhotoCraft()
+        pc.before_play = lambda: setattr(pc, "active", 1)
+        self.assertEqual(menu.Watcher(pc, lambda _a: None).poll(), "panel")
+        a, b = pc.docs
+        self.assertEqual(a["history"], ["Open", "Rectangular Marquee"])
+        self.assertEqual((b["history"], b["redo"], b["revision"]), (["Open", "New Layer", "New Layer"], [], 7))
+
+        # the other tab is in front before the last look: the step stays where it is
+        pc = self._MenuPhotoCraft()
+        real_run = pc.run
+
+        def run(command, **params):
+            if command == "actions.insert" and params["id"] == "history.selectState":
+                pc.active = 1
+            return real_run(command, **params)
+
+        pc.run = run
+        self.assertEqual(menu.Watcher(pc, lambda _a: None).poll(), "panel")  # still reported
+        a, b = pc.docs
+        self.assertEqual(a["history"], ["Open", "Rectangular Marquee", "OpenFill"])
+        self.assertEqual((b["history"], b["revision"]), (["Open", "New Layer", "New Layer"], 7))
+        self.assertEqual(pc.actions, {})
+
+    def test_a_menu_step_is_left_when_the_document_changed_or_an_action_records(self):
+        from openfill_photocraft import menu
+
+        pc = self._MenuPhotoCraft()
+        real_run = pc.run
+
+        def run(command, **params):  # the user's own step lands after the first look
+            if command == "actions.record":
+                pc.docs[0]["history"].append("Brush Tool")
+                pc.docs[0]["revision"] += 1
+            return real_run(command, **params)
+
+        pc.run = run
+        menu.Watcher(pc, lambda _a: None).poll()
+        self.assertEqual(pc.docs[0]["history"], ["Open", "Rectangular Marquee", "OpenFill", "Brush Tool"])
+
+        pc = self._MenuPhotoCraft()
+        pc.recording = "Their action"
+        menu.Watcher(pc, lambda _a: None).poll()
+        self.assertEqual(pc.docs[0]["history"], ["Open", "Rectangular Marquee", "OpenFill"])
+        self.assertNotIn("actions.record", pc.commands)
 
 
 class InstallTests(unittest.TestCase):
