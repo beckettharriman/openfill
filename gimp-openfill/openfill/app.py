@@ -1589,8 +1589,11 @@ class App:
             )
         entry, model = self.resolve_model(entry.id)
         full = self.io.image_rect(image)
-        image_png, _ = self.io.export_region(image, full)
-        mask_png = png.encode(full.width, full.height, b"\xff" * (full.width * full.height), 1)
+        # The model reads the image flattened over its mean colour; the image's own alpha goes
+        # as the mask file, so the cutout is never more opaque than the original.
+        _, rgba = self.io.export_region(image, full, keep_alpha=True)
+        image_png = png.encode(full.width, full.height, geometry.flatten_over_mean(rgba), 4)
+        mask_png = png.encode(full.width, full.height, rgba[3::4], 1)
         request = InpaintRequest(
             image_png=image_png,
             mask_png=mask_png,
