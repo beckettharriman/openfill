@@ -882,8 +882,9 @@ def build_bgremove(
     filename_prefix: str = "openfill/bgremove",
 ) -> dict:
     """Remove Background with BiRefNet (ComfyUI's own nodes, v0.39 and newer): the whole image
-    goes in, a PNG with the background made transparent comes out. The mask file and the seed
-    are not used (the model is deterministic and needs no selection)."""
+    goes in, a PNG with the background made transparent comes out. The mask file carries the
+    image's own alpha (255 where it is opaque), so the cutout is never more opaque than the
+    original. The seed is not used (the model is deterministic)."""
     if not caps.bg_removal:
         raise ValueError("Remove Background needs ComfyUI 0.39 or newer (the RemoveBackground node)")
     if not req.model.bg_removal_model:
@@ -892,8 +893,19 @@ def build_bgremove(
     g.add("load_image", "LoadImage", image=image_ref)
     g.add("bg_model", "LoadBackgroundRemovalModel", bg_removal_name=req.model.bg_removal_model)
     g.add("foreground", "RemoveBackground", bg_removal_model=g.out("bg_model"), image=g.out("load_image", 0))
-    # JoinImageWithAlpha reads its mask as transparency, so the foreground mask is inverted first
-    g.add("transparency", "InvertMask", mask=g.out("foreground"))
+    g.add("load_alpha", "LoadImage", image=mask_ref)
+    g.add("alpha", "ImageToMask", image=g.out("load_alpha", 0), channel="red")
+    g.add(
+        "opacity",
+        "MaskComposite",
+        destination=g.out("foreground"),
+        source=g.out("alpha"),
+        x=0,
+        y=0,
+        operation="multiply",
+    )
+    # JoinImageWithAlpha reads its mask as transparency, so the opacity is inverted first
+    g.add("transparency", "InvertMask", mask=g.out("opacity"))
     g.add("cutout", "JoinImageWithAlpha", image=g.out("load_image", 0), alpha=g.out("transparency"))
     g.add(OUTPUT_NODE, "SaveImage", images=g.out("cutout"), filename_prefix=filename_prefix)
     return g.to_dict()

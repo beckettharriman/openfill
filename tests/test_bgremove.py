@@ -91,6 +91,8 @@ class GraphTests(unittest.TestCase):
                 "LoadImage",
                 "LoadBackgroundRemovalModel",
                 "RemoveBackground",
+                "ImageToMask",
+                "MaskComposite",
                 "InvertMask",
                 "JoinImageWithAlpha",
                 "SaveImage",
@@ -100,15 +102,21 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(graph["load_image"]["inputs"]["image"], "img.png")
         self.assertEqual(graph["foreground"]["inputs"]["bg_removal_model"], ["bg_model", 0])
         self.assertEqual(graph["foreground"]["inputs"]["image"], ["load_image", 0])
-        self.assertEqual(graph["transparency"]["inputs"]["mask"], ["foreground", 0])
+        self.assertEqual(graph["transparency"]["inputs"]["mask"], ["opacity", 0])
         self.assertEqual(graph["cutout"]["inputs"]["alpha"], ["transparency", 0])
         self.assertEqual(graph["cutout"]["inputs"]["image"], ["load_image", 0])
         self.assertEqual(graph[w.OUTPUT_NODE]["inputs"]["images"], ["cutout", 0])
         self.assertEqual(graph[w.OUTPUT_NODE]["inputs"]["filename_prefix"], "openfill/bgremove-x")
 
-    def test_the_mask_file_is_not_loaded(self):
-        graph = w.build_fill(request(), "img.png", "mask.png", 0, self.CAPS)
-        self.assertNotIn("mask.png", repr(graph))
+    def test_the_cutout_is_never_more_opaque_than_the_image(self):
+        graph = w.build_fill(request(), "img.png", "alpha.png", 0, self.CAPS)
+        self.assertEqual(graph["load_alpha"]["inputs"]["image"], "alpha.png")
+        self.assertEqual(graph["alpha"]["inputs"]["image"], ["load_alpha", 0])
+        self.assertEqual(graph["alpha"]["inputs"]["channel"], "red")
+        opacity = graph["opacity"]["inputs"]
+        self.assertEqual(opacity["operation"], "multiply")
+        self.assertEqual(opacity["destination"], ["foreground", 0])
+        self.assertEqual(opacity["source"], ["alpha", 0])
 
     def test_old_server_gets_a_clear_message(self):
         with self.assertRaisesRegex(ValueError, "ComfyUI 0.39"):

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Fixed in OpenFill for PhotoCraft 0.2.6: on Windows the installer said PhotoCraft is not installed when PhotoCraft 0.17 or newer was installed just for you.
+- Remove Background (Cutout tab): images that already have transparency keep it. The cutout is never more opaque than the original, so see-through areas such as glass or a soft shadow stay see-through.
 
 ## [2.0.0-beta.7] - 2026-11-08
 
