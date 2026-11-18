@@ -6,5 +6,6 @@
 from .a1111 import A1111Backend
 from .cloud import CloudBackend
 from .comfy import ComfyBackend
+from .gemini import GeminiBackend, GeminiCredentials
 
-__all__ = ["A1111Backend", "CloudBackend", "ComfyBackend"]
+__all__ = ["A1111Backend", "CloudBackend", "ComfyBackend", "GeminiBackend", "GeminiCredentials"]
