@@ -251,9 +251,7 @@ class SeamCorrectionTest(unittest.TestCase):
         original = _sky(self.W, self.H)
         layer = _sky(self.W, self.H, tint=(36, -28, 32), box=self.SEL)
         mask = _rect_mask(self.W, self.H, self.SEL)
-        field = quality.seam_field(
-            self.W, self.H, original, layer, mask, 4, band=8, side=self.W, inside_band=16
-        )
+        field = quality.seam_field(self.W, self.H, original, layer, mask, 4, band=8, side=self.W, inside_band=16)
         self.assertIsNotNone(field)
         fixed = quality.apply_seam_field(layer, self.W, self.H, 4, field)
         for x, y in ((55, 45), (80, 60), (105, 75)):

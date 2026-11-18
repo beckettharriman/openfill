@@ -424,11 +424,7 @@ def seam_field(
         if spread > SEAM_MAX_SPREAD or max(abs(m) for m in meds) > SEAM_MAX_OFFSET:
             continue
         known.append((key % gw + 0.5, key // gw + 0.5, meds))
-    if (
-        not known
-        or len(known) * 4 < eligible
-        or max(max(abs(m) for m in k[2]) for k in known) < SEAM_MIN_OFFSET
-    ):
+    if not known or len(known) * 4 < eligible or max(max(abs(m) for m in k[2]) for k in known) < SEAM_MIN_OFFSET:
         return None
     # Cells the layer shows (inside the selection or within reach of it); the rest stays at zero.
     shown = [False] * (gw * gh)

@@ -3179,10 +3179,7 @@ console.log(JSON.stringify(out));
             self.assertTrue(out2["cloud_key_saved"])
             self.assertEqual(out2["cloud_key_env"], "GEMINI_API_KEY")
             dumped2 = (
-                json.dumps(out2)
-                + json.dumps(api.settings())
-                + json.dumps(api.state())
-                + self.config.read_text("utf-8")
+                json.dumps(out2) + json.dumps(api.settings()) + json.dumps(api.state()) + self.config.read_text("utf-8")
             )
             self.assertNotIn(env_key, dumped2)
 

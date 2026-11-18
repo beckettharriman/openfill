@@ -491,9 +491,7 @@ class EngineView(tk.Frame):
         box.pack(fill="x", pady=(12, 0))
         box, self.url = field(parent, "Address", lambda b: ui.Field(b, CW))
         box.pack(fill="x", pady=(12, 0))
-        self._url_hint = ui.small(
-            parent, "Empty model or address: the service's own. For LiteLLM, its /v1 address."
-        )
+        self._url_hint = ui.small(parent, "Empty model or address: the service's own. For LiteLLM, its /v1 address.")
         self._url_hint.pack(fill="x", pady=(6, 0))
         self.mask_box, self.mask_mode = field(
             parent, "Mask method", lambda b: ui.Seg(b, ui_text.CLOUD_MASK_MODES, None, CW, 12)

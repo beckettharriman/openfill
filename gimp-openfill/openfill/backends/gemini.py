@@ -445,9 +445,7 @@ class GeminiBackend(CloudBackend):
         if candidates is None or not isinstance(candidates, list):
             raise self._malformed("its candidates are missing or not a list")
         if not candidates:
-            raise CloudRefused(
-                f"{self.where} returned no image for this request. Try a different prompt or model."
-            )
+            raise CloudRefused(f"{self.where} returned no image for this request. Try a different prompt or model.")
         cand = candidates[0]
         if not isinstance(cand, dict):
             raise self._malformed("a candidate entry is not an object")
@@ -515,9 +513,7 @@ class GeminiBackend(CloudBackend):
         count: int,
     ) -> tuple[Callable[[], list[bytes]], int, str]:
         effective_mode = (
-            "overlay"
-            if self.mask_mode == "overlay" or model_info(self.model).max_input_images < 2
-            else "second_image"
+            "overlay" if self.mask_mode == "overlay" or model_info(self.model).max_input_images < 2 else "second_image"
         )
         full_prompt = gemini_instruction(mode, prompt, negative, effective_mode)
         if effective_mode == "overlay":
