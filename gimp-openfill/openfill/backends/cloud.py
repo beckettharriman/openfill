@@ -780,7 +780,9 @@ class CloudBackend(Backend):
             self.api,
         )
 
-    def _txt2img_call(self, prompt: str, negative: str, ratio: str, count: int) -> tuple[Callable[[], list[bytes]], int]:
+    def _txt2img_call(
+        self, prompt: str, negative: str, ratio: str, count: int
+    ) -> tuple[Callable[[], list[bytes]], int]:
         full_prompt = prompt.strip() + (f" Avoid: {negative.strip()}." if negative.strip() else "")
         if self.provider.id == "openai":
             return lambda: self._openai_generate(full_prompt, ratio, count), 1

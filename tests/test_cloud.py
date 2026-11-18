@@ -1558,7 +1558,11 @@ class GeminiBackendTests(CloudTestCase):
         req, _rgba, _mask = inpaint_request()
         # Transient 429 then 503 then 200 -> succeeds on 3rd attempt
         attempts = [
-            (429, {"Retry-After": "0.01"}, {"error": {"code": 429, "message": "slow down", "status": "RESOURCE_EXHAUSTED"}}),
+            (
+                429,
+                {"Retry-After": "0.01"},
+                {"error": {"code": 429, "message": "slow down", "status": "RESOURCE_EXHAUSTED"}},
+            ),
             (503, {}, {"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}}),
             (200, {}, gemini_response([solid_png(30, 20, (5, 6, 7, 255))])),
         ]
@@ -1574,12 +1578,26 @@ class GeminiBackendTests(CloudTestCase):
 
         # No-retry cases: 400 API_KEY_INVALID, 400 generic, 401, 403, 404, 429 zero quota, 504 timeout
         no_retry = [
-            (400, {"error": {"code": 400, "message": f"API key not valid {GEMINI_KEY}", "details": [{"reason": "API_KEY_INVALID"}]}}, CloudAuthError),
+            (
+                400,
+                {
+                    "error": {
+                        "code": 400,
+                        "message": f"API key not valid {GEMINI_KEY}",
+                        "details": [{"reason": "API_KEY_INVALID"}],
+                    }
+                },
+                CloudAuthError,
+            ),
             (400, {"error": {"code": 400, "message": "Invalid argument"}}, CloudRefused),
             (401, {"error": {"code": 401, "message": "Unauthorized"}}, CloudAuthError),
             (403, {"error": {"code": 403, "message": "Forbidden"}}, CloudRefused),
             (404, {"error": {"code": 404, "message": "Not found"}}, CloudRefused),
-            (429, {"error": {"code": 429, "message": "Quota exceeded for quota metric 'Requests', limit: 0"}}, CloudCreditsError),
+            (
+                429,
+                {"error": {"code": 429, "message": "Quota exceeded for quota metric 'Requests', limit: 0"}},
+                CloudCreditsError,
+            ),
             (504, {"error": {"code": 504, "message": "Deadline exceeded"}}, CloudTimeout),
         ]
         for code, payload, exc_cls in no_retry:

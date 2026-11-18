@@ -517,7 +517,11 @@ CLOUD_COST = "Each picture is billed to your account with the service."
 CLOUD_SETUP_BUTTON = "Use a cloud service instead..."
 CLOUD_SETUP_LINE = "No suitable graphics card? A paid cloud service can do the work. Your images are then sent to it."
 CLOUD_PROVIDERS = (("openrouter", "OpenRouter"), ("openai", "OpenAI-compatible (OpenAI, LiteLLM, ...)"))
-PHOTOCRAFT_CLOUD_PROVIDERS = (("openrouter", "OpenRouter"), ("openai", "OpenAI-compatible"), ("gemini", "Google Gemini"))
+PHOTOCRAFT_CLOUD_PROVIDERS = (
+    ("openrouter", "OpenRouter"),
+    ("openai", "OpenAI-compatible"),
+    ("gemini", "Google Gemini"),
+)
 CLOUD_MASK_MODES = (("second_image", "Second image"), ("overlay", "Overlay"))
 
 

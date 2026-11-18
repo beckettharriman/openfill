@@ -7,9 +7,9 @@ Subclasses :class:`~openfill.backends.cloud.CloudBackend` to reuse its threading
 cancellation, timeout deadline, size capping, strict pixel-mask compositing, and
 URL validation while speaking Google Gemini's ``generateContent`` JSON protocol.
 
-The API key is read from ``GEMINI_API_KEY`` (falling back to ``GOOGLE_API_KEY``) or
-an optional session-only in-memory key held by :class:`GeminiCredentials`. It is
-sent only in the ``x-goog-api-key`` header and never written to disk or logs.
+The API key is read from ``config.json`` (bound to Gemini and its endpoint) or from
+``GEMINI_API_KEY`` / ``GOOGLE_API_KEY`` via :class:`GeminiCredentials`. It is sent
+only in the ``x-goog-api-key`` header and never written to logs.
 """
 
 from __future__ import annotations
@@ -514,7 +514,11 @@ class GeminiBackend(CloudBackend):
         pad: imaging.Padding,
         count: int,
     ) -> tuple[Callable[[], list[bytes]], int, str]:
-        effective_mode = "overlay" if self.mask_mode == "overlay" or model_info(self.model).max_input_images < 2 else "second_image"
+        effective_mode = (
+            "overlay"
+            if self.mask_mode == "overlay" or model_info(self.model).max_input_images < 2
+            else "second_image"
+        )
         full_prompt = gemini_instruction(mode, prompt, negative, effective_mode)
         if effective_mode == "overlay":
             inputs = [imaging.mask_overlay(sent, sent_mask)]
@@ -526,7 +530,9 @@ class GeminiBackend(CloudBackend):
             f"generateContent ({effective_mode})",
         )
 
-    def _txt2img_call(self, prompt: str, negative: str, ratio: str, count: int) -> tuple[Callable[[], list[bytes]], int]:
+    def _txt2img_call(
+        self, prompt: str, negative: str, ratio: str, count: int
+    ) -> tuple[Callable[[], list[bytes]], int]:
         full_prompt = prompt.strip() + (f" Avoid: {negative.strip()}." if negative.strip() else "")
         return lambda: self._generate_variations(full_prompt, [], ratio, count), count
 
@@ -607,7 +613,9 @@ class GeminiBackend(CloudBackend):
         try:
             self._check_ready()
             limit = min(HEALTH_TIMEOUT, self.request_timeout)
-            self._run("Checking", lambda: self._send("GET", self._model_path(), None, "", limit), None, None, limit=limit)
+            self._run(
+                "Checking", lambda: self._send("GET", self._model_path(), None, "", limit), None, None, limit=limit
+            )
             return HealthStatus(True, f"{self.where} accepted the key. Model: {self.model}", device_kind="cloud")
         except CloudError as err:
             return HealthStatus(False, str(err))
