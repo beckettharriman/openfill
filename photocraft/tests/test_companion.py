@@ -3077,6 +3077,10 @@ console.log(JSON.stringify(out));
             ["openrouter", "https://eu.openrouter.ai/api/v1"],
             ["openai", "https://user:hunter2@LLM.example.com:8443/v1"],
             ["openai", "http://localhost:4000/v1"],
+            ["gemini", ""],
+            ["gemini", "https://evilgenerativelanguage.googleapis.com/v1beta"],
+            ["gemini", "https://generativelanguage.googleapis.com/v1beta"],
+            ["gemini", "http://localhost:8000/v1beta"],
         ]
         run = subprocess.run(
             ["node", "-e", script, str(page), json.dumps(cases)], capture_output=True, text=True, timeout=30
@@ -3129,6 +3133,101 @@ console.log(JSON.stringify(out));
             root.destroy()
             from openfill_photocraft import ui
 
+            ui.FONTS = None  # the fonts belonged to this root; the next test makes its own
+
+    def test_gemini_settings_api_never_returns_or_persists_key(self):
+        env_key = "AIzaSyEnvFakeKey0000111122223333"
+        session_key = "AIzaSySessionFakeKey000011112222"
+        api, _warmed = self.api()
+
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}):
+            with self.assertRaises(ValueError) as caught:
+                api.post("/api/settings", {"backend": "cloud", "cloud_provider": "gemini"})
+            self.assertIn("GEMINI_API_KEY", str(caught.exception))
+
+            out = api.post(
+                "/api/settings",
+                {
+                    "backend": "cloud",
+                    "cloud_provider": "gemini",
+                    "cloud_api_key": session_key,
+                    "cloud_mask_mode": "overlay",
+                    "request_timeout": 90,
+                },
+            )
+            self.assertEqual(out["cloud_provider"], "gemini")
+            self.assertEqual(out["cloud_mask_mode"], "overlay")
+            self.assertEqual(out["request_timeout"], 90)
+            self.assertTrue(out["cloud_key_saved"])
+            self.assertTrue(out["cloud_key_session"])
+            self.assertEqual(out["cloud_key_env"], "")
+            self.assertFalse(out["cloud_key_elsewhere"])
+
+            state = api.state()
+            self.assertEqual(state["cloud"]["note"], "Cloud: your image is sent to Google Gemini.")
+            self.assertTrue(state["cloud"]["key"])
+            dumped = json.dumps(out) + json.dumps(api.settings()) + json.dumps(state) + self.config.read_text("utf-8")
+            self.assertNotIn(session_key, dumped)
+
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": env_key, "GOOGLE_API_KEY": ""}):
+            out2 = api.post("/api/settings", {"backend": "cloud", "cloud_provider": "gemini"})
+            self.assertTrue(out2["cloud_key_saved"])
+            self.assertEqual(out2["cloud_key_env"], "GEMINI_API_KEY")
+            dumped2 = (
+                json.dumps(out2)
+                + json.dumps(api.settings())
+                + json.dumps(api.state())
+                + self.config.read_text("utf-8")
+            )
+            self.assertNotIn(env_key, dumped2)
+
+    def test_engine_view_gemini_ui_rules(self):
+        try:
+            import tkinter as tk
+
+            root = tk.Tk()
+        except Exception:  # noqa: BLE001 - no Tk or no display
+            self.skipTest("no display")
+        from types import SimpleNamespace
+
+        from openfill_photocraft.panels import EngineView
+
+        try:
+            picked = []
+            bar = SimpleNamespace(
+                root=root,
+                host="PhotoCraft",
+                service=SimpleNamespace(app=self.app),
+                call_soon=lambda fn, *a: fn(*a),
+                pick_variations=picked.append,
+            )
+            view = EngineView(bar, root)
+            view.pack()
+            with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "AIzaSyEnvFakeKey0000111122223333"}):
+                self.app.settings.backend = "cloud"
+                self.app.settings.set_cloud("gemini", "", "", "", "second_image")
+                view.load_backend(self.app.settings)
+                view._cloud_changed("gemini")
+                root.update()
+
+                self.assertEqual(picked, [1])
+                self.assertTrue(view.mask_box.winfo_ismapped())
+                hint = view.key_hint.cget("text")
+                self.assertNotIn("settings file", hint.lower())
+                self.assertIn("GEMINI_API_KEY", hint)
+                self.assertIn("GEMINI_API_KEY", view.key.placeholder)
+                self.assertEqual(view.key.get(), "")
+                self.assertEqual(view.note.cget("text"), "Cloud: your image is sent to Google Gemini.")
+
+                view.provider.invoke("openrouter")
+                root.update()
+                self.assertFalse(view.mask_box.winfo_ismapped())
+                self.assertIn("settings file", view.key_hint.cget("text").lower())
+        finally:
+            root.destroy()
+            from openfill_photocraft import ui
+
+            ui._cache.clear()
             ui.FONTS = None  # the fonts belonged to this root; the next test makes its own
 
 

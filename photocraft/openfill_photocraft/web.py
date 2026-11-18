@@ -42,11 +42,14 @@ EDITABLE = {
     "cloud_provider": str,
     "cloud_model": str,
     "cloud_url": str,
+    "cloud_mask_mode": str,
+    "request_timeout": int,
 }
 # Values a choice setting may take here (anything else is refused, not saved).
 CHOICES = {
     "backend": lambda: {b.id for b in BACKENDS if b.photocraft},
-    "cloud_provider": lambda: {"openrouter", "openai"},
+    "cloud_provider": lambda: {"openrouter", "openai", "gemini"},
+    "cloud_mask_mode": lambda: {"second_image", "overlay"},
 }
 
 
@@ -127,8 +130,12 @@ class Api:
         out["shared_models"] = shared_models.display(s.shared_models)  # one line for the text field
         # the key itself never leaves the settings file: only whether one is saved, and for what
         out["cloud_key_saved"] = s.cloud_key_usable
-        out["cloud_key_elsewhere"] = bool(s.cloud_api_key) and not s.cloud_key_usable
+        out["cloud_key_elsewhere"] = (
+            s.cloud_provider != "gemini" and bool(s.cloud_api_key) and not s.cloud_key_usable
+        )
         out["cloud_key_for"] = s.cloud_key_for
+        out["cloud_key_env"] = s.gemini_credentials.env_var_name()
+        out["cloud_key_session"] = s.gemini_credentials.has_session_key
         return out
 
     # POST -----------------------------------------------------------------------------
@@ -186,7 +193,11 @@ class Api:
             new_comfy = trial.comfy_dir != app.settings.comfy_dir
             # a new key is bound to this service and address; an empty field never moves the saved one
             trial.set_cloud(
-                trial.cloud_provider, trial.cloud_url, trial.cloud_model, str(body.get("cloud_api_key") or "")
+                trial.cloud_provider,
+                trial.cloud_url,
+                trial.cloud_model,
+                str(body.get("cloud_api_key") or ""),
+                trial.cloud_mask_mode,
             )
             if trial.uses_cloud and not trial.cloud_key_usable:
                 raise ValueError(trial.cloud_key_problem() or "Paste your API key for the cloud service first.")
