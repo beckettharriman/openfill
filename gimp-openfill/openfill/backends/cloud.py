@@ -88,6 +88,7 @@ class Provider:
     ratios: tuple[str, ...]  # aspect ratios the image API offers
     keys_url: str = ""
     credits_url: str = ""
+    host: str = ""
 
 
 PROVIDERS = {
@@ -100,6 +101,7 @@ PROVIDERS = {
         ("1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"),
         "https://openrouter.ai/keys",
         "https://openrouter.ai/settings/credits",
+        host="openrouter.ai",
     ),
     "openai": Provider(
         "openai",
@@ -133,8 +135,8 @@ def _host_port(url: str) -> tuple[str, str, int]:
     return scheme, host, port
 
 
-def _is_openrouter(host: str) -> bool:
-    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+def _is_provider_host(host: str, domain: str) -> bool:
+    return bool(domain) and (host == domain or host.endswith("." + domain))
 
 
 def destination(provider_id: str, url: str = "") -> str:
@@ -146,7 +148,7 @@ def destination(provider_id: str, url: str = "") -> str:
     scheme, host, port = _host_port(base_url(provider_id, url))
     if not host:
         return "an address that is not valid"
-    if p.name and _is_openrouter(host):
+    if p.name and _is_provider_host(host, p.host):
         return p.name
     shown = f"[{host}]" if ":" in host else host
     default = 443 if scheme == "https" else 80
@@ -745,6 +747,45 @@ class CloudBackend(Backend):
         """Stop waiting; the service may still finish the request it received."""
         self._cancelled.set()
 
+    def _max_send_side(self) -> int:
+        return MAX_SEND_SIDE
+
+    def _ratios(self) -> tuple[str, ...]:
+        return self.provider.ratios
+
+    def _inpaint_call(
+        self,
+        mode: str,
+        prompt: str,
+        negative: str,
+        sent: imaging.Rgba,
+        sent_mask: bytes,
+        pad: imaging.Padding,
+        count: int,
+    ) -> tuple[Callable[[], list[bytes]], int, str]:
+        true_mask = self.provider.id == "openai"
+        full_prompt = self.instruction(mode, prompt, negative, true_mask)
+        image_png = sent.png()
+        if true_mask:
+            mask_png = imaging.edit_mask_png(sent_mask, pad.width, pad.height)
+            return (
+                lambda: self._openai_edit(full_prompt, image_png, mask_png, pad.ratio, count),
+                1,
+                "images/edits",
+            )
+        mask_png = imaging.mask_rgb(sent_mask, pad.width, pad.height)
+        return (
+            lambda: self._openrouter(full_prompt, [image_png, mask_png], pad.ratio, count),
+            count if self.api == "chat" else 1,
+            self.api,
+        )
+
+    def _txt2img_call(self, prompt: str, negative: str, ratio: str, count: int) -> tuple[Callable[[], list[bytes]], int]:
+        full_prompt = prompt.strip() + (f" Avoid: {negative.strip()}." if negative.strip() else "")
+        if self.provider.id == "openai":
+            return lambda: self._openai_generate(full_prompt, ratio, count), 1
+        return lambda: self._openrouter(full_prompt, [], ratio, count), count if self.api == "chat" else 1
+
     def inpaint(
         self,
         request: InpaintRequest,
@@ -760,21 +801,22 @@ class CloudBackend(Backend):
             raise CloudRefused("The picture and its selection mask differ in size; select the area again.")
         mask = imaging.gray_of(mask_image)
         w, h = original.width, original.height
-        factor = max(1, math.ceil(max(w, h) / MAX_SEND_SIDE))
+        factor = max(1, math.ceil(max(w, h) / self._max_send_side()))
         small = imaging.shrink(original, factor)
         small_mask, mw, mh = imaging.shrink_gray(mask, w, h, factor)
-        pad = imaging.pad_plan(small.width, small.height, self.provider.ratios)
+        pad = imaging.pad_plan(small.width, small.height, self._ratios())
         sent = imaging.pad_edges(small, pad)
         sent_mask = imaging.pad_gray(small_mask, mw, mh, pad, 0)
-        true_mask = self.provider.id == "openai"
         mode = request.mode if request.mode in ("remove", "expand") else "fill"
-        prompt = self.instruction(mode, request.prompt, request.negative, true_mask)
         count = max(1, min(MAX_VARIATIONS, int(request.sampling.batch)))
+        call, requests, api_label = self._inpaint_call(
+            mode, request.prompt, request.negative, sent, sent_mask, pad, count
+        )
         self._info(
             "%s via %s %s, model %s: context %dx%d sent as %dx%d (ratio %s, 1/%d), %d variation(s)",
             mode,
             self.provider.id,
-            self.api if self.provider.id == "openrouter" else "images/edits",
+            api_label,
             self.model,
             w,
             h,
@@ -784,16 +826,9 @@ class CloudBackend(Backend):
             factor,
             count,
         )
-        image_png = sent.png()
-        if true_mask:
-            mask_png = imaging.edit_mask_png(sent_mask, pad.width, pad.height)
-            call = lambda: self._openai_edit(prompt, image_png, mask_png, pad.ratio, count)  # noqa: E731
-        else:
-            mask_png = imaging.mask_rgb(sent_mask, pad.width, pad.height)
-            call = lambda: self._openrouter(prompt, [image_png, mask_png], pad.ratio, count)  # noqa: E731
         if progress:
             progress(0.02, f"Sending the picture to {self.where}...")
-        raw = self._run("Waiting for", call, progress, cancel, count if self.api == "chat" and not true_mask else 1)
+        raw = self._run("Waiting for", call, progress, cancel, requests)
         if not raw:
             raise CloudRefused(
                 f"{self.where} answered without a picture. The model may not make images, or it declined this one; "
@@ -821,19 +856,13 @@ class CloudBackend(Backend):
     ) -> GenerationResult:
         """Create: the prompt only; the picture comes back at the service's size for the nearest ratio."""
         self._check_ready()
-        ratio = imaging.nearest_ratio(max(1, request.width), max(1, request.height), self.provider.ratios)
+        ratio = imaging.nearest_ratio(max(1, request.width), max(1, request.height), self._ratios())
         count = max(1, min(MAX_VARIATIONS, int(request.sampling.batch)))
-        prompt = request.prompt.strip() + (f" Avoid: {request.negative.strip()}." if request.negative.strip() else "")
         self._info("create via %s, model %s: ratio %s, %d variation(s)", self.provider.id, self.model, ratio, count)
-        if self.provider.id == "openai":
-            call = lambda: self._openai_generate(prompt, ratio, count)  # noqa: E731
-        else:
-            call = lambda: self._openrouter(prompt, [], ratio, count)  # noqa: E731
+        call, requests = self._txt2img_call(request.prompt, request.negative, ratio, count)
         if progress:
             progress(0.02, f"Sending the prompt to {self.where}...")
-        raw = self._run(
-            "Waiting for", call, progress, cancel, count if self.api == "chat" and self.provider.id != "openai" else 1
-        )
+        raw = self._run("Waiting for", call, progress, cancel, requests)
         if not raw:
             raise CloudRefused(f"{self.where} answered without a picture. Try another prompt or model.")
         # always read and written again here: the editor only ever gets a PNG OpenFill made itself
