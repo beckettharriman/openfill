@@ -318,3 +318,47 @@ class StaleCpuFlagTests(unittest.TestCase):
             self.assertTrue(mine.drop_stale_cpu_flag(setup))  # settings from before cpu_comfy_dir existed
             same = Settings(comfy_dir=str(setup), extra_server_args="--cpu")
             self.assertFalse(same.drop_stale_cpu_flag(setup))
+
+
+class GeminiSettingsAndAppTests(unittest.TestCase):
+    def test_settings_never_writes_gemini_key_and_app_wires_gemini_backend(self):
+        from types import SimpleNamespace
+
+        from openfill.app import App
+        from openfill.backends.gemini import GeminiBackend
+
+        gemini_key = "AIzaSyTestFakeKey1234567890abcdef"
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            paths = Paths.for_profile(Path(tmp)).ensure()
+            with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}):
+                Settings(backend="cloud", comfy_dir="").save(paths.config)
+                editor_io = SimpleNamespace(profile_dir=lambda: Path(tmp), message=lambda _m: None, decode_image=None)
+                app = App(interactive=False, io=editor_io, runner_cls=object)
+                try:
+                    app.settings.set_cloud("openrouter", "", "", "sk-or-keep")
+                    app.settings.set_cloud("gemini", "", "gemini-3.1-flash-image", gemini_key, mask_mode="overlay")
+                    app.settings.cloud_key_for = "gemini|fake"  # even if forced, save must scrub it
+                    app.settings.save(app.paths.config)
+
+                    raw = app.paths.config.read_text(encoding="utf-8")
+                    self.assertNotIn(gemini_key, raw)
+                    data = json.loads(raw)
+                    self.assertEqual(data["cloud_provider"], "gemini")
+                    self.assertEqual(data["cloud_mask_mode"], "overlay")
+                    self.assertEqual(data["cloud_api_key"], "")
+                    self.assertEqual(data["cloud_key_for"], "")
+                    self.assertTrue(app.settings.cloud_key_usable)
+                    self.assertEqual(app.settings.cloud_key_problem(), "")
+
+                    backend = app.cloud_backend()
+                    self.assertIsInstance(backend, GeminiBackend)
+                    self.assertEqual(backend._headers()["x-goog-api-key"], gemini_key)
+                    self.assertEqual(backend.mask_mode, "overlay")
+
+                    app.reload_settings()
+                    self.assertTrue(app.settings.cloud_key_usable)
+                    self.assertEqual(app.cloud_backend()._headers()["x-goog-api-key"], gemini_key)
+                finally:
+                    for handler in list(app.log.handlers):
+                        handler.close()
+                        app.log.removeHandler(handler)
