@@ -3230,6 +3230,25 @@ console.log(JSON.stringify(out));
             ui._cache.clear()
             ui.FONTS = None  # the fonts belonged to this root; the next test makes its own
 
+    def test_gear_show_section_resets_scroll_to_top(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.panels import GearView
+
+        moved = []
+        gear = GearView.__new__(GearView)
+        gear.tabs = SimpleNamespace(set=lambda _s: None)
+        gear.models = SimpleNamespace(pack=lambda **_k: None, pack_forget=lambda: None, update_view=lambda _f: None)
+        gear.engine = SimpleNamespace(pack=lambda **_k: None, pack_forget=lambda: None)
+        gear.generation = SimpleNamespace(pack=lambda **_k: None, pack_forget=lambda: None)
+        gear.bar = SimpleNamespace(
+            refresher=SimpleNamespace(get=lambda: {}),
+            _layout_footer=lambda: None,
+            scroller=SimpleNamespace(yview_moveto=moved.append),
+        )
+        gear.show_section("generation")
+        self.assertEqual(moved, [0])
+
 
 class LaunchTests(unittest.TestCase):
     """How the launcher starts PhotoCraft, which refuses unknown, repeated and conflicting options."""

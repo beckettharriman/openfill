@@ -1631,6 +1631,46 @@ class GeminiBackendTests(CloudTestCase):
         self.assertIn("Could not reach", str(caught.exception))
         self.assertNoGeminiKey(str(caught.exception))
 
+    def test_seam_correction_matches_shifted_background_tone(self):
+        from openfill import imaging
+
+        w, h = 160, 120
+        box = (40, 30, 120, 90)
+        orig_rows = bytearray()
+        shifted_rows = bytearray()
+        mask = bytearray(w * h)
+        for y in range(h):
+            for x in range(w):
+                r, g, b = 110 + x // 4, 150 + y // 4, 210 - (x + y) // 16
+                orig_rows += bytes((r, g, b, 255))
+                shifted_rows += bytes((min(255, r + 32), min(255, g + 18), max(0, b - 24), 255))
+                if box[0] <= x < box[2] and box[1] <= y < box[3]:
+                    mask[y * w + x] = 255
+        pad = imaging.pad_plan(w, h, self.gemini()._ratios())
+        sent_shifted = imaging.pad_edges(imaging.Rgba(w, h, bytes(shifted_rows)), pad).png()
+        self.fake.json_route("/v1beta/models/gemini-3.1-flash-image:generateContent", gemini_response([sent_shifted]))
+        req = InpaintRequest(
+            image_png=png.encode(w, h, bytes(orig_rows), 4),
+            mask_png=png.encode(w, h, bytes(mask), 1),
+            width=w,
+            height=h,
+            work_width=w,
+            work_height=h,
+            prompt="clouds",
+            negative="",
+            model=ModelSpec(checkpoint="m", arch="cloud", template="cloud"),
+            sampling=Sampling(batch=1),
+            mode="fill",
+            feather=12,
+        )
+        res = self.gemini().inpaint(req)
+        out = imaging.decode_png(res.images[0])
+        centre = (60 * w + 80) * 4
+        for c in range(3):
+            self.assertLessEqual(abs(out.data[centre + c] - orig_rows[centre + c]), 4)
+        self.assertEqual(out.data[centre + 3], 255)
+        self.assertEqual(out.data[3], 0)
+
 
 class GeminiCredentialsTests(unittest.TestCase):
     def test_env_precedence_and_session_key_isolation(self):

@@ -246,3 +246,16 @@ class SeamCorrectionTest(unittest.TestCase):
                 self.assertLessEqual(abs(a - b), 2, (x, y))
         for x, y in ((60, 60), (100, 10)):  # the old image is not touched
             self.assertEqual(self._px(fixed, x, y), self._px(layer, x, y))
+
+    def test_stronger_cloud_drift_and_inside_band_are_corrected(self):
+        original = _sky(self.W, self.H)
+        layer = _sky(self.W, self.H, tint=(36, -28, 32), box=self.SEL)
+        mask = _rect_mask(self.W, self.H, self.SEL)
+        field = quality.seam_field(
+            self.W, self.H, original, layer, mask, 4, band=8, side=self.W, inside_band=16
+        )
+        self.assertIsNotNone(field)
+        fixed = quality.apply_seam_field(layer, self.W, self.H, 4, field)
+        for x, y in ((55, 45), (80, 60), (105, 75)):
+            for a, b in zip(self._px(fixed, x, y), self._px(original, x, y), strict=True):
+                self.assertLessEqual(abs(a - b), 3, (x, y))

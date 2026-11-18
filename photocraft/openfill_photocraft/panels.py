@@ -86,6 +86,8 @@ class GearView(tk.Frame):
         if section == "models":
             self.models.update_view(self.bar.refresher.get())  # built already: this only updates it
         self.bar._layout_footer()
+        if hasattr(self.bar, "scroller"):
+            self.bar.scroller.yview_moveto(0)
 
     def update_view(self, facts: dict[str, Any]) -> None:
         """Keep the models list current, shown or not, so opening it shows it at once."""

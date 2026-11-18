@@ -326,8 +326,8 @@ def _normal_quantile(p: float) -> float:
 
 SEAM_SIDE = 256  # analysis resolution (longer side)
 SEAM_CELL = 8  # analysis pixels per offset cell
-SEAM_MAX_OFFSET = 24  # larger differences are content, not drift: left alone
-SEAM_MAX_SPREAD = 10  # cells whose difference varies more than this are texture: ignored
+SEAM_MAX_OFFSET = 64  # larger differences are content, not drift: left alone
+SEAM_MAX_SPREAD = 16  # cells whose difference varies more than this are texture: ignored
 SEAM_MIN_OFFSET = 1.5  # below this nothing is visible: no change
 
 
@@ -357,6 +357,7 @@ def seam_field(
     band: int = 24,
     side: int = SEAM_SIDE,
     original_rect: tuple[int, int, int, int] | None = None,
+    inside_band: int = 0,
 ) -> SeamField | None:
     """Offsets that make ``layer`` meet ``original`` at the selection edge, or None when nothing needs fixing.
 
@@ -385,12 +386,13 @@ def seam_field(
     flat_mask = b"".join(r[0] for r in sm)
     if original_rect is None:
         dist = signed_distance(sw, sh, flat_mask)
-        reach = max(1, round(band / step))
+        reach = max(1, round(band / step)) if band > 0 else 0
+        min_dist = -max(1, round(inside_band / step)) if inside_band > 0 else 1
     else:
         # Measured: generated pixels over the old image (distance 1); shown: anything generated
         # (distance 0); the rest: nothing (a distance beyond reach).
         x0, y0, x1, y1 = original_rect
-        reach = 1
+        min_dist, reach = 1, 1
         dist = [
             (1 if x0 <= x * step < x1 and y0 <= y * step < y1 and flat_mask[y * sw + x] >= 128 else 0)
             if flat_mask[y * sw + x]
@@ -405,22 +407,28 @@ def seam_field(
         o_row, l_row = so[y], sl[y]
         for x in range(sw):
             d = dist[y * sw + x]
-            if not 1 <= d <= reach:
+            if not min_dist <= d <= reach:
                 continue
             key = (y // cell) * gw + x // cell
             per = samples.setdefault(key, [[] for _ in range(colours)])
             for c in range(colours):
                 per[c].append(o_row[c][x] - l_row[c][x])
     known: list[tuple[float, float, tuple[float, ...]]] = []
+    eligible = 0
     for key, per in samples.items():
         if len(per[0]) < 4:
             continue
+        eligible += 1
         meds = tuple(_median(v) for v in per)
         spread = max(_median([abs(a - m) for a in v]) for v, m in zip(per, meds, strict=True))
         if spread > SEAM_MAX_SPREAD or max(abs(m) for m in meds) > SEAM_MAX_OFFSET:
             continue
         known.append((key % gw + 0.5, key // gw + 0.5, meds))
-    if not known or max(max(abs(m) for m in k[2]) for k in known) < SEAM_MIN_OFFSET:
+    if (
+        not known
+        or len(known) * 4 < eligible
+        or max(max(abs(m) for m in k[2]) for k in known) < SEAM_MIN_OFFSET
+    ):
         return None
     # Cells the layer shows (inside the selection or within reach of it); the rest stays at zero.
     shown = [False] * (gw * gh)

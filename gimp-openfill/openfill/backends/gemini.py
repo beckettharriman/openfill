@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import os
 import random
 import time
@@ -25,8 +26,9 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
-from .. import __version__, imaging
+from .. import __version__, imaging, quality
 from ..backend import (
+    CancelCallback,
     CloudAuthError,
     CloudCreditsError,
     CloudError,
@@ -34,10 +36,16 @@ from ..backend import (
     CloudRefused,
     CloudUnreachable,
     GenerationCancelled,
+    GenerationResult,
     HealthStatus,
+    InpaintRequest,
+    PreviewCallback,
+    ProgressCallback,
 )
+from ..geometry import seed_or_random
 from .cloud import (
     HEALTH_TIMEOUT,
+    MAX_VARIATIONS,
     PROVIDERS,
     CloudBackend,
     Provider,
@@ -243,8 +251,9 @@ def gemini_instruction(mode: str, prompt: str, negative: str, mask_mode: str) ->
                 "colours and perspective."
             )
         text += (
-            " Edit ONLY that marked area and keep everything outside it unchanged. Return the whole first picture "
-            "at the same framing, without the mask."
+            " Edit ONLY that marked area and keep everything outside it unchanged. Keep the background colour "
+            "temperature, brightness and contrast inside the edited region identical to the surrounding pixels so "
+            "no seam appears. Return the whole first picture at the same framing, without the mask."
         )
         if negative:
             text += f" Avoid: {negative}."
@@ -275,8 +284,9 @@ def gemini_instruction(mode: str, prompt: str, negative: str, mask_mode: str) ->
         )
     text += (
         " Edit ONLY the highlighted area, completely replace the magenta highlight and border so no magenta tint "
-        "or outline remains, and keep everything outside that area unchanged. Return the whole picture at the "
-        "same framing."
+        "or outline remains, and keep everything outside that area unchanged. Keep the background colour "
+        "temperature, brightness and contrast inside the edited region identical to the surrounding pixels so "
+        "no seam appears. Return the whole picture at the same framing."
     )
     if negative:
         text += f" Avoid: {negative}."
@@ -519,6 +529,78 @@ class GeminiBackend(CloudBackend):
     def _txt2img_call(self, prompt: str, negative: str, ratio: str, count: int) -> tuple[Callable[[], list[bytes]], int]:
         full_prompt = prompt.strip() + (f" Avoid: {negative.strip()}." if negative.strip() else "")
         return lambda: self._generate_variations(full_prompt, [], ratio, count), count
+
+    def inpaint(
+        self,
+        request: InpaintRequest,
+        progress: ProgressCallback | None = None,
+        preview: PreviewCallback | None = None,
+        cancel: CancelCallback | None = None,
+    ) -> GenerationResult:
+        """Fill, remove or expand, matching tone across the selection edge before compositing."""
+        self._check_ready()
+        original = imaging.decode_png(request.image_png)
+        mask_image = imaging.decode_png(request.mask_png)
+        if (original.width, original.height) != (mask_image.width, mask_image.height):
+            raise CloudRefused("The picture and its selection mask differ in size; select the area again.")
+        mask = imaging.gray_of(mask_image)
+        w, h = original.width, original.height
+        factor = max(1, math.ceil(max(w, h) / self._max_send_side()))
+        small = imaging.shrink(original, factor)
+        small_mask, mw, mh = imaging.shrink_gray(mask, w, h, factor)
+        pad = imaging.pad_plan(small.width, small.height, self._ratios())
+        sent = imaging.pad_edges(small, pad)
+        sent_mask = imaging.pad_gray(small_mask, mw, mh, pad, 0)
+        mode = request.mode if request.mode in ("remove", "expand") else "fill"
+        count = max(1, min(MAX_VARIATIONS, int(request.sampling.batch)))
+        call, requests, api_label = self._inpaint_call(
+            mode, request.prompt, request.negative, sent, sent_mask, pad, count
+        )
+        self._info(
+            "%s via %s %s, model %s: context %dx%d sent as %dx%d (ratio %s, 1/%d), %d variation(s)",
+            mode,
+            self.provider.id,
+            api_label,
+            self.model,
+            w,
+            h,
+            pad.width,
+            pad.height,
+            pad.ratio,
+            factor,
+            count,
+        )
+        if progress:
+            progress(0.02, f"Sending the picture to {self.where}...")
+        raw = self._run("Waiting for", call, progress, cancel, requests)
+        if not raw:
+            raise CloudRefused(
+                f"{self.where} answered without a picture. The model may not make images, or it declined this one; "
+                "try another prompt or model."
+            )
+        feather = max(1, min(24, round(request.feather * w / max(1, request.work_width))))
+        solid_mask = b"\xff" * (w * h)
+        full_source = (0.0, 0.0, float(w), float(h))
+        images = []
+        for index, data in enumerate(raw):
+            generated = self._image(data)
+            sx, sy = generated.width / pad.width, generated.height / pad.height
+            source = (pad.left * sx, pad.top * sy, w / factor * sx, h / factor * sy)
+            if mode == "expand":
+                images.append(imaging.overlay(generated, mask, w, h, source, feather).png())
+                continue
+            cropped = imaging.overlay(generated, solid_mask, w, h, source, 1)
+            field = quality.seam_field(w, h, original.data, cropped.data, mask, 4, band=16, inside_band=16)
+            if field is not None:
+                largest = max(max(abs(v) for v in cell) for cell in field.offsets)
+                cropped = imaging.Rgba(w, h, quality.apply_seam_field(cropped.data, w, h, 4, field))
+                self._info("%s: seam corrected on variation %d (largest offset %.1f levels)", mode, index + 1, largest)
+            images.append(imaging.overlay(cropped, mask, w, h, full_source, feather).png())
+        if progress:
+            progress(1.0, "Done")
+        return GenerationResult(
+            images, seed_or_random(-1), {"backend": self.name, "provider": self.provider.id, "model": self.model}
+        )
 
     def health(self) -> HealthStatus:
         """Check the API key and model name against Google Gemini without sending any picture."""
