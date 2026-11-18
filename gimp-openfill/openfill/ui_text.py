@@ -511,8 +511,8 @@ CLOUD_VARIATIONS = "Up to 4 variations per run, each billed by the service."
 CLOUD_KEY_HINT = "Kept only in OpenFill's settings file on this computer, readable by you alone."
 CLOUD_KEY_ENV = "From {var} in the environment. Paste a key to use for this session only."
 CLOUD_KEY_SESSION = "Set for this session only. Paste a new key to replace it."
-CLOUD_KEY_GEMINI_EMPTY = "Paste a session key, or set GEMINI_API_KEY"
-CLOUD_KEY_GEMINI_HINT = "Uses GEMINI_API_KEY from the environment, or keeps a pasted key in memory for this session."
+CLOUD_KEY_GEMINI_EMPTY = "Paste your API key, or set GEMINI_API_KEY"
+CLOUD_KEY_GEMINI_HINT = "Saved in OpenFill's settings file on this computer, or read from GEMINI_API_KEY."
 CLOUD_COST = "Each picture is billed to your account with the service."
 CLOUD_SETUP_BUTTON = "Use a cloud service instead..."
 CLOUD_SETUP_LINE = "No suitable graphics card? A paid cloud service can do the work. Your images are then sent to it."
@@ -530,16 +530,16 @@ def cloud_key_placeholder(
     key_for: str, provider: str, url: str, has_key: bool, *, env_var: str = "", session_key: bool = False
 ) -> str:
     """The key field's grey text: saved/in-memory/env for this service, saved for another, or none."""
+    from .backends.cloud import key_scope
+
+    if has_key and key_for == key_scope(provider, url):
+        return CLOUD_KEY_SAVED
     if provider == "gemini":
         if session_key:
             return CLOUD_KEY_SESSION
         if env_var:
             return CLOUD_KEY_ENV.format(var=env_var)
-        return CLOUD_KEY_GEMINI_EMPTY
-    from .backends.cloud import key_scope
-
-    if has_key and key_for == key_scope(provider, url):
-        return CLOUD_KEY_SAVED
+        return CLOUD_KEY_OTHER if has_key else CLOUD_KEY_GEMINI_EMPTY
     return CLOUD_KEY_OTHER if has_key else CLOUD_KEY_EMPTY
 
 

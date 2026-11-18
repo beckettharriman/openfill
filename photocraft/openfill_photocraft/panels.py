@@ -556,6 +556,8 @@ class EngineView(tk.Frame):
             if frame is not shown:
                 frame.pack_forget()
         shown.pack(fill="x", after=self.backend.master)  # under the switch, above the tools
+        if hasattr(self.bar, "scroller"):
+            self.bar.scroller.yview_moveto(0)
 
     def _build_remote(self, parent: tk.Misc) -> None:
         """Remote GPU: ComfyUI on another computer of yours (docs/remote-gpu.md)."""

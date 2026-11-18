@@ -154,7 +154,7 @@ class Settings:
     cloud_model: str = ""  # "" = the provider's default (OpenRouter: google/gemini-2.5-flash-image)
     cloud_api: str = "images"  # OpenRouter only: "images" (/images) or "chat" (/chat/completions)
     cloud_mask_mode: str = "second_image"  # Gemini only: "second_image" or "overlay"
-    cloud_api_key: str = field(default="", repr=False)  # secret, stored only in this file (never Gemini)
+    cloud_api_key: str = field(default="", repr=False)  # secret, stored only in this file
     # The service and address (scheme, host, port) the key was entered for (backends.cloud.key_scope).
     # The key is only ever sent where this still matches: changing either needs the key again.
     cloud_key_for: str = ""
@@ -255,9 +255,6 @@ class Settings:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         data = {f.name: getattr(self, f.name) for f in fields(self) if f.metadata.get("persist", True)}
-        if str(data.get("cloud_key_for") or "").startswith("gemini|"):
-            data["cloud_api_key"] = ""
-            data["cloud_key_for"] = ""
         text = json.dumps(data, indent=2) + "\n"
         # Created owner-only from the start (the file holds the Hugging Face token and the
         # cloud API key), so no other user can read it even for a moment.
@@ -303,37 +300,42 @@ class Settings:
 
     def set_cloud(self, provider: str, url: str, model: str, key: str = "", mask_mode: str | None = None) -> None:
         """Apply the cloud fields of a settings screen. A new ``key`` is bound to this service
-        and address; for Gemini it is kept only in memory via ``gemini_credentials``."""
+        and address; an empty one leaves the saved key as it is, bound where it was entered."""
         from .backends.cloud import key_scope
 
         self.cloud_provider, self.cloud_url, self.cloud_model = provider, url.strip(), model.strip()
         if mask_mode in ("second_image", "overlay"):
             self.cloud_mask_mode = mask_mode
         cleaned = key.strip()
-        if provider == "gemini":
-            if self.cloud_key_for.startswith("gemini|"):
-                self.cloud_api_key = ""
-                self.cloud_key_for = ""
-            if cleaned:
-                self.gemini_credentials = self.gemini_credentials.with_session_key(cleaned)
-            return
         if cleaned:
             self.cloud_api_key = cleaned
             self.cloud_key_for = key_scope(provider, url)
+
+    def _saved_cloud_key_matches(self) -> bool:
+        from .backends.cloud import key_scope
+
+        return bool(self.cloud_api_key) and self.cloud_key_for == key_scope(self.cloud_provider, self.cloud_url)
+
+    def effective_gemini_key(self) -> str:
+        """Gemini API key: saved for this Gemini endpoint first, else GEMINI_API_KEY / GOOGLE_API_KEY."""
+        if self._saved_cloud_key_matches():
+            return self.cloud_api_key
+        return self.gemini_credentials.get()
 
     @property
     def cloud_key_usable(self) -> bool:
         """A key is available for exactly the service and address now set."""
         if self.cloud_provider == "gemini":
-            return self.gemini_credentials.usable
-        from .backends.cloud import key_scope
-
-        return bool(self.cloud_api_key) and self.cloud_key_for == key_scope(self.cloud_provider, self.cloud_url)
+            return bool(self.effective_gemini_key())
+        return self._saved_cloud_key_matches()
 
     def cloud_key_problem(self) -> str:
         """Why the key is not usable ("" when it is, or when none is saved for non-Gemini)."""
         if self.cloud_provider == "gemini":
-            return self.gemini_credentials.problem()
+            if self.cloud_key_usable:
+                return ""
+            if not self.cloud_api_key:
+                return self.gemini_credentials.problem()
         if not self.cloud_api_key or self.cloud_key_usable:
             return ""
         from .backends.cloud import destination

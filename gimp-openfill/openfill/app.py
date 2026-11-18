@@ -365,7 +365,7 @@ class App:
         s = self.settings
         if s.cloud_provider == "gemini":
             return GeminiBackend(
-                s.gemini_credentials.get(),
+                s.effective_gemini_key(),
                 s.cloud_model,
                 s.cloud_url,
                 s.cloud_mask_mode,

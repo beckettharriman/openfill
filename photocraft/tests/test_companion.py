@@ -3135,9 +3135,9 @@ console.log(JSON.stringify(out));
 
             ui.FONTS = None  # the fonts belonged to this root; the next test makes its own
 
-    def test_gemini_settings_api_never_returns_or_persists_key(self):
+    def test_gemini_settings_api_never_returns_key(self):
         env_key = "AIzaSyEnvFakeKey0000111122223333"
-        session_key = "AIzaSySessionFakeKey000011112222"
+        saved_key = "AIzaSySavedFakeKey000011112222"
         api, _warmed = self.api()
 
         with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}):
@@ -3150,7 +3150,7 @@ console.log(JSON.stringify(out));
                 {
                     "backend": "cloud",
                     "cloud_provider": "gemini",
-                    "cloud_api_key": session_key,
+                    "cloud_api_key": saved_key,
                     "cloud_mask_mode": "overlay",
                     "request_timeout": 90,
                 },
@@ -3159,16 +3159,21 @@ console.log(JSON.stringify(out));
             self.assertEqual(out["cloud_mask_mode"], "overlay")
             self.assertEqual(out["request_timeout"], 90)
             self.assertTrue(out["cloud_key_saved"])
-            self.assertTrue(out["cloud_key_session"])
             self.assertEqual(out["cloud_key_env"], "")
             self.assertFalse(out["cloud_key_elsewhere"])
 
+            saved_cfg = json.loads(self.config.read_text("utf-8"))
+            self.assertEqual(saved_cfg["cloud_api_key"], saved_key)
             state = api.state()
             self.assertEqual(state["cloud"]["note"], "Cloud: your image is sent to Google Gemini.")
             self.assertTrue(state["cloud"]["key"])
-            dumped = json.dumps(out) + json.dumps(api.settings()) + json.dumps(state) + self.config.read_text("utf-8")
-            self.assertNotIn(session_key, dumped)
+            dumped = json.dumps(out) + json.dumps(api.settings()) + json.dumps(state)
+            self.assertNotIn(saved_key, dumped)
 
+        self.app.settings.cloud_api_key = ""
+        self.app.settings.cloud_key_for = ""
+        self.app.settings.gemini_credentials = self.app.settings.gemini_credentials.__class__()
+        self.app.settings.save(self.config)
         with mock.patch.dict(os.environ, {"GEMINI_API_KEY": env_key, "GOOGLE_API_KEY": ""}):
             out2 = api.post("/api/settings", {"backend": "cloud", "cloud_provider": "gemini"})
             self.assertTrue(out2["cloud_key_saved"])
@@ -3213,7 +3218,7 @@ console.log(JSON.stringify(out));
                 self.assertEqual(picked, [1])
                 self.assertTrue(view.mask_box.winfo_ismapped())
                 hint = view.key_hint.cget("text")
-                self.assertNotIn("settings file", hint.lower())
+                self.assertIn("settings file", hint.lower())
                 self.assertIn("GEMINI_API_KEY", hint)
                 self.assertIn("GEMINI_API_KEY", view.key.placeholder)
                 self.assertEqual(view.key.get(), "")

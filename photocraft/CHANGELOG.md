@@ -11,7 +11,7 @@ Each entry from now on says which PhotoCraft versions it works with.
 ## [Unreleased]
 
 New:
-- Added Google Gemini as a third optional cloud service under Engine (`gemini-3.1-flash-image` default). Reads `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) from the environment (restart the launcher after setting it) or accepts a session-only key kept strictly in memory (never written to `config.json` or returned by `/api/settings`). Includes selectable Mask method (`Second image` or `Overlay`), editable Time limit (`request_timeout`), and defaults Variations to `1` when switching to Gemini. See [docs/cloud.md](../docs/cloud.md).
+- Added Google Gemini as a third optional cloud service under Engine (`gemini-3.1-flash-image` default). Saves pasted API keys in `config.json` like the other cloud providers (while never returning them from `/api/settings`) or falls back to `GEMINI_API_KEY` / `GOOGLE_API_KEY` from the environment. Includes selectable Mask method (`Second image` or `Overlay`), editable Time limit (`request_timeout`), Variations defaulting to `1`, seam tone correction, and Engine/Generation scroll fixes. See [docs/cloud.md](../docs/cloud.md).
 
 ## [0.2.6] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
 

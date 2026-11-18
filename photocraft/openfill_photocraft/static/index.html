@@ -399,9 +399,9 @@ function cloudFields(){const on=$("s-backend").value==="cloud";$("cloud-fields")
   $("s-cloud_model").placeholder=p==="gemini"?"gemini-3.1-flash-image":(p==="openrouter"?"google/gemini-2.5-flash-image":"the model name your service uses");
   $("s-cloud_url").placeholder=p==="gemini"?"https://generativelanguage.googleapis.com/v1beta":(p==="openrouter"?"https://openrouter.ai/api/v1":"https://api.openai.com/v1");
   const gmask=$("gemini-mask-field");if(gmask)gmask.hidden=p!=="gemini";
-  const kh=$("cloud-key-hint");if(kh)kh.textContent=p==="gemini"?"Uses GEMINI_API_KEY from the environment, or keeps a pasted key in memory for this session.":"Kept only in OpenFill's settings file on this computer, readable by you alone.";
+  const kh=$("cloud-key-hint");if(kh)kh.textContent=p==="gemini"?"Saved in OpenFill's settings file on this computer, or read from GEMINI_API_KEY.":"Kept only in OpenFill's settings file on this computer, readable by you alone.";
   const ck=$("cloud-key");if(ck){const cm=typeof cloudMeta!=="undefined"?cloudMeta:{};
-    ck.placeholder=p==="gemini"?(cm.key_session?"Set for this session only. Paste a new key to replace it.":(cm.key_env?`From ${cm.key_env} in the environment. Paste a key to use for this session only.`:"Paste a session key, or set GEMINI_API_KEY")):(cm.key_saved?"Saved. Paste a new key to replace it.":(cm.key_elsewhere?"Paste the key for this service. The saved key is for another one.":"Paste your API key"));}
+    ck.placeholder=cm.key_saved?"Saved. Paste a new key to replace it.":(p==="gemini"?(cm.key_session?"Set for this session only. Paste a new key to replace it.":(cm.key_env?`From ${cm.key_env} in the environment. Paste a key to use for this session only.`:(cm.key_elsewhere?"Paste the key for this service. The saved key is for another one.":"Paste your API key, or set GEMINI_API_KEY"))):(cm.key_elsewhere?"Paste the key for this service. The saved key is for another one.":"Paste your API key"));}
   // the same rule as the panel and GIMP: "OpenRouter" only for openrouter.ai itself or its subdomains,
   // "Google Gemini" for generativelanguage.googleapis.com or its subdomains,
   // otherwise the host and port, never a user name or password written into the address

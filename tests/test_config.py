@@ -321,10 +321,11 @@ class StaleCpuFlagTests(unittest.TestCase):
 
 
 class GeminiSettingsAndAppTests(unittest.TestCase):
-    def test_settings_never_writes_gemini_key_and_app_wires_gemini_backend(self):
+    def test_settings_persists_gemini_key_and_app_wires_gemini_backend(self):
         from types import SimpleNamespace
 
         from openfill.app import App
+        from openfill.backends.cloud import key_scope
         from openfill.backends.gemini import GeminiBackend
 
         gemini_key = "AIzaSyTestFakeKey1234567890abcdef"
@@ -335,18 +336,14 @@ class GeminiSettingsAndAppTests(unittest.TestCase):
                 editor_io = SimpleNamespace(profile_dir=lambda: Path(tmp), message=lambda _m: None, decode_image=None)
                 app = App(interactive=False, io=editor_io, runner_cls=object)
                 try:
-                    app.settings.set_cloud("openrouter", "", "", "sk-or-keep")
                     app.settings.set_cloud("gemini", "", "gemini-3.1-flash-image", gemini_key, mask_mode="overlay")
-                    app.settings.cloud_key_for = "gemini|fake"  # even if forced, save must scrub it
                     app.settings.save(app.paths.config)
 
-                    raw = app.paths.config.read_text(encoding="utf-8")
-                    self.assertNotIn(gemini_key, raw)
-                    data = json.loads(raw)
+                    data = json.loads(app.paths.config.read_text(encoding="utf-8"))
                     self.assertEqual(data["cloud_provider"], "gemini")
                     self.assertEqual(data["cloud_mask_mode"], "overlay")
-                    self.assertEqual(data["cloud_api_key"], "")
-                    self.assertEqual(data["cloud_key_for"], "")
+                    self.assertEqual(data["cloud_api_key"], gemini_key)
+                    self.assertEqual(data["cloud_key_for"], key_scope("gemini", ""))
                     self.assertTrue(app.settings.cloud_key_usable)
                     self.assertEqual(app.settings.cloud_key_problem(), "")
 
@@ -358,6 +355,11 @@ class GeminiSettingsAndAppTests(unittest.TestCase):
                     app.reload_settings()
                     self.assertTrue(app.settings.cloud_key_usable)
                     self.assertEqual(app.cloud_backend()._headers()["x-goog-api-key"], gemini_key)
+
+                    # Switching to a custom Gemini URL does not reuse the key bound to default URL
+                    app.settings.set_cloud("gemini", "https://proxy.example.com/v1beta", "", "")
+                    self.assertFalse(app.settings.cloud_key_usable)
+                    self.assertIn("another service or address", app.settings.cloud_key_problem())
                 finally:
                     for handler in list(app.log.handlers):
                         handler.close()
