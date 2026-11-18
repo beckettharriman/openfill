@@ -2,7 +2,7 @@
 
 OpenFill runs on your own computer by default, and nothing about that changes. If you don't have a graphics card that can run the models, or don't want to set up ComfyUI, you can point OpenFill at a paid online image service instead: [OpenRouter](https://openrouter.ai), anything that speaks OpenAI's images API (OpenAI itself, a [LiteLLM](https://docs.litellm.ai) proxy, and so on), or **Google Gemini** in PhotoCraft (`generativelanguage.googleapis.com`). You bring your own API key and pay the service directly. OpenFill gets nothing from it.
 
-**Untested against the real services.** I wrote this without an OpenRouter, OpenAI, or Gemini key, and every request costs money, so OpenFill has never made a live call to any of them. It's tested against a local stand-in server that answers the way the docs below say the real ones do, and in real GIMP 3.2.8 against that stand-in (Gemini is in the PhotoCraft panel and companion only). If you try it, please tell me what happens, good or bad, in an [issue](https://github.com/beckettharriman/openfill/issues).
+**Live vs. stand-in testing.** OpenRouter and OpenAI-compatible remain tested only against a local stand-in server (and in real GIMP 3.2.8 against that stand-in). Google Gemini (`gemini-3.1-flash-image`) was tested live against Google's API from PhotoCraft on Windows 11 (`Check`, free-tier `429` quota handling, and `Fill` with both `second_image` and `overlay` mask modes), while all retry and error paths are covered against the local stand-in server (Gemini is in the PhotoCraft panel and companion only). If you try any cloud service, please tell me what happens, good or bad, in an [issue](https://github.com/beckettharriman/openfill/issues).
 
 ## What gets sent, and when
 
