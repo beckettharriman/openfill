@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- OpenFill for PhotoCraft: added Google Gemini (`gemini`) as a third optional cloud service under Engine (`gemini-3.1-flash-image` default, `GEMINI_API_KEY` / `GOOGLE_API_KEY` env var or session-only in-memory key, `second_image` and `overlay` mask methods, `request_timeout` field in settings UI, and `AIza...` / `x-goog-api-key` log redaction). See [docs/cloud.md](docs/cloud.md).
+- Fixed Windows unittest collection in `photocraft/tests/test_companion.py` (`ShellInterpreterTests` skipped on the class instead of failing at import time).
 - Fixed in OpenFill for PhotoCraft 0.2.6: on Windows the installer said PhotoCraft is not installed when PhotoCraft 0.17 or newer was installed just for you.
 
 ## [2.0.0-beta.7] - 2026-11-08
