@@ -3199,10 +3199,9 @@ class DefaultBrowserTests(unittest.TestCase):
                 process.assert_not_called()
 
 
-@unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "Linux/macOS shell launchers")
 def _usr_bin_python_is_new_enough() -> bool:
     """True when /usr/bin/python3 exists and is 3.10 or newer (macOS ships 3.9 there)."""
-    if not os.access("/usr/bin/python3", os.X_OK):
+    if os.name != "posix" or not os.access("/usr/bin/python3", os.X_OK):
         return False
     try:
         r = subprocess.run(
@@ -3216,6 +3215,7 @@ def _usr_bin_python_is_new_enough() -> bool:
     return r.stdout.strip() == "True"
 
 
+@unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "Linux/macOS shell launchers")
 class ShellInterpreterTests(unittest.TestCase):
     def run_script(self, script, explicit):
         with tempfile.TemporaryDirectory(prefix="openfill python reuse ") as temp:
