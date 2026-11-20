@@ -3466,3 +3466,123 @@ class WindowsInterpreterTests(unittest.TestCase):
             self.assertEqual(data["python"], sys.executable)
             self.assertEqual(data["args"], ["--test", "a path with spaces"])
             self.assertNotIn("Adding Pillow", result.stdout)
+
+
+class UpscaleAndCustomWorkflowTests(unittest.TestCase):
+    """Issue #18: the Upscale tool (a new document, the original untouched) and the Advanced
+    custom ComfyUI workflow fields, in the panel, the page and the service."""
+
+    def service(self, upscale):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.service import JobState, Service
+
+        svc = Service.__new__(Service)
+        svc.state, svc.engine, svc._warm, svc.host = JobState(), "", None, "PhotoCraft"
+        svc.image, svc.layers, svc._engine_watch = None, [], None
+        image = SimpleNamespace(name="photo.png")
+        calls = {"finish": 0, "discard": 0}
+
+        def count(key):
+            def bump(_image):
+                calls[key] += 1
+
+            return bump
+
+        svc.bridge = SimpleNamespace(
+            active_image=lambda: image,
+            track=lambda im: im,
+            history=lambda im: ["Open"],
+            finish=count("finish"),
+            discard=count("discard"),
+        )
+        svc.app = SimpleNamespace(
+            upscale=upscale,
+            log=SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None),
+            server=SimpleNamespace(death_watch=lambda: None),
+        )
+        return svc, image, calls
+
+    def test_upscale_job_makes_a_new_document_and_leaves_the_original(self):
+        got = []
+        svc, image, calls = self.service(lambda im, factor, model: got.append((im, factor, model)))
+        svc._job("upscale", {"factor": 4, "upscale_model": "realesrgan-x4plus"})
+        self.assertEqual(got, [(image, 4, "realesrgan-x4plus")])
+        self.assertEqual(svc.state.state, "done")
+        self.assertEqual(calls, {"finish": 0, "discard": 0})  # nothing is put into or taken from the original
+        self.assertIsNone(svc.image)
+        svc._job("upscale", {})
+        self.assertEqual(got[-1][1:], (2, "default"))
+
+    def test_upscale_failure_is_reported(self):
+        def fail(*_a):
+            raise RuntimeError("4x would make a 16000 x 12000 image")
+
+        svc, _image, calls = self.service(fail)
+        svc._job("upscale", {"factor": 4})
+        self.assertEqual(svc.state.state, "error")
+        self.assertIn("16000 x 12000", svc.state.message)
+        self.assertEqual(calls["discard"], 1)  # the original, untouched, is let go as after any job
+
+    def test_job_title(self):
+        from openfill_photocraft.service import Service
+
+        svc, _image, _calls = self.service(lambda *a: None)
+        svc._thread = None
+        with mock.patch.object(Service, "_job", lambda *a: None):
+            svc.start("upscale", {"factor": 2})
+        self.assertEqual(svc.state.title, "Upscale")
+
+    def test_panel_has_the_upscale_tool(self):
+        try:
+            from openfill_photocraft import bar
+        except ImportError:
+            self.skipTest("no tkinter")
+        self.assertIn(("upscale", "Upscale"), bar.TABS)
+        self.assertEqual(bar.GO["upscale"], "Upscale")
+        self.assertEqual(bar.UPSCALE_FACTORS, (2, 4))
+        self.assertIn("upscale", bar.WHOLE_IMAGE)
+        facts = {
+            "models": {
+                "fill": [("dreamshaper-8-inpainting", "DreamShaper 8"), (bar.CUSTOM_WORKFLOW_ID, "Custom workflow (x)")]
+            }
+        }
+        self.assertEqual(bar.fill_choices(facts)["Custom workflow (x)"], "custom-workflow")
+
+    def test_page_route_settings_and_markup(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft import web
+
+        from openfill.config import Settings
+
+        started = []
+        api = web.Api.__new__(web.Api)
+        api.service = SimpleNamespace(start=lambda kind, body: started.append((kind, body)), app=SimpleNamespace())
+        self.assertEqual(api.post("/api/upscale", {"factor": 4}), {"started": True})
+        self.assertEqual(started, [("upscale", {"factor": 4})])
+        self.assertIs(web.EDITABLE["custom_workflow"], str)
+        self.assertIs(web.EDITABLE["custom_workflow_inputs"], str)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "wf.json"
+            path.write_text('{"nodes": [], "links": []}', encoding="utf-8")
+            api.service.app.settings = Settings(custom_workflow=str(path))
+            self.assertIn("Export (API)", api.settings()["custom_workflow_found"])
+        page = (Path(web.__file__).with_name("static") / "index.html").read_text(encoding="utf-8")
+        for needle in (
+            'data-mode="upscale"',
+            'id="factors"',
+            'id="s-custom_workflow"',
+            'id="s-custom_workflow_inputs"',
+        ):
+            self.assertIn(needle, page)
+        self.assertIn('"custom-workflow"', page)
+
+    def test_gear_settings_include_the_custom_workflow(self):
+        try:
+            from openfill_photocraft import panels
+        except ImportError:
+            self.skipTest("no tkinter")
+        keys = {key: kind for key, _label, kind in panels.SETTINGS}
+        self.assertIs(keys["custom_workflow"], str)
+        self.assertIs(keys["custom_workflow_inputs"], str)

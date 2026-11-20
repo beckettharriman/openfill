@@ -35,6 +35,14 @@ SETTINGS = (
     ("grow_percent", "Repaint margin (%)", float),
     ("feather_percent", "Edge softness (%)", float),
     ("extra_server_args", "Extra ComfyUI options", str),
+    ("custom_workflow", "Custom ComfyUI workflow", str),
+    ("custom_workflow_inputs", "Workflow inputs", str),
+)
+CUSTOM_HINT = (
+    "Your own ComfyUI workflow as one more model for Fill. In ComfyUI use Workflow > Export (API). "
+    "OpenFill sends it the selection's picture (the selection is its alpha, or goes to a Load Image "
+    "Mask), the prompt and a seed, and takes the image of its Save Image node. It runs on your own "
+    "ComfyUI only."
 )
 SECTIONS = (("models", "Models"), ("engine", "Engine"), ("generation", "Generation"))
 SHARED_HINT = (
@@ -109,6 +117,7 @@ class GearView(tk.Frame):
         self.engine.remote_ssh.set(settings.remote_ssh or "")
         for key, entry in self.generation.fields.items():
             entry.set(str(getattr(settings, key)))
+        self.generation.loaded(settings)
 
     def values(self) -> dict[str, Any]:
         raw: dict[str, Any] = {
@@ -184,6 +193,7 @@ class GearView(tk.Frame):
         if (was_cloud and not app.settings.uses_cloud) or app.settings.uses_remote:
             self.bar.service.warm_up()  # a Remote GPU: connects, so the bar says at once if it answers
         self.bar.refresher.wake.set()
+        self.generation.loaded(app.settings)
         self.say("Settings saved.", OK)
 
     def _apply_remote(self, settings: Any) -> None:
@@ -676,7 +686,61 @@ class GenerationView(tk.Frame):
             "Steps: more is slower and finer. Strictness: how closely the prompt is followed. "
             "Margin: how far past the selection the fill may repaint, as a share of its size.",
         ).pack(fill="x", pady=(12, 0))
+        # Advanced: a custom ComfyUI workflow, hidden until asked for
+        self.advanced = ui.Checkbox(self, "Advanced")
+        self.advanced.pack(anchor="w", pady=(12, 0))
+        self.advanced_box = ui.frame(self)
+
+        def workflow_row(box):
+            row = ui.frame(box)
+            browse = ui.Button(row, "Browse", self._browse_workflow)
+            self.fields["custom_workflow"] = ui.Field(row, CW - 8 - browse.w, "an API format .json file")
+            self.fields["custom_workflow"].pack(side="left")
+            browse.pack(side="left", padx=(8, 0))
+            return row
+
+        box, _ = field(self.advanced_box, labels["custom_workflow"], workflow_row)
+        box.pack(fill="x", pady=(12, 0))
+        box, self.fields["custom_workflow_inputs"] = field(
+            self.advanced_box,
+            labels["custom_workflow_inputs"],
+            lambda b: ui.Field(b, CW, "found by itself, or image=10, mask=11, prompt=6.text"),
+        )
+        box.pack(fill="x", pady=(12, 0))
+        ui.small(self.advanced_box, CUSTOM_HINT).pack(fill="x", pady=(8, 0))
+        self.found = ui.small(self.advanced_box, "")
+        self.found.pack(fill="x", pady=(8, 0))
+        self.advanced.var.trace_add("write", lambda *_a: self._show_advanced())
         self.result = ui.small(self, "")
+
+    def _show_advanced(self) -> None:
+        if self.advanced.get():
+            self.advanced_box.pack(fill="x", after=self.advanced)
+        else:
+            self.advanced_box.pack_forget()
+        self.bar._resize()
+
+    def loaded(self, settings: Any) -> None:
+        """After load or save: open Advanced when a workflow is set, and say what was found in it."""
+        from openfill import custom_workflow
+
+        path = str(getattr(settings, "custom_workflow", "") or "")
+        if path and not self.advanced.get():
+            self.advanced.set(True)
+        text = custom_workflow.describe_file(path, str(getattr(settings, "custom_workflow_inputs", "") or ""))
+        bad = bool(text) and not text.startswith("Found:")
+        self.found.configure(text=text, fg=BAD if bad else DIM)
+
+    def _browse_workflow(self) -> None:
+        from tkinter import filedialog
+
+        path = filedialog.askopenfilename(
+            parent=self.bar.root,
+            title="Choose a ComfyUI workflow (API format)",
+            filetypes=[("ComfyUI workflow (API)", "*.json"), ("All files", "*")],
+        )
+        if path:
+            self.fields["custom_workflow"].set(path)
 
     def say(self, text: str, color: str = OK) -> None:
         if not text:
