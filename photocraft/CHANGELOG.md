@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version numbers below (0.2.x) are OpenFill for PhotoCraft's own, not PhotoCraft's.
 Each entry from now on says which PhotoCraft versions it works with.
 
+## [Unreleased]
+
+Fixed:
+- A large Fill with SDXL (RealVisXL, Juggernaut) or SD 1.5 and more than one variation failed with "INPAINT_MaskedFill: Image and mask batch size does not match" ([#16](https://github.com/beckettharriman/openfill/issues/16)). One variation and smaller selections worked. The same went for RORem and the FLUX eraser.
+- The Tk panel failed to open with some Python 3.14 and Tk 8.6 setups ("bad screen distance "1.5""), so OpenFill fell back to the browser page.
+- The Flatpak PhotoCraft (0.21) could not open any image ("needs about 0.0 GB and 0.0 GB is free"), because it could not read the memory limits in /sys/fs/cgroup. OpenFill now starts it with read access to that folder.
+
 ## [0.2.6] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
 
 Fixed (update recommended on Windows):

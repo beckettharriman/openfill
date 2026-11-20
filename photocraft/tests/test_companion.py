@@ -3135,7 +3135,7 @@ console.log(JSON.stringify(out));
 class LaunchTests(unittest.TestCase):
     """How the launcher starts PhotoCraft, which refuses unknown, repeated and conflicting options."""
 
-    def launch(self, files: list[str], env: dict[str, str]) -> tuple[list[str], dict]:
+    def launch(self, files: list[str], env: dict[str, str], command: list[str] | None = None) -> tuple[list[str], dict]:
         from unittest import mock
 
         from openfill_photocraft import __main__ as main
@@ -3146,10 +3146,43 @@ class LaunchTests(unittest.TestCase):
             mock.patch.object(main.subprocess, "Popen") as popen,
         ):
             t = Path(tmp)
-            main.launch(["photocraft"], 7890, t / "token", t, t / "exchange", files, t / "log")
+            main.launch(command or ["photocraft"], 7890, t / "token", t, t / "exchange", files, t / "log")
             args, kwargs = popen.call_args
             kwargs["stdout"].close()
             return args[0], kwargs
+
+    def test_flatpak_sees_home_and_the_cgroup_memory_limits(self):
+        # Without /sys/fs/cgroup the Flatpak PhotoCraft 0.21 reads 0 GB free and opens nothing (issue #16).
+        args, _ = self.launch(["a.png"], {}, ["flatpak", "run", "ai.storyteller.photocraft"])
+        self.assertEqual(
+            args[:5],
+            ["flatpak", "run", "--filesystem=home", "--filesystem=/sys/fs/cgroup:ro", "ai.storyteller.photocraft"],
+        )
+        self.assertEqual(args[5:7], ["--control", "7890"])  # PhotoCraft's own options after the app id
+        self.assertEqual(args[-2:], ["--", "a.png"])
+
+    def test_tk_distances_are_whole_pixels(self):
+        # A Tk built against some Tcl 8.6 releases refuses a fractional screen distance
+        # ("bad screen distance "1.5""), so the Tk panel never opened (issue #16).
+        import ast
+
+        options = {"width", "borderwidth", "bd", "highlightthickness", "padx", "pady", "ipadx", "ipady"}
+        options |= {"insertwidth", "selectborderwidth", "wraplength", "dashoffset", "outlineoffset"}
+        found = []
+        for path in sorted((ROOT / "photocraft" / "openfill_photocraft").glob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    if node.func.attr in ("line", "ellipse", "rectangle", "polygon", "rounded_rectangle"):
+                        continue  # PIL ImageDraw, not Tk
+                    for kw in node.keywords:
+                        value = kw.value
+                        if kw.arg in options and isinstance(value, ast.Constant) and isinstance(value.value, float):
+                            found.append(f"{path.name}:{node.lineno} {kw.arg}={value.value}")
+        self.assertEqual(found, [])
+
+    def test_a_native_photocraft_gets_no_flatpak_options(self):
+        args, _ = self.launch([], {})
+        self.assertFalse([a for a in args if a.startswith("--filesystem")])
 
     def test_flags_then_files_after_a_separator(self):
         args, _ = self.launch(["-odd name.png", "b.png"], {})

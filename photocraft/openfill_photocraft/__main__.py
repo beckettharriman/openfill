@@ -205,8 +205,10 @@ def launch(
 ) -> subprocess.Popen:
     args = list(command)
     if args[:2] == ["flatpak", "run"]:
-        # The sandbox must see the images it may open and the exchange folder.
-        args.insert(2, "--filesystem=home")
+        # The sandbox must see the images it may open and the exchange folder, and
+        # /sys/fs/cgroup (read-only): without it PhotoCraft 0.21 reads 0 GB of free
+        # memory and refuses to open any image (issue #16).
+        args[2:2] = ["--filesystem=home", "--filesystem=/sys/fs/cgroup:ro"]
     args += [
         "--control",
         str(port),
