@@ -160,6 +160,11 @@ class Settings:
     hidden_models: str = ""  # JSON list of model ids left out of the model menus (model_menu.py)
     hub_search: bool = True  # Models tab: also list current models from Hugging Face and Civitai (read-only API calls)
     hub_civitai: bool = True  # include Civitai in that search (Hugging Face only when False)
+    # Advanced: a ComfyUI workflow of the user's own (API format JSON file) offered as one more
+    # model for Fill ("Custom workflow"); custom_workflow_inputs overrides where OpenFill's
+    # picture, mask, prompt and seed go (custom_workflow.apply_inputs), "" = found by itself.
+    custom_workflow: str = ""
+    custom_workflow_inputs: str = ""
     # Cloud service (backend "cloud", see backends/cloud.py and docs/cloud.md). Only used when picked.
     cloud_provider: str = "openrouter"  # "openrouter", "openai" (OpenAI-compatible), or "gemini"
     cloud_url: str = ""  # API address; "" = the provider's own (https://openrouter.ai/api/v1)

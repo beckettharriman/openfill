@@ -44,6 +44,7 @@ MODEL_FOLDERS = (
     "inpaint",
     "loras",
     "background_removal",  # BiRefNet for Remove Background (PR #11)
+    "upscale_models",  # Real-ESRGAN for Upscale
 )
 
 

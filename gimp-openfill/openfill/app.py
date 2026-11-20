@@ -21,7 +21,19 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from . import caption, comfy_setup, geometry, hardware, local_models, png, quality, shared_models, ui_text, workflow
+from . import (
+    caption,
+    comfy_setup,
+    custom_workflow,
+    geometry,
+    hardware,
+    local_models,
+    png,
+    quality,
+    shared_models,
+    ui_text,
+    workflow,
+)
 from . import catalog as cat
 from .backend import (
     SETTINGS_MENU,
@@ -60,6 +72,17 @@ NO_OPENCV_MANUAL = (
     "Install it into ComfyUI's Python (pip install opencv-python-headless), then run the same operation again."
 )
 
+FLUX2_KLEIN_STEPS = 4
+# Upscale: the factors offered, and the largest result (pixels per side and in all). A 4x of a
+# 4000 x 3000 photo is 192 megapixels: more than an editor or ComfyUI's memory handles well.
+UPSCALE_FACTORS = (2, 4)
+UPSCALE_MAX_SIDE = 16384
+UPSCALE_MAX_PIXELS = 100_000_000
+# SeedVR2 restores every output pixel with a diffusion model: far slower and hungrier than
+# Real-ESRGAN, so its result is kept smaller.
+SEEDVR2_MAX_PIXELS = 16_800_000
+CUSTOM_WORKFLOW_ID = "custom-workflow"  # the model choice that runs the custom ComfyUI workflow (Advanced)
+
 # Model ids the old "fast"/"quality" choices meant without a catalog; with
 # one they resolve to the tier's installed default (catalog.TIER_PREFERENCE).
 REMOTE_DIRNAME = "remote-gpu"  # folder names for the Remote GPU's model list (never created on disk)
@@ -78,6 +101,14 @@ class NothingSelected(BackendError):
 
 class UnsupportedImage(BackendError):
     """The image cannot take generated pixels as it is (indexed colors)."""
+
+
+class CustomWorkflowProblem(BackendError):
+    """The custom ComfyUI workflow (Advanced) cannot be used; the text says why."""
+
+
+class UpscaleTooLarge(BackendError):
+    """The upscaled image would be larger than OpenFill makes."""
 
 
 INDEXED_MESSAGE = (
@@ -508,9 +539,11 @@ class App:
         With the cloud backend every choice means the cloud model (no catalog entry)."""
         if self.uses_cloud:
             return None, self.cloud_model_spec()
+        choice = (choice or "active").strip()
+        if choice == CUSTOM_WORKFLOW_ID:
+            return None, self.custom_workflow_spec()
         self.require_backend_install()
         self._restart_for_shared_models()
-        choice = (choice or "active").strip()
         if choice == "active":
             model_id = self.active_model_id()
             if not model_id:
@@ -556,6 +589,38 @@ class App:
             )
         self._fetch_missing_previews(entry)
         return entry, cat.model_spec_for(entry, self.catalog, self.models_root)
+
+    def custom_workflow_spec(self) -> ModelSpec:
+        """The custom ComfyUI workflow (Advanced) as a model: read and checked again for every
+        job, so an edited file is used as it is now. ComfyUI on this computer only: the Remote
+        GPU's server runs only OpenFill's own graphs, and other backends cannot run ComfyUI graphs."""
+        path = (self.settings.custom_workflow or "").strip()
+        if not path:
+            raise CustomWorkflowProblem(
+                "No custom workflow is set. Choose a ComfyUI workflow file (API format) under Advanced in the settings."
+            )
+        if self.settings.uses_remote or self.settings.backend != "comfyui":
+            raise CustomWorkflowProblem(
+                "A custom workflow runs on ComfyUI on this computer only. Switch the backend to Local, "
+                "or pick another model."
+            )
+        self.require_backend_install()
+        try:
+            wf = custom_workflow.load(path, self.settings.custom_workflow_inputs)
+        except custom_workflow.CustomWorkflowError as err:
+            raise CustomWorkflowProblem(f"The custom workflow can't be used: {err}") from None
+        self.log.info("custom workflow %s: %s", wf.source, wf.describe())
+        return ModelSpec(
+            checkpoint=f"Custom workflow ({wf.name})", arch="custom", template="custom_workflow", custom=wf
+        )
+
+    def custom_workflow_name(self) -> str:
+        """The custom workflow's menu name ("" when none is set)."""
+        path = (self.settings.custom_workflow or "").strip()
+        if not path:
+            return ""
+        stem = Path(path.strip('"')).stem or "workflow"
+        return f"Custom workflow ({stem})"
 
     def cloud_model_spec(self) -> ModelSpec:
         from .backends.cloud import provider
@@ -650,6 +715,9 @@ class App:
             cfg, sampler, scheduler, steps = 1.0, "euler", "normal", max(20, min(steps, 30))
         elif model.arch == "qwen_image":
             cfg, sampler, scheduler, steps = 2.5, "euler", "simple", max(20, min(steps, 30))
+        elif model.arch == "flux2":
+            # FLUX.2 [klein] is step-distilled: 4 steps without guidance (Black Forest Labs' settings).
+            cfg, sampler, scheduler, steps = 1.0, "euler", "simple", FLUX2_KLEIN_STEPS
         batch = 1 if model.prompt_free else max(1, min(8, int(variations)))
         return Sampling(
             steps=steps,
@@ -1165,6 +1233,11 @@ class App:
             )
         image_png, image_rgba = self.io.export_region(image, ctx)
         mask_png, mask_raw = self.io.export_selection_mask(image, ctx)
+        if model.effective_template == "custom_workflow":
+            # The selection travels in the picture's alpha too (ComfyUI's convention for a painted
+            # mask), and the mask file carries it as gray and as alpha, for any mask loader.
+            image_png = png.encode(ctx.width, ctx.height, custom_workflow.rgba_with_mask(image_rgba, mask_raw), 4)
+            mask_png = png.encode(ctx.width, ctx.height, custom_workflow.mask_rgba(mask_raw), 4)
         if self.settings.scene_caption and not removal_intent and not model.prompt_free:
             sw, sh, small = caption.sample(ctx.width, ctx.height, image_rgba, 4)
             _, _, small_mask = caption.sample(ctx.width, ctx.height, mask_raw, 1)
@@ -1674,6 +1747,91 @@ class App:
         runner.done("Added layer: Background Removed")
         self.log.info("bgremove: done, %d layer(s)", len(layers))
         return layers
+
+    def upscale_models(self) -> list[cat.ModelEntry]:
+        """The installed upscale models (Real-ESRGAN first, then SeedVR2)."""
+        found = cat.runnable_installed(self.catalog, self.models_root, self.custom_nodes_dir, "upscale")
+        return sorted(found, key=lambda e: e.template != "upscale_model")
+
+    def upscale_size(self, width: int, height: int, factor: int, model: ModelSpec) -> tuple[int, int]:
+        """The size of the upscaled image; raises UpscaleTooLarge when it is more than OpenFill makes."""
+        if factor not in UPSCALE_FACTORS:
+            raise ValueError(f"Upscale is {' or '.join(f'{f}x' for f in UPSCALE_FACTORS)}, not {factor}x")
+        new_w, new_h = int(width) * factor, int(height) * factor
+        limit = SEEDVR2_MAX_PIXELS if model.effective_template == "seedvr2" else UPSCALE_MAX_PIXELS
+        if max(new_w, new_h) > UPSCALE_MAX_SIDE or new_w * new_h > limit:
+            smaller = [f for f in UPSCALE_FACTORS if f < factor and width * f * height * f <= limit]
+            hint = f" Try {smaller[-1]}x instead." if smaller else " Make the image smaller first."
+            if model.effective_template == "seedvr2":
+                hint += " Real-ESRGAN can make bigger images than SeedVR2."
+            raise UpscaleTooLarge(
+                f"{factor}x would make a {new_w} x {new_h} image ({new_w * new_h / 1e6:.0f} megapixels), more than "
+                f"OpenFill makes with this model (at most {limit / 1e6:.0f} megapixels and {UPSCALE_MAX_SIDE} pixels "
+                f"per side).{hint}"
+            )
+        return new_w, new_h
+
+    def upscale(self, image, factor: int = 2, model_choice: str = "default"):
+        """Upscale the whole visible image ``factor`` times into a new image (the original is not
+        changed). ``model_choice``: "default" (Real-ESRGAN when installed) or an upscale model's id."""
+        self._check_image(image)
+        installed = self.upscale_models()
+        if model_choice in ("", "default", "active", None):
+            if not installed:
+                raise ModelMissing(
+                    "Upscale needs an upscale model. Download Real-ESRGAN x4plus (67 MB) in the Models tab (Upscale)."
+                )
+            entry = installed[0]
+        else:
+            entry = next((e for e in self.catalog if e.id == model_choice), None)
+            if entry is None or "upscale" not in entry.capabilities:
+                raise ModelMissing(f"'{model_choice}' is not an upscale model; pick one in the Models tab (Upscale).")
+        entry, model = self.resolve_model(entry.id)
+        full = self.io.image_rect(image)
+        new_w, new_h = self.upscale_size(full.width, full.height, int(factor), model)
+        image_png, _ = self.io.export_region(image, full)
+        mask_png = png.encode(1, 1, b"\xff", 1)  # not used by the upscale graphs
+        request = InpaintRequest(
+            image_png=image_png,
+            mask_png=mask_png,
+            width=full.width,
+            height=full.height,
+            work_width=new_w,
+            work_height=new_h,
+            prompt="",
+            negative="",
+            model=model,
+            sampling=Sampling(steps=1, batch=1),
+            mode="upscale",
+        )
+        self.log.info("upscale: %dx%d -> %dx%d (%dx) model=%s", full.width, full.height, new_w, new_h, factor, entry.id)
+        title = "Upscale"
+        runner = self.runner_cls(self, title, model_display_name(entry.name), interactive=self.interactive)
+        try:
+            result = runner.run(
+                lambda progress, preview, cancel: self._comfy_only_backend(title, progress, cancel).inpaint(
+                    request, progress, preview, cancel
+                )
+            )
+            self.server.touch()
+            got = png.read_header(result.images[0])[:2]
+            if got != (new_w, new_h):
+                raise BackendError(f"The upscaled image came back at {got[0]} x {got[1]}, not {new_w} x {new_h}.")
+            name = f"Upscaled {factor}x"
+            new_image = self.io.new_image_from_pngs(result.images[:1], name, self.paths.temp)
+        except BaseException as err:
+            runner.fail(err)
+            raise
+        runner.done(f"New image: {new_w} x {new_h}")
+        self.log.info("upscale: done, %dx%d", new_w, new_h)
+        return new_image
+
+    def _comfy_only_backend(self, title: str, progress=None, cancel=None) -> ComfyBackend:
+        """The backend for jobs that run on ComfyUI only (Upscale)."""
+        backend = self.backend(progress, cancel)
+        if not isinstance(backend, ComfyBackend):
+            raise BackendUnavailable(f"{title} runs on ComfyUI only. Switch the backend to ComfyUI to use it.")
+        return backend
 
     def _background_removal_backend(self, progress=None, cancel=None) -> ComfyBackend:
         """The backend for Remove Background: ComfyUI only. Any other backend would run the

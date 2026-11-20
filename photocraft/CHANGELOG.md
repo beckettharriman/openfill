@@ -31,6 +31,9 @@ New:
 - When the engine takes longer than 90 seconds to start, the status line says "Still starting (slow, see Logs)", and a job's progress says why that can happen. A model folder on an unplugged or sleeping drive is named when it doesn't answer.
 - Google Gemini as a third optional cloud service, by Kaya Furkan İpekci (kayafurkanipekci) ([#19](https://github.com/beckettharriman/openfill/pull/19)). Pick it under Engine > Cloud service and paste your Gemini API key, or set GEMINI_API_KEY (a key from the environment only goes to Google's own address). Gemini has a Mask method choice, and Variations starts at 1 for it. See [docs/cloud.md](../docs/cloud.md).
 - Cloud service has a Time limit in seconds. 0 lets OpenFill work it out for each job, and it also applies to jobs on this computer.
+- Upscale tab: a bigger copy of the whole image, 2x or 4x, opens as a new document. The original isn't changed. Needs Real-ESRGAN (64 MB) from the model manager. SeedVR2 3B is there too for slower upscales that restore detail.
+- FLUX.2 [klein] 4B for Fill and Expand, used only when you pick it. The 9B model is listed as untested and non-commercial.
+- Generation > Advanced: use your own ComfyUI workflow (saved with Export (API)) as one more model for Fill.
 
 ## [0.2.6] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
 

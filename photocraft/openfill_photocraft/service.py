@@ -358,6 +358,7 @@ class Service:
                 "expand": "Generative Expand",
                 "txt2img": "Text to Image",
                 "bgremove": "Remove Background",
+                "upscale": "Upscale",
             }.get(kind, kind)
             self.state.model = ""
             self.state.fraction, self.state.started, self.state.finished = 0.0, time.time(), 0.0
@@ -433,6 +434,11 @@ class Service:
                 )
             elif kind == "bgremove":
                 layers = self.app.remove_background(image)
+            elif kind == "upscale":
+                # The result is a new document; the original is not changed, so nothing is put into it
+                # (and finishing it would bring it back to the front over the new one).
+                self.app.upscale(image, int(p.get("factor", 2)), str(p.get("upscale_model") or "default"))
+                layers, image, self.image = [], None, None
             elif kind == "txt2img":
                 self.app.text_to_image(
                     image,

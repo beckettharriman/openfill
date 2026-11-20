@@ -154,6 +154,16 @@ ADVANCED_FIELDS = (
     ("max_side_sdxl", "Working size for SDXL (px)", "Larger is sharper but slower and needs more memory."),
     ("txt2img_width", "Text to Image default width (px)", ""),
     ("txt2img_height", "Text to Image default height (px)", ""),
+    (
+        "custom_workflow",
+        "Custom ComfyUI workflow",
+        "A workflow saved with Export (API) in ComfyUI. Fill offers it as one more model.",
+    ),
+    (
+        "custom_workflow_inputs",
+        "Workflow inputs",
+        "Empty finds them. Or: image=10, mask=11, prompt=6.text, seed=3.seed, output=9.",
+    ),
 )
 CONNECTION_FIELDS = (
     ("url", "ComfyUI address", ""),

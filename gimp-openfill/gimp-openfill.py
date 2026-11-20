@@ -73,6 +73,8 @@ PROC_EXPAND = "python-fu-openfill-generative-expand"
 PROC_TXT2IMG = "python-fu-openfill-text-to-image"
 PROC_SETTINGS = "python-fu-openfill-settings"
 PROC_STOP = "python-fu-openfill-stop-backend"
+PROC_UPSCALE = "python-fu-openfill-upscale"
+CUSTOM_WORKFLOW_ID = "custom-workflow"  # openfill.app.CUSTOM_WORKFLOW_ID
 MENU = "<Image>/Filters/OpenFill"
 AUTHOR = "Beckett Harriman"
 RW = GObject.ParamFlags.READWRITE
@@ -297,6 +299,12 @@ def _model_options(
     except Exception:  # noqa: BLE001 - the dropdown still offers the active model
         pass
     options = [("active", ui_text.model_option_label(active_name, True, True))]
+    if kind == "fill" and settings.custom_workflow.strip() and settings.backend == "comfyui":
+        # Advanced: the user's own ComfyUI workflow, one more choice for Fill (checked when it runs)
+        from pathlib import Path
+
+        stem = Path(settings.custom_workflow.strip().strip('"')).stem or "workflow"
+        installed_rows.append((CUSTOM_WORKFLOW_ID, f"Custom workflow ({stem})"))
     return options + installed_rows + other_rows, active_name, prompt_free, frozenset(flux_ids), notes
 
 
@@ -852,6 +860,49 @@ def run_txt2img(
     return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
 
 
+def _upscale_model_choice() -> Gimp.Choice:
+    """'default' (Real-ESRGAN when installed), then the catalog's upscale models."""
+    options = [("default", "Default (Real-ESRGAN when installed)")]
+    try:
+        from pathlib import Path
+
+        from openfill.catalog import load_catalog
+
+        for entry in load_catalog(plugin_dir=Path(__file__).resolve().parent):
+            if "upscale" in entry.capabilities:
+                options.append((entry.id, entry.name.replace("_", "__")))
+    except Exception:  # noqa: BLE001 - registration must not fail: the default still works
+        pass
+    return _choice(options)
+
+
+def run_upscale(
+    procedure: Gimp.Procedure,
+    run_mode: Gimp.RunMode,
+    image: Gimp.Image,
+    _drawables: list[Gimp.Drawable],
+    config: Gimp.ProcedureConfig,
+    _data: object,
+) -> Gimp.ValueArray:
+    """Filters > OpenFill > Upscale: a bigger copy of the whole visible image, as a new image."""
+    hooks = _test_hooks() if run_mode == Gimp.RunMode.INTERACTIVE else {}
+    if run_mode == Gimp.RunMode.INTERACTIVE:
+        if hooks.get("autoclose"):
+            return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, GLib.Error())
+        if not _dialog(procedure, config, "Upscale"):
+            return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, GLib.Error())
+    from openfill.app import App
+
+    app = None
+    try:
+        app = App(interactive=run_mode == Gimp.RunMode.INTERACTIVE)
+        factor = int(str(config.get_property("factor")).rstrip("x") or 2)
+        app.upscale(image, factor, config.get_property("upscale-model"))
+    except Exception as err:  # noqa: BLE001 - every failure must reach the user
+        return _fail(procedure, err, app.log if app else None)
+    return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
+
+
 SETTINGS_KEYS = [
     "backend",
     "comfy_dir",
@@ -880,6 +931,8 @@ SETTINGS_KEYS = [
     "max_side_sdxl",
     "txt2img_width",
     "txt2img_height",
+    "custom_workflow",
+    "custom_workflow_inputs",
     "startup_timeout",
     "request_timeout",
     "extra_server_args",
@@ -1084,7 +1137,7 @@ def run_stop(procedure: Gimp.Procedure, _config: Gimp.ProcedureConfig, _data: ob
 
 
 class OpenFill(Gimp.PlugIn):
-    """The plug-in: registers the five Filters > OpenFill procedures."""
+    """The plug-in: registers the six Filters > OpenFill procedures."""
 
     def do_set_i18n(self, _name: str) -> tuple[bool, str | None, str | None]:
         """No translations are shipped."""
@@ -1092,7 +1145,7 @@ class OpenFill(Gimp.PlugIn):
 
     def do_query_procedures(self) -> list[str]:
         """Names of the procedures this plug-in provides."""
-        return [PROC_FILL, PROC_EXPAND, PROC_TXT2IMG, PROC_SETTINGS, PROC_STOP]
+        return [PROC_FILL, PROC_EXPAND, PROC_TXT2IMG, PROC_UPSCALE, PROC_SETTINGS, PROC_STOP]
 
     def do_create_procedure(self, name: str) -> Gimp.Procedure | None:
         """Build the procedure ``name`` with its arguments."""
@@ -1102,6 +1155,8 @@ class OpenFill(Gimp.PlugIn):
             return self._expand()
         if name == PROC_TXT2IMG:
             return self._txt2img()
+        if name == PROC_UPSCALE:
+            return self._upscale()
         if name == PROC_SETTINGS:
             return self._settings()
         if name == PROC_STOP:
@@ -1231,6 +1286,23 @@ class OpenFill(Gimp.PlugIn):
         self._seed_quality_args(p)
         return p
 
+    def _upscale(self) -> Gimp.ImageProcedure:
+        p = self._image_procedure(
+            PROC_UPSCALE,
+            run_upscale,
+            "_Upscale...",
+            "Make a bigger copy of the image with an AI upscaler",
+            "Upscales the whole visible image 2x or 4x with Real-ESRGAN (or SeedVR2) on ComfyUI and opens "
+            "the result as a new image. The original is not changed. OpenFill " + __version__,
+        )
+        p.add_choice_argument(
+            "factor", "_Scale", "How many times bigger", _choice([("2x", "2x"), ("4x", "4x")]), "2x", RW
+        )
+        p.add_choice_argument(
+            "upscale-model", "_Model", "Which upscale model to use", _upscale_model_choice(), "default", RW
+        )
+        return p
+
     def _settings(self) -> Gimp.Procedure:
         p = Gimp.Procedure.new(self, PROC_SETTINGS, Gimp.PDBProcType.PLUGIN, run_settings, None)
         p.set_menu_label("Generative Fill _Settings...")
@@ -1337,6 +1409,16 @@ class OpenFill(Gimp.PlugIn):
             "Models from another ComfyUI",
             "Folders of another ComfyUI whose models are used read only",
             s.shared_models,
+            RW,
+        )
+        p.add_string_argument(
+            "custom-workflow", "Custom ComfyUI workflow", "API format JSON file (Advanced)", s.custom_workflow, RW
+        )
+        p.add_string_argument(
+            "custom-workflow-inputs",
+            "Workflow inputs",
+            "Empty = found by itself, or image=10, mask=11, prompt=6.text",
+            s.custom_workflow_inputs,
             RW,
         )
         p.add_boolean_argument("debug", "_Verbose log", "", s.debug, RW)

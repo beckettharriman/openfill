@@ -119,10 +119,14 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 
 <div id="tools">
   <div class="content">
-    <div class="seg" id="modes" role="group" aria-label="Mode"><button data-mode="fill" class="on">Fill</button><button data-mode="remove">Remove</button><button data-mode="expand">Expand</button><button data-mode="txt2img">Create</button><button data-mode="bgremove">Cutout</button></div>
+    <div class="seg" id="modes" role="group" aria-label="Mode"><button data-mode="fill" class="on">Fill</button><button data-mode="remove">Remove</button><button data-mode="expand">Expand</button><button data-mode="txt2img">Create</button><button data-mode="bgremove">Cutout</button><button data-mode="upscale">Upscale</button></div>
     <div class="context" id="context"><span id="ctx-icon"></span><span id="ctx-text">Connecting to PhotoCraft...</span></div>
     <div class="small" id="remove-text" hidden>Erases what you selected and fills in the background around it.</div>
     <div class="small" id="bg-text" hidden>Cuts the subject out of the whole image and makes the background transparent, as a new layer. No selection needed.</div>
+    <div class="stack" id="upscale-box" hidden>
+      <div class="small">Makes a bigger copy of the whole image as a new image. The original is not changed.</div>
+      <div class="row"><label>Scale</label><div class="seg s12" id="factors"><button data-f="2" class="on">2x</button><button data-f="4">4x</button></div></div>
+    </div>
     <div class="stack" id="expand-box" hidden>
       <div class="seg s12 fit" id="presets" role="group" aria-label="Size"></div>
       <div class="grid4">
@@ -140,7 +144,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="row"><label>Result as</label><div class="seg s12" id="targets"><button data-target="image" class="on">New image</button><button data-target="layer">Layer in this image</button></div></div>
     </div>
     <div class="stack">
-      <div class="row"><label>Variations</label><div class="seg s12" id="vars"><button class="on">1</button><button>2</button><button>3</button><button>4</button><button>5</button></div></div>
+      <div class="row" id="vars-row"><label>Variations</label><div class="seg s12" id="vars"><button class="on">1</button><button>2</button><button>3</button><button>4</button><button>5</button></div></div>
       <div class="row"><label>Model</label><div class="select"><select id="model" aria-label="Model"></select><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9a9ba2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></div>
       <div class="row" id="model-tools" hidden><label></label><input id="model-search" type="text" placeholder="Search models" aria-label="Search models"><label class="small chk" id="show-hidden-box" hidden><input type="checkbox" id="show-hidden"> <span id="show-hidden-text">Show hidden</span></label></div>
     </div>
@@ -209,6 +213,12 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="grid2"><div class="field"><span class="label">Steps</span><input id="s-steps" type="number"></div><div class="field"><span class="label">Prompt strictness (CFG)</span><input id="s-cfg" type="number" step="0.5"></div></div>
       <div class="grid2"><div class="field"><span class="label">Repaint margin (%)</span><input id="s-grow_percent" type="number"></div><div class="field"><span class="label">Edge softness (%)</span><input id="s-feather_percent" type="number"></div></div>
       <div class="small">Steps: more is slower and finer. Strictness: how closely the prompt is followed. Margin: how far past the selection the fill may repaint, as a share of its size.</div>
+      <details id="gen-advanced"><summary>Advanced</summary><div class="stack">
+        <div class="field"><span class="label">Custom ComfyUI workflow</span><input id="s-custom_workflow" type="text" placeholder="path of an API format .json file"></div>
+        <div class="field"><span class="label">Workflow inputs</span><input id="s-custom_workflow_inputs" type="text" placeholder="found by itself, or image=10, mask=11, prompt=6.text"></div>
+        <div class="small">Your own ComfyUI workflow as one more model for Fill. In ComfyUI use Workflow &gt; Export (API). OpenFill sends it the selection's picture (the selection is its alpha, or goes to a Load Image Mask), the prompt and a seed, and takes the image of its Save Image node. It runs on your own ComfyUI only.</div>
+        <div class="small" id="custom-found"></div>
+      </div></details>
       <div class="note" id="gen-out" hidden></div>
     </div>
   </div>
@@ -238,21 +248,23 @@ function svg(name,color,size){size=size||16;return `<svg aria-hidden="true" widt
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
 const short=n=>(n||"").split(" (")[0].trim()||n;
 const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0"};
-const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create",bgremove:"Remove background"};
+const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create",bgremove:"Remove background",upscale:"Upscale"};
+const WHOLE=["bgremove","upscale"];
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
-let cloud=null, loaded={}, cloudMeta={}, mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="", hiddenIds=[], showHidden=false;
+let cloud=null, loaded={}, cloudMeta={}, mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="", hiddenIds=[], showHidden=false, factor=2, customName="";
 
 function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
 $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
 $("vars").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("vars"),b);variations=+b.textContent}};
 $("sizes").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("sizes"),b);size=[+b.dataset.w,+b.dataset.h];$("size-px").textContent=`${size[0]} x ${size[1]} px`}};
+$("factors").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("factors"),b);factor=+b.dataset.f;context()}};
 $("targets").onclick=e=>{const b=e.target.closest("button");if(b){segPick($("targets"),b);target=b.dataset.target}};
 $("sections").onclick=e=>{const b=e.target.closest("button");if(b)showSection(b.dataset.sec)};
 $("gear").onclick=()=>gear?showTools():showGear(section);
 $("back").onclick=()=>showTools();
 function setMode(m){mode=m;note=null;segPick($("modes"),$("modes").querySelector(`[data-mode="${m}"]`));
-  $("remove-text").hidden=m!=="remove";$("bg-text").hidden=m!=="bgremove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove"||m==="bgremove";
+  $("remove-text").hidden=m!=="remove";$("bg-text").hidden=m!=="bgremove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove"||WHOLE.includes(m);$("upscale-box").hidden=m!=="upscale";$("vars-row").hidden=WHOLE.includes(m);
   $("advanced").hidden=m!=="fill";$("prompt").placeholder=PH[m]||"";$("go").textContent=GO[m];fillSelect();context();if(m==="expand")presets()}
 function showTools(){gear=false;$("tools").hidden=false;$("gearview").hidden=true;$("head-tools").hidden=false;$("head-view").hidden=true;$("gear").classList.remove("on")}
 function showGear(s){gear=true;$("tools").hidden=true;$("gearview").hidden=false;$("head-tools").hidden=true;$("head-view").hidden=false;$("gear").classList.add("on");showSection(s||"models")}
@@ -265,7 +277,7 @@ $("strength").oninput=()=>$("str-v").textContent=(+$("strength").value).toFixed(
 $("model").onchange=async()=>{const v=$("model").value;
   if(v==="__manage"){fillSelect();showGear("models");return}
   if(mode==="remove"){removal=v;return}
-  if(mode==="bgremove")return;
+  if(WHOLE.includes(mode)||v==="custom-workflow")return;
   if(v&&v!==activeId&&!removers().has(v)){try{await post("/api/models/activate",{id:v});activeId=v}catch(e){say(e.message,"bad")}}};
 function seedOf(){const v=$("seed").value.trim();return v===""?-1:parseInt(v)}
 function say(t,kind){note=t?{text:t,kind:kind||"bad",base:baseContext()[0]}:null;context()}
@@ -276,6 +288,7 @@ $("go").onclick=()=>{if(busy)return;const prompt=$("prompt").value.trim(),model=
     if(mode==="remove"){b.removal=model;b.model="active";if(["default",...PROMPT_FREE].includes(model))b.variations=1}else b.model=model;
     start("fill",b)}
   else if(mode==="bgremove"){if(!doc){say("Open an image in PhotoCraft first.","bad");return}start("bgremove",{})}
+  else if(mode==="upscale"){if(!doc){say("Open an image in PhotoCraft first.","bad");return}start("upscale",{factor,upscale_model:model==="active"?"default":model})}
   else if(mode==="expand"){const m=["left","top","right","bottom"].map(k=>+$("e-"+k).value);if(!m.some(Boolean)){say("Enter the pixels to add on each side, or pick a ratio.","bad");return}
     start("expand",{prompt,negative:"",left:m[0],top:m[1],right:m[2],bottom:m[3],variations,seed:-1,model})}
   else{if(!prompt){say("Describe the image first.","bad");return}const onSel=target==="layer"&&sel;start("txt2img",{prompt,negative:"",width:onSel?0:size[0],height:onSel?0:size[1],variations,seed:-1,model,target})}};
@@ -295,6 +308,7 @@ function baseContext(){if(!pc.connected)return["Waiting for PhotoCraft...","dim"
   if(mode==="txt2img"&&doc&&sel&&target==="layer")return[`A layer in ${doc.name}, on the selection (${sel[2]} x ${sel[3]} px)`,"dim","selection"];
   if(mode==="txt2img")return["Makes a new image"+(doc?`, or a layer in ${doc.name}`:""),"dim","image"];if(!doc)return["Open an image in PhotoCraft.","dim","image"];
   if(mode==="bgremove")return[`${doc.name} · ${doc.width} x ${doc.height} · the whole image`,"dim","image"];
+  if(mode==="upscale")return[`${doc.name} · ${doc.width} x ${doc.height} to ${doc.width*factor} x ${doc.height*factor} · a new image`,"dim","image"];
   if(mode==="fill"||mode==="remove")return sel?[`${doc.name} · ${doc.width} x ${doc.height} · selection ${sel[2]} x ${sel[3]} px`,"dim","selection"]:[NO_SEL,"dim","selection"];
   return[`${doc.name} · ${doc.width} x ${doc.height} · pixels to add on each side`,"dim","image"]}
 function context(){let[t,k,i]=baseContext();if(note){if(note.base!==t)note=null;else{t=note.text;k=note.kind;i={bad:"error",ok:"check",warn:"warn"}[k]||"info"}}
@@ -319,7 +333,8 @@ function fillSelect(){const s=$("model");let opts;
   else if(mode==="remove")opts=removalChoices();
   else{const inst=usable();opts=inst.filter(r=>(r.capabilities||[]).includes(mode)).map(r=>[r.name,r.id]);
     // Fill also offers the removal models: with an empty prompt they remove (LaMa and MAT ignore a prompt, erasers use their own)
-    if(mode==="fill")inst.filter(r=>(r.capabilities||[]).includes("remove")&&!(r.capabilities||[]).includes("fill")).forEach(r=>opts.push([r.name,r.id]))}
+    if(mode==="fill")inst.filter(r=>(r.capabilities||[]).includes("remove")&&!(r.capabilities||[]).includes("fill")).forEach(r=>opts.push([r.name,r.id]));
+    if(mode==="fill"&&customName)opts.push([customName,"custom-workflow"])}
   const want=mode==="remove"?(opts.some(o=>o[1]===removal)?removal:(opts[0]||[])[1]):(opts.some(o=>o[1]===activeId)?activeId:(opts[0]||[])[1]);
   const q=$("model-search").value.trim(),hidden=new Set(hiddenIds),nHidden=opts.filter(o=>hidden.has(o[1])&&o[1]!==want).length;
   $("model-tools").hidden=opts.length<SEARCH_AT&&!nHidden;$("show-hidden-box").hidden=!nHidden&&!showHidden;$("show-hidden-text").textContent=`Show hidden (${nHidden})`;
@@ -383,7 +398,7 @@ async function tick(){
 }
 
 // What a model can run, as catalog.job_hint says it: any fill model can also remove; erasers are marked.
-function detail(r){const words={fill:"fill",expand:"expand",txt2img:"create",remove:"remove",edit:"edit",bgremove:"background removal"};
+function detail(r){const words={fill:"fill",expand:"expand",txt2img:"create",remove:"remove",edit:"edit",bgremove:"background removal",upscale:"upscale"};
   const caps=(r.capabilities||[]).filter(c=>c in words);const list=caps.map(c=>words[c]);
   if(caps.includes("fill")&&!caps.includes("remove"))list.push("remove");
   let what=list.join(", ");what=what.charAt(0).toUpperCase()+what.slice(1);
@@ -391,7 +406,7 @@ function detail(r){const words={fill:"fill",expand:"expand",txt2img:"create",rem
   if(!caps.length||r.runnable===false)what=r.neededBy||"Needed by other models";return[what,r.size].filter(Boolean).join(" · ")}
 function mnote(t,kind){const n=$("mnote");n.hidden=!t;n.textContent=t||"";n.className="note "+(kind||"bad")}
 async function act(fn){try{await fn();mnote("")}catch(e){mnote(e.message,"bad")}loadModels()}
-async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}models=m.rows||[];hiddenIds=m.hidden||[];$("hw").textContent=m.hardware||m.error||"";
+async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}models=m.rows||[];hiddenIds=m.hidden||[];customName=m.custom||"";$("hw").textContent=m.hardware||m.error||"";
   fillSelect();if(!gear||section!=="models")return;
   const inst=models.filter(r=>r.installed).sort((a,b)=>(!a.runnable)-(!b.runnable)||(!a.active)-(!b.active)||a.name.localeCompare(b.name));
   const avail=models.filter(r=>!r.installed&&r.runnable).sort((a,b)=>a.name.localeCompare(b.name));
@@ -409,6 +424,7 @@ async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return
 $("save-token").onclick=async()=>{try{await post("/api/models/token",{token:$("token").value});$("token").value="";mnote("Hugging Face key saved.","ok")}catch(e){mnote(e.message,"bad")}};
 
 async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el)continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}
+  $("custom-found").textContent=s.custom_workflow_found||"";if(s.custom_workflow)$("gen-advanced").open=true;
   $("cloud-key").value="";
   cloudMeta={key_saved:!!s.cloud_key_saved,key_elsewhere:!!s.cloud_key_elsewhere,key_env:s.cloud_key_env||"",key_session:!!s.cloud_key_session};
   loaded={backend:s.backend,cloud_provider:s.cloud_provider,cloud_url:s.cloud_url,cloud_model:s.cloud_model};cloudFields()}

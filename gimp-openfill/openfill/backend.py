@@ -98,7 +98,7 @@ class ModelSpec:
     """The model files a request runs with (file names as the server lists them)."""
 
     checkpoint: str = ""
-    arch: str = "sd15"  # sd15 | sdxl | flux | qwen_image | inpaint_model | cloud
+    arch: str = "sd15"  # sd15 | sdxl | flux | flux2 | qwen_image | inpaint_model | upscale | custom | cloud
     fooocus_head: str | None = None  # SDXL only
     fooocus_patch: str | None = None  # SDXL only
     template: str = ""  # catalog template id; "" = derive from arch
@@ -109,6 +109,9 @@ class ModelSpec:
     inpaint_model: str = ""  # LaMa / MAT file for prompt-free removal
     lora: str = ""  # LoRA applied to the diffusion model (the FLUX Fill object-removal LoRA)
     bg_removal_model: str = ""  # background removal file (BiRefNet), from models/background_removal
+    upscale_model: str = ""  # upscale model file (Real-ESRGAN), from models/upscale_models
+    # Custom ComfyUI workflow (custom_workflow.CustomWorkflow): the user's own API-format graph
+    custom: object = None
 
     @property
     def uses_fooocus(self) -> bool:
@@ -123,9 +126,12 @@ class ModelSpec:
         return {
             "sdxl": "sdxl_fooocus",
             "flux": "flux_fill",
+            "flux2": "flux2_edit",
             "qwen_image": "qwen_edit",
             "inpaint_model": "inpaint_model",
             "bg_removal": "bgremove",
+            "upscale": "upscale_model",
+            "custom": "custom_workflow",
         }.get(self.arch, "sd15_inpaint")
 
     @property
@@ -137,6 +143,11 @@ class ModelSpec:
     def background_removal(self) -> bool:
         """BiRefNet style models: they cut the subject out of the whole image (no selection, no prompt)."""
         return self.effective_template == "bgremove"
+
+    @property
+    def upscaler(self) -> bool:
+        """Upscale models (Real-ESRGAN, SeedVR2): the whole image, bigger; no selection, no prompt."""
+        return self.effective_template in ("upscale_model", "seedvr2")
 
     @property
     def eraser(self) -> bool:
@@ -165,7 +176,7 @@ class InpaintRequest:
     negative: str
     model: ModelSpec
     sampling: Sampling = field(default_factory=Sampling)
-    mode: str = "fill"  # "fill" or "expand"; the cloud backend also takes "remove"
+    mode: str = "fill"  # "fill" or "expand"; the cloud backend also takes "remove"; "bgremove", "upscale"
     grow: int = 16  # mask dilation in working pixels
     feather: int = 24  # mask blur in working pixels
     prefill: bool = True  # pre-fill masked area before sampling

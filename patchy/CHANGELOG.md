@@ -19,6 +19,8 @@ Patchy uses the same panel and engine as OpenFill for PhotoCraft, so it gets the
 - On Windows with display scaling above 100 %, the panel and OpenFill's messages are sharp instead of blurry, at the same size as before ([#17](https://github.com/beckettharriman/openfill/issues/17)).
 - Google Gemini as a third optional cloud service, by Kaya Furkan İpekci (kayafurkanipekci) ([#19](https://github.com/beckettharriman/openfill/pull/19)). Pick it under Engine > Cloud service. Cloud service also has a Time limit in seconds (0 = automatic).
 - Remove Background (Cutout tab) keeps the image's own transparency, by Pedro (PedroArthurr) ([#15](https://github.com/beckettharriman/openfill/pull/15)). See-through parts such as glass or a soft shadow stay see-through and keep their own colour, and the cutout is never more opaque than the original. A fully transparent image now says there is nothing to cut out instead of adding an empty layer.
+- Upscale tab, from the same panel as PhotoCraft: a bigger copy of the whole image, 2x or 4x, as a new document. Needs Real-ESRGAN from Models.
+- FLUX.2 [klein] 4B for Fill and Expand, and your own ComfyUI workflow (Generation > Advanced) as one more Fill model, as in PhotoCraft.
 
 ## [0.1.0] - 2026-11-08
 

@@ -38,7 +38,17 @@ WIDTH = W
 PREVIEW_MAX = (CW - ui.px(24), ui.px(230))
 THUMB_H = ui.px(72)
 
-TABS = (("fill", "Fill"), ("remove", "Remove"), ("expand", "Expand"), ("txt2img", "Create"), ("bgremove", "Cutout"))
+TABS = (
+    ("fill", "Fill"),
+    ("remove", "Remove"),
+    ("expand", "Expand"),
+    ("txt2img", "Create"),
+    ("bgremove", "Cutout"),
+    ("upscale", "Upscale"),
+)
+UPSCALE_FACTORS = (2, 4)
+# The tools that work on the whole image and make one result: no selection, prompt or variations.
+WHOLE_IMAGE = ("bgremove", "upscale")
 CREATE_SIZES = (("Square", 1024, 1024), ("Landscape", 1216, 832), ("Portrait", 832, 1216))
 STARTER = ("lama-big", "dreamshaper-8-inpainting")
 HEAD_H = ui.px(44) + 1  # the header and its divider
@@ -46,7 +56,14 @@ FOOTER_H = 1 + ui.px(12) + ui.px(36) + ui.px(16)  # the action bar: divider, 12 
 GEAR_BAR_H = ui.px(12) + ui.px(32)  # Models and settings' section control: 12 px and 32 px
 CREATE_TOTAL = ui.px(474)  # the Create tools, as on the board: Models and settings is about this tall
 PILL_W, PILL_H = ui.px(236), ui.px(36)  # the collapsed strip
-GO = {"fill": "Generate", "remove": "Remove", "expand": "Expand", "txt2img": "Create", "bgremove": "Remove background"}
+GO = {
+    "fill": "Generate",
+    "remove": "Remove",
+    "expand": "Expand",
+    "txt2img": "Create",
+    "bgremove": "Remove background",
+    "upscale": "Upscale",
+}
 PLACEHOLDERS = {
     "fill": "Describe what to add, or leave it empty to fill from the surroundings.",
     "expand": "Optional: describe what the new area shows.",
@@ -55,6 +72,8 @@ PLACEHOLDERS = {
 NO_SELECTION = "Select an area first: Marquee, Lasso or Object Selection."
 NO_MODELS = "No models installed"
 NO_BG_MODEL = "Download BiRefNet in Models"
+NO_UPSCALE_MODEL = "Download Real-ESRGAN in Models"
+CUSTOM_WORKFLOW_ID = "custom-workflow"  # openfill.app.CUSTOM_WORKFLOW_ID
 # The status line once the AI engine has stopped (crashed or was closed) after it was ready.
 STOPPED = "Stopped: Generate restarts it"
 SLOW_START = "Still starting (slow, see Logs)"
@@ -276,6 +295,9 @@ class Refresher:
             if row["installed"] and row["runnable"] and not row["missing_models"] and not row["missing_nodes"]:
                 for capability in row["capabilities"]:
                     models.setdefault(capability, []).append((row["id"], row["name"]))
+        custom = app.custom_workflow_name() if app.settings.backend == "comfyui" else ""
+        if custom:  # Advanced: the user's own ComfyUI workflow, one more choice for Fill
+            models.setdefault("fill", []).append((CUSTOM_WORKFLOW_ID, custom))
         active = app.active_model_id()
         facts.update(
             models=models,
@@ -429,6 +451,7 @@ class Bar:
         self.variations = tk.IntVar(value=max(1, min(5, int(self.prefs.get("variations", 1)))))
         self.model_choice = tk.StringVar(value="")
         self.target = tk.StringVar(value="image")
+        self.upscale_factor = tk.IntVar(value=4 if int(self.prefs.get("upscale_factor", 2) or 2) == 4 else 2)
         self.size_name = tk.StringVar(value="Square")
         self._preview_seq = -1
         self._images: list[Any] = []  # keep PhotoImages alive
@@ -499,6 +522,19 @@ class Bar:
         self.bg_line = ui.small(
             m, "Cuts the subject out of the whole image and adds it as a new layer with a transparent background."
         )
+        self.upscale_line = ui.small(
+            m, "Makes a bigger copy of the whole image as a new image. The original is not changed."
+        )
+        self.upscale_rows = ui.frame(m)
+        self.factor_seg = ui.Seg(
+            self._row(self.upscale_rows, "Scale"),
+            [(f, f"{f}x") for f in UPSCALE_FACTORS],
+            self.pick_factor,
+            ui.FIELD_W,
+            12,
+        )
+        self.factor_seg.pack(side="left")
+        self.factor_buttons = {f: _SegKey(self.factor_seg, f) for f in UPSCALE_FACTORS}
 
         from .expand_view import ExpandView
 
@@ -601,6 +637,7 @@ class Bar:
         self.pick_variations(self.variations.get())
         self.pick_size("Square")
         self._update_target()
+        self.factor_seg.set(self.upscale_factor.get())
 
     def _row(self, parent: tk.Misc, label: str, pady=(0, 0)) -> tk.Frame:
         """A form row: an 84 px grey label, then the control (packed into the returned frame)."""
@@ -1103,8 +1140,8 @@ class Bar:
         """Pack the tool view's parts for the current mode (12 px apart)."""
         key = self.tab.get()
         var_row, model_row = self.var_seg.master.master, self.model_box.master.master
-        if key == "bgremove":
-            var_row.pack_forget()  # one cutout per run: nothing to choose
+        if key in WHOLE_IMAGE:
+            var_row.pack_forget()  # one cutout or one bigger image per run: nothing to choose
         elif not var_row.winfo_manager():
             var_row.pack(fill="x", before=model_row)
         parts: list[tk.Misc] = [self.modes, self.context_row]
@@ -1114,6 +1151,9 @@ class Bar:
             parts.append(self.remove_line)
         if key == "bgremove":
             parts.append(self.bg_line)
+        if key == "upscale":
+            parts.append(self.upscale_line)
+            parts.append(self.upscale_rows)
         if key == "expand":
             parts.append(self.expand_view)
         if key in ("fill", "expand", "txt2img"):
@@ -1192,6 +1232,12 @@ class Bar:
 
         threading.Thread(target=work, daemon=True).start()
 
+    def pick_factor(self, factor: int) -> None:
+        self.upscale_factor.set(int(factor))
+        self.factor_seg.set(int(factor))
+        self.prefs["upscale_factor"] = int(factor)
+        self._update_context()
+
     def pick_size(self, label: str) -> None:
         self.size_name.set(label)
         self.size_seg.set(label)
@@ -1218,9 +1264,11 @@ class Bar:
         if self.tab.get() == "remove":
             self.prefs["removal"] = label
             return
-        if self.tab.get() == "bgremove":
-            return  # BiRefNet only cuts out backgrounds: it never becomes the active fill model
+        if self.tab.get() in WHOLE_IMAGE:
+            return  # BiRefNet and the upscalers never become the active fill model
         model_id = self._model_ids.get(label)
+        if model_id == CUSTOM_WORKFLOW_ID:
+            return  # the custom workflow is used when picked; it is not a catalog model
         facts = self.refresher.get()
         removers = {i for i, _n in (facts.get("models") or {}).get("remove", [])}
         if model_id and model_id != facts.get("active") and model_id not in removers:
@@ -1271,6 +1319,15 @@ class Bar:
                     self._say(f"Open an image in {self.host} first.", BAD)
                     return
                 self.service.start("bgremove", body)
+            elif kind == "upscale":
+                if not self.watcher.snapshot().get("document"):
+                    self._say(f"Open an image in {self.host} first.", BAD)
+                    return
+                body.update(
+                    factor=self.upscale_factor.get(),
+                    upscale_model=self._model_ids.get(self.model_choice.get(), "default"),
+                )
+                self.service.start("upscale", body)
             elif kind == "expand":
                 left, top, right, bottom = self.expand_view.margins()
                 if not any((left, top, right, bottom)):
@@ -1403,7 +1460,7 @@ class Bar:
         if not facts:
             shown = "Checking..."
         elif not names:
-            shown = NO_BG_MODEL if tab == "bgremove" else NO_MODELS
+            shown = {"bgremove": NO_BG_MODEL, "upscale": NO_UPSCALE_MODEL}.get(tab, NO_MODELS)
         else:
             shown = current
         self.model_box.set(shown)
@@ -1430,6 +1487,10 @@ class Bar:
             return f"Open an image in {self.host}.", DIM, "image"
         if tab == "bgremove":
             return f"{doc['name']} · {doc['width']} x {doc['height']} · the whole image", DIM, "image"
+        if tab == "upscale":
+            f = self.upscale_factor.get()
+            w, h = int(doc["width"]), int(doc["height"])
+            return f"{doc['name']} · {w} x {h} to {w * f} x {h * f} · a new image", DIM, "image"
         if tab in ("fill", "remove"):
             if sel:
                 return f"{doc['name']} · selection {sel[2]} x {sel[3]} px", DIM, "selection"

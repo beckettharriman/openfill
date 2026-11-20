@@ -44,6 +44,8 @@ EDITABLE = {
     "cloud_url": str,
     "cloud_mask_mode": str,
     "request_timeout": int,
+    "custom_workflow": str,  # Advanced: the user's own ComfyUI workflow (API format JSON)
+    "custom_workflow_inputs": str,
 }
 # Values a choice setting may take here (anything else is refused, not saved).
 CHOICES = {
@@ -104,7 +106,15 @@ class Api:
                 cat.add_amd_notes(rows, app.catalog)  # what may not work on an AMD card
         except Exception:  # noqa: BLE001
             hw = None
-        return {"rows": rows, "current": current, "pending": pending, "hardware": hw, "hidden": app.hidden_models()}
+        custom = app.custom_workflow_name() if app.settings.backend == "comfyui" else ""
+        return {
+            "rows": rows,
+            "current": current,
+            "pending": pending,
+            "hardware": hw,
+            "hidden": app.hidden_models(),
+            "custom": custom,
+        }
 
     def thumbnail(self, index: int) -> bytes:
         """A small JPEG of variation ``index`` of the last job (for the page's picker)."""
@@ -134,13 +144,16 @@ class Api:
         out["cloud_key_for"] = s.cloud_key_for
         out["cloud_key_env"] = s.gemini_env_var
         out["cloud_key_session"] = s.gemini_credentials.has_session_key
+        from openfill import custom_workflow
+
+        out["custom_workflow_found"] = custom_workflow.describe_file(s.custom_workflow, s.custom_workflow_inputs)
         return out
 
     # POST -----------------------------------------------------------------------------
 
     def post(self, path: str, body: dict[str, Any]) -> Any:
         svc, app = self.service, self.service.app
-        if path in ("/api/fill", "/api/expand", "/api/txt2img", "/api/bgremove"):
+        if path in ("/api/fill", "/api/expand", "/api/txt2img", "/api/bgremove", "/api/upscale"):
             svc.start(path.rsplit("/", 1)[1], body)
             return {"started": True}
         if path == "/api/show":

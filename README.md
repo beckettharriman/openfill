@@ -26,6 +26,7 @@ Here's what you get:
 <tr><td><b>Remove object</b></td><td>Select, press Remove. No prompt. It erases the selection at your image's own resolution.</td></tr>
 <tr><td><b>Generative Expand</b></td><td>Drag the canvas edges outward or pick a ratio, and it paints the new border. The prompt is optional.</td></tr>
 <tr><td><b>Create</b></td><td>A new image or a new layer from a prompt, sized to the selection if there is one.</td></tr>
+<tr><td><b>Upscale</b></td><td>A copy of the whole image 2x or 4x bigger, as a new image. Real-ESRGAN (64 MB) by default, SeedVR2 for restored detail.</td></tr>
 </table>
 
 Results always go on new layers, in one undo step, so your existing layers are never painted over. In PhotoCraft it's a panel next to your image (and `Filter > Plug-ins > OpenFill`); in GIMP it's under `Filters > OpenFill`.
@@ -81,7 +82,7 @@ OpenFill doesn't ship a model. The model manager only recommends models that fit
 | Fast fill | DreamShaper 8 Inpainting | 4 GB | about 9 s |
 | Quality fill | RealVisXL V5 with the Fooocus inpaint patch | 8 GB | 20 to 45 s |
 
-Each model has its own license. MAT and the FLUX.1 Fill models are **non-commercial**. Details in [docs/models.md](docs/models.md).
+Each model has its own license. MAT, the FLUX.1 Fill models and FLUX.2 [klein] 9B are **non-commercial**. Details in [docs/models.md](docs/models.md), which also covers using your own ComfyUI workflow (Advanced).
 
 ## Status
 

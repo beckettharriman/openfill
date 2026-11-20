@@ -42,7 +42,7 @@ ACTIVITY_EXTENSION = 180.0
 # FLUX and Qwen on a partly offloaded 8 GB card ran 87 to 151 s warm (median
 # 112 s); the old 134 to 166 s estimate cut 3 of 31 FLUX runs. Minimum timeout
 # for these families (any progress message still extends the deadline).
-SLOW_ARCHS = ("flux", "qwen_image")
+SLOW_ARCHS = ("flux", "qwen_image", "custom")
 SLOW_MODEL_FLOOR = 240.0
 # Model folders searched for the size of a request's model files.
 MODEL_FOLDERS = (
@@ -54,6 +54,7 @@ MODEL_FOLDERS = (
     "vae",
     "inpaint",
     "background_removal",
+    "upscale_models",
 )
 
 # Inputs that name a model file. ComfyUI lists a file in a sub folder with the separator of the
@@ -139,7 +140,10 @@ class ComfyBackend(Backend):
             info = self.client.object_info("INPAINT_ExpandMask")
             native = self.client.object_info(workflow.NATIVE_LAMA_NODE)
             bg = self.client.object_info("RemoveBackground")
-            self._caps = workflow.Capabilities(inpaint_nodes=bool(info), native_lama=bool(native), bg_removal=bool(bg))
+            seedvr2 = self.client.object_info("SeedVR2Conditioning")
+            self._caps = workflow.Capabilities(
+                inpaint_nodes=bool(info), native_lama=bool(native), bg_removal=bool(bg), seedvr2=bool(seedvr2)
+            )
         return self._caps
 
     def health(self) -> HealthStatus:
@@ -231,10 +235,23 @@ class ComfyBackend(Backend):
         except ValueError as err:
             raise WorkflowRejected(str(err)) from err
         pixels = int(getattr(request, "work_pixels", 0) or request.work_width * request.work_height)
+        output = workflow.OUTPUT_NODE
+        if getattr(request.model, "effective_template", "") == "custom_workflow":
+            from .. import custom_workflow
+
+            output = custom_workflow.output_node(graph)
         fallback = False
         try:
             images = self._run(
-                graph, request.sampling.steps, request.sampling.batch, pixels, progress, preview, cancel, request.model
+                graph,
+                request.sampling.steps,
+                request.sampling.batch,
+                pixels,
+                progress,
+                preview,
+                cancel,
+                request.model,
+                output=output,
             )
         except WorkflowRejected as err:
             # The telea / navier-stokes pre-fill modes need OpenCV on the server.
@@ -291,6 +308,7 @@ class ComfyBackend(Backend):
         preview: PreviewCallback | None = None,
         cancel: CancelCallback | None = None,
         model: ModelSpec | None = None,
+        output: str = workflow.OUTPUT_NODE,
     ) -> list[bytes]:
         timeout = self.request_timeout or self._estimate(steps, batch, pixels, model)
         started = time.monotonic()
@@ -348,7 +366,7 @@ class ComfyBackend(Backend):
         finished = time.monotonic()
         self._report(progress, 0.99, "Downloading result...")
         try:
-            images = self.client.output_images(entry, workflow.OUTPUT_NODE)
+            images = self.client.output_images(entry, output)
         except ComfyApiError as err:
             if self._connection_lost(err):
                 raise BackendUnavailable(self.connection_lost) from err
@@ -444,6 +462,7 @@ def model_files(model: ModelSpec | None) -> set[str]:
         model.vae,
         model.inpaint_model,
         model.bg_removal_model,
+        model.upscale_model,
         model.fooocus_head if model.uses_fooocus else "",
         model.fooocus_patch if model.uses_fooocus else "",
     )
