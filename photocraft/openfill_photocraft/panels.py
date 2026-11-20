@@ -546,6 +546,8 @@ class EngineView(tk.Frame):
                 self.bar.pick_variations(1)
         else:
             self.mask_box.pack_forget()
+        if hasattr(self.bar, "refit_gear") and self.backend.get() == "cloud":
+            self.bar.refit_gear()  # the Mask method row came or went
         self.note.configure(text=cloud_note(info.id, url))
 
     def _backend_picked(self, key: str) -> None:
@@ -559,6 +561,8 @@ class EngineView(tk.Frame):
             if frame is not shown:
                 frame.pack_forget()
         shown.pack(fill="x", after=self.backend.master)  # under the switch, above the tools
+        if hasattr(self.bar, "refit_gear"):
+            self.bar.refit_gear()
         if hasattr(self.bar, "scroller"):
             self.bar.scroller.yview_moveto(0)
 

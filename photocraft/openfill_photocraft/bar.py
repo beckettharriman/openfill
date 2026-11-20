@@ -726,20 +726,34 @@ class Bar:
 
     def _gear_total(self) -> int:
         """Models and settings keep one window height for all three sections: as tall as the
-        tallest of Engine and Generation, and at least the Create tools."""
+        tallest of Engine and Generation, and at least the Create tools. Engine counts at least
+        as with This computer shown, and with Cloud or Remote GPU shown as tall as that section
+        needs, so it fits without scrolling (``refit_gear``)."""
         if not getattr(self, "_gear_h", 0):
             self.root.update_idletasks()
-            extra = max(
-                0,
-                self.gear.engine.cloud.winfo_reqheight() - self.gear.engine.local.winfo_reqheight(),
-                self.gear.engine.remote.winfo_reqheight() - self.gear.engine.local.winfo_reqheight(),
-            )
-            sections = max(
-                self.gear.engine.winfo_reqheight() + extra + ui.px(48), self.gear.generation.winfo_reqheight()
-            )
+            engine = self.gear.engine
+            backend = engine.backend.get()
+            needed = engine.winfo_reqheight()
+            if backend in ("cloud", "remote"):
+                shown = engine.cloud if backend == "cloud" else engine.remote
+                as_local = needed - shown.winfo_reqheight() + engine.local.winfo_reqheight()
+                needed = max(as_local, needed + ui.px(48))
+            sections = max(needed, self.gear.generation.winfo_reqheight())
             settings = HEAD_H + GEAR_BAR_H + sections + ui.px(16) + FOOTER_H
             self._gear_h = max(settings, CREATE_TOTAL)
         return self._gear_h
+
+    def refit_gear(self) -> None:
+        """The Engine section shows another backend (or Gemini's Mask method row): the settings
+        view grows to fit it. It does not shrink while it is open, so it does not jump about."""
+        before = getattr(self, "_gear_h", 0)
+        self._gear_h = 0
+        if not (getattr(self, "view", "") and before):
+            return
+        if self._gear_total() > before:
+            self._resize()
+        else:
+            self._gear_h = before
 
     def _target_height(self) -> int:
         body = min(self._body_height(), self._max_body())
@@ -1044,6 +1058,7 @@ class Bar:
         entering = not self.view
         self.view = "settings"
         if entering:
+            self._gear_h = 0  # its height comes from the backend shown on this visit
             self.gear.load()  # the saved settings, once per visit (switching sections keeps edits)
         self.main.pack_forget()
         self.gear.pack(fill="x", padx=PAD, before=self.bottom_gap)

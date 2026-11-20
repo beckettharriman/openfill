@@ -3464,6 +3464,47 @@ console.log(JSON.stringify(out));
                     gear.values()
                 self.assertIn("0 or more seconds", str(caught.exception))
 
+    def test_settings_height_follows_the_backend_shown(self):
+        # Since #19 the view was sized for the Cloud section for everyone. Now This computer keeps
+        # its own height, and the view grows (never shrinks while open) for Cloud or Remote GPU.
+        from types import SimpleNamespace
+
+        from openfill_photocraft import bar as barmod
+
+        def box(h):
+            return SimpleNamespace(winfo_reqheight=lambda: h)
+
+        shown = {"backend": "comfyui"}
+        frames = {"comfyui": 300, "cloud": 440, "remote": 160}
+        engine = SimpleNamespace(
+            backend=SimpleNamespace(get=lambda: shown["backend"]),
+            winfo_reqheight=lambda: 260 + frames[shown["backend"]],
+            local=box(frames["comfyui"]),
+            cloud=box(frames["cloud"]),
+            remote=box(frames["remote"]),
+        )
+        bar = barmod.Bar.__new__(barmod.Bar)
+        bar.root = SimpleNamespace(update_idletasks=lambda: None)
+        bar.gear = SimpleNamespace(engine=engine, generation=box(400))
+        resized = []
+        bar._resize = lambda: resized.append(bar._gear_h)
+        fixed = barmod.HEAD_H + barmod.GEAR_BAR_H + barmod.ui.px(16) + barmod.FOOTER_H
+        local = max(fixed + 560, barmod.CREATE_TOTAL)
+        self.assertEqual(bar._gear_total(), local)  # as before #19
+        bar.view = "settings"
+        shown["backend"] = "cloud"
+        bar.refit_gear()
+        cloud = fixed + 700 + barmod.ui.px(48)
+        self.assertEqual(resized, [cloud])
+        for backend in ("remote", "comfyui"):  # smaller sections: no jump while the view is open
+            shown["backend"] = backend
+            bar.refit_gear()
+            self.assertEqual(bar._gear_total(), cloud)
+        self.assertEqual(len(resized), 1)
+        bar._gear_h = 0  # the next visit, with Remote GPU saved: at least This computer's height
+        shown["backend"] = "remote"
+        self.assertEqual(bar._gear_total(), local)
+
     def test_engine_view_gemini_ui_rules(self):
         try:
             import tkinter as tk
