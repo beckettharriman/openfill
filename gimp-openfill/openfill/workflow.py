@@ -882,9 +882,11 @@ def build_bgremove(
     filename_prefix: str = "openfill/bgremove",
 ) -> dict:
     """Remove Background with BiRefNet (ComfyUI's own nodes, v0.39 and newer): the whole image
-    goes in, a PNG with the background made transparent comes out. The mask file carries the
-    image's own alpha (255 where it is opaque), so the cutout is never more opaque than the
-    original. The seed is not used (the model is deterministic)."""
+    goes in, a PNG with the background made transparent comes out. The model reads the image
+    file (flattened over its mean colour); the mask file is the image as it is (RGBA). Its alpha
+    is multiplied in, so the cutout is never more opaque than the original, and its colours are
+    the cutout's, so see-through pixels keep their own colour. The seed is not used (the model
+    is deterministic)."""
     if not caps.bg_removal:
         raise ValueError("Remove Background needs ComfyUI 0.39 or newer (the RemoveBackground node)")
     if not req.model.bg_removal_model:
@@ -893,8 +895,9 @@ def build_bgremove(
     g.add("load_image", "LoadImage", image=image_ref)
     g.add("bg_model", "LoadBackgroundRemovalModel", bg_removal_name=req.model.bg_removal_model)
     g.add("foreground", "RemoveBackground", bg_removal_model=g.out("bg_model"), image=g.out("load_image", 0))
-    g.add("load_alpha", "LoadImage", image=mask_ref)
-    g.add("alpha", "ImageToMask", image=g.out("load_alpha", 0), channel="red")
+    g.add("original", "LoadImage", image=mask_ref)
+    # LoadImage's mask is the file's transparency (1 - alpha); inverted, it is the image's opacity
+    g.add("alpha", "InvertMask", mask=g.out("original", 1))
     g.add(
         "opacity",
         "MaskComposite",
@@ -906,7 +909,7 @@ def build_bgremove(
     )
     # JoinImageWithAlpha reads its mask as transparency, so the opacity is inverted first
     g.add("transparency", "InvertMask", mask=g.out("opacity"))
-    g.add("cutout", "JoinImageWithAlpha", image=g.out("load_image", 0), alpha=g.out("transparency"))
+    g.add("cutout", "JoinImageWithAlpha", image=g.out("original", 0), alpha=g.out("transparency"))
     g.add(OUTPUT_NODE, "SaveImage", images=g.out("cutout"), filename_prefix=filename_prefix)
     return g.to_dict()
 

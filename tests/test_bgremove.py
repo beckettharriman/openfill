@@ -7,9 +7,11 @@ import unittest
 from pathlib import Path
 
 from openfill import catalog as cat
+from openfill import png
 from openfill import workflow as w
 from openfill.backend import InpaintRequest, ModelSpec, Sampling
 from openfill.backends.comfy import ComfyBackend, model_files
+from openfill.geometry import Rect, flatten_over_mean
 from tests.sparse import grow_open
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -91,7 +93,6 @@ class GraphTests(unittest.TestCase):
                 "LoadImage",
                 "LoadBackgroundRemovalModel",
                 "RemoveBackground",
-                "ImageToMask",
                 "MaskComposite",
                 "InvertMask",
                 "JoinImageWithAlpha",
@@ -104,19 +105,63 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(graph["foreground"]["inputs"]["image"], ["load_image", 0])
         self.assertEqual(graph["transparency"]["inputs"]["mask"], ["opacity", 0])
         self.assertEqual(graph["cutout"]["inputs"]["alpha"], ["transparency", 0])
-        self.assertEqual(graph["cutout"]["inputs"]["image"], ["load_image", 0])
+        self.assertEqual(graph["cutout"]["inputs"]["image"], ["original", 0])
         self.assertEqual(graph[w.OUTPUT_NODE]["inputs"]["images"], ["cutout", 0])
         self.assertEqual(graph[w.OUTPUT_NODE]["inputs"]["filename_prefix"], "openfill/bgremove-x")
 
     def test_the_cutout_is_never_more_opaque_than_the_image(self):
-        graph = w.build_fill(request(), "img.png", "alpha.png", 0, self.CAPS)
-        self.assertEqual(graph["load_alpha"]["inputs"]["image"], "alpha.png")
-        self.assertEqual(graph["alpha"]["inputs"]["image"], ["load_alpha", 0])
-        self.assertEqual(graph["alpha"]["inputs"]["channel"], "red")
+        graph = w.build_fill(request(), "img.png", "original.png", 0, self.CAPS)
+        self.assertEqual(graph["original"]["inputs"]["image"], "original.png")
+        self.assertEqual(graph["alpha"]["inputs"]["mask"], ["original", 1])
         opacity = graph["opacity"]["inputs"]
         self.assertEqual(opacity["operation"], "multiply")
         self.assertEqual(opacity["destination"], ["foreground", 0])
         self.assertEqual(opacity["source"], ["alpha", 0])
+
+    def run_graph(self, image, original, foreground):
+        """The graph worked through with ComfyUI's node rules, one pixel per list item:
+        LoadImage gives (RGB, 1 - alpha) of a file, values are 0..1."""
+        files = {"img.png": image, "original.png": original}
+        graph = w.build_fill(request(), "img.png", "original.png", 0, self.CAPS)
+        done = {}
+
+        def out(ref):
+            node, index = ref
+            if node not in done:
+                spec = graph[node]
+                kind, a = spec["class_type"], spec["inputs"]
+                if kind == "LoadImage":
+                    px = files[a["image"]]
+                    done[node] = ([p[:3] for p in px], [1 - p[3] for p in px])
+                elif kind == "LoadBackgroundRemovalModel":
+                    done[node] = ("model",)
+                elif kind == "RemoveBackground":
+                    self.assertEqual(out(a["image"]), [p[:3] for p in image])  # the model sees the flat image
+                    done[node] = (foreground,)
+                elif kind == "InvertMask":
+                    done[node] = ([1 - m for m in out(a["mask"])],)
+                elif kind == "MaskComposite":
+                    self.assertEqual(a["operation"], "multiply")
+                    pairs = zip(out(a["destination"]), out(a["source"]), strict=True)
+                    done[node] = ([min(1.0, max(0.0, d * s)) for d, s in pairs],)
+                elif kind == "JoinImageWithAlpha":
+                    done[node] = ([(*rgb, 1 - t) for rgb, t in zip(out(a["image"]), out(a["alpha"]), strict=True)],)
+                elif kind == "SaveImage":
+                    done[node] = (out(a["images"]),)
+                else:
+                    self.fail(f"unexpected node {kind}")
+            return done[node][index]
+
+        return out([w.OUTPUT_NODE, 0])
+
+    def test_an_opaque_image_is_cut_by_the_model_alone(self):
+        px = [(0.2, 0.4, 0.6, 1.0), (0.9, 0.1, 0.1, 1.0)]
+        self.assertEqual(self.run_graph(px, px, [1.0, 0.0]), [(0.2, 0.4, 0.6, 1.0), (0.9, 0.1, 0.1, 0.0)])
+
+    def test_see_through_pixels_keep_their_alpha_and_colour(self):
+        original = [(1.0, 0.0, 0.0, 0.5), (0.0, 0.0, 1.0, 0.0)]  # half see-through red glass, a hole
+        flat = [(0.75, 0.25, 0.25, 1.0), (0.5, 0.5, 0.5, 1.0)]  # over a grey mean, for the model
+        self.assertEqual(self.run_graph(flat, original, [1.0, 1.0]), [(1.0, 0.0, 0.0, 0.5), (0.0, 0.0, 1.0, 0.0)])
 
     def test_old_server_gets_a_clear_message(self):
         with self.assertRaisesRegex(ValueError, "ComfyUI 0.39"):
@@ -148,6 +193,29 @@ class BackendTests(unittest.TestCase):
 
     def test_model_file_counts_toward_the_load_estimate(self):
         self.assertEqual(model_files(BIREFNET), {"birefnet.safetensors"})
+
+
+class InputTests(unittest.TestCase):
+    """What the app sends: the flat image for the model, the image as it is as the mask file."""
+
+    RECT = Rect(0, 0, 2, 1)
+
+    def pngs(self, rgba: bytes):
+        from openfill.app import background_removal_pngs
+
+        return background_removal_pngs(png.encode(2, 1, rgba, 4), rgba, self.RECT)
+
+    def test_a_transparent_image_sends_its_alpha_and_colours_as_rgba(self):
+        rgba = bytes((255, 0, 0, 128, 0, 0, 255, 0))
+        image_png, mask_png = self.pngs(rgba)
+        self.assertEqual(mask_png, png.encode(2, 1, rgba, 4))
+        self.assertEqual(png.read_header(mask_png)[2:], (8, 6))  # 8-bit RGBA: ComfyUI reads its alpha exactly
+        self.assertEqual(image_png, png.encode(2, 1, flatten_over_mean(rgba), 4))
+
+    def test_an_opaque_image_sends_the_same_file_twice(self):
+        rgba = bytes((10, 20, 30, 255, 40, 50, 60, 255))
+        image_png, mask_png = self.pngs(rgba)
+        self.assertIs(image_png, mask_png)
 
 
 class OnlyComfyTests(unittest.TestCase):
