@@ -291,8 +291,13 @@ class AppTests(unittest.TestCase):
             self.app().custom_workflow_spec()
         with tempfile.TemporaryDirectory() as tmp:
             path = str(write(tmp, ALPHA_WORKFLOW))
+            for backend in ("remote", "cloud"):  # never sent to Remote GPU, OpenRouter or Gemini
+                with self.assertRaisesRegex(CustomWorkflowProblem, "this computer only"):
+                    self.app(custom_workflow=path, backend=backend).custom_workflow_spec()
+            gemini = self.app(custom_workflow=path, backend="cloud")
+            gemini.settings.cloud_provider = "gemini"
             with self.assertRaisesRegex(CustomWorkflowProblem, "this computer only"):
-                self.app(custom_workflow=path, backend="remote").custom_workflow_spec()
+                gemini.custom_workflow_spec()
             bad = str(write(tmp, {"nodes": []}, "ui.json"))
             with self.assertRaisesRegex(CustomWorkflowProblem, "Export \\(API\\)"):
                 self.app(custom_workflow=bad).resolve_model(CUSTOM_WORKFLOW_ID)

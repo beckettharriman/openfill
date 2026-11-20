@@ -281,6 +281,13 @@ class AppTests(unittest.TestCase):
         with self.assertRaisesRegex(BackendUnavailable, "ComfyUI only"):
             app.upscale(object(), 2)
 
+    def test_never_runs_on_a_cloud_service(self):
+        from openfill.backends.gemini import GeminiBackend
+
+        cloud = GeminiBackend.__new__(GeminiBackend)  # Gemini (#19) and OpenRouter are not ComfyUI
+        with self.assertRaisesRegex(BackendUnavailable, "ComfyUI only"):
+            self.app(backend=cloud).upscale(object(), 2)
+
     def test_default_prefers_real_esrgan(self):
         from unittest import mock
 

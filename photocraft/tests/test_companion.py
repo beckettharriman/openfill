@@ -3663,6 +3663,20 @@ console.log(JSON.stringify(out));
         shown["backend"] = "remote"
         self.assertEqual(bar._gear_total(), local)
 
+    def test_showing_advanced_lets_the_settings_view_grow(self):
+        # #18's Advanced fields (custom workflow) in Generation: the view refits, as for Cloud.
+        from types import SimpleNamespace
+
+        from openfill_photocraft.panels import GenerationView
+
+        calls = []
+        view = GenerationView.__new__(GenerationView)
+        view.bar = SimpleNamespace(refit_gear=lambda: calls.append("refit"), _resize=lambda: calls.append("resize"))
+        view.advanced = SimpleNamespace(get=lambda: False)
+        view.advanced_box = SimpleNamespace(pack_forget=lambda: calls.append("hidden"))
+        view._show_advanced()
+        self.assertEqual(calls, ["hidden", "refit"])
+
     def test_engine_view_gemini_ui_rules(self):
         try:
             import tkinter as tk
