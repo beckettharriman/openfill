@@ -4,8 +4,10 @@
 the bar is made of (segmented controls, buttons, inputs, the prompt box, selects, cards,
 progress bars and message boxes).
 
-Sizes are screen pixels (fonts too: a negative Tk font size is pixels, so text is the same
-size whatever DPI Tk assumes). Rounded shapes and icons are drawn with Pillow at four times
+Sizes are design pixels, turned into screen pixels by ``px`` (fonts too: a negative Tk
+font size is pixels, so text is the same size whatever DPI Tk assumes). On a high-DPI
+Windows screen one design pixel is several screen pixels (``SCALE``, see ``dpi``); elsewhere
+``px`` changes nothing. Rounded shapes and icons are drawn with Pillow at four times
 the size and scaled down, so their edges are smooth; Tk only places them.
 """
 
@@ -24,6 +26,32 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from . import dpi
+
+# Before any Tk window: on Windows this makes the process DPI aware (sharp text) and says
+# how many screen pixels one design pixel is (1.5 at 150 %). 1 elsewhere.
+SCALE = dpi.scale()
+
+
+def px(value: Any) -> Any:
+    """Design pixels in screen pixels: a number, or a tuple of them (padx=px((8, 0))).
+    Returns ``value`` itself at scale 1, so nothing changes there."""
+    if SCALE == 1:
+        return value
+    if isinstance(value, tuple):
+        return tuple(px(v) for v in value)
+    return round(value * SCALE)
+
+
+def apply_scaling(root: tk.Misc) -> None:
+    """Tk's own scaling (points and inches, its default fonts) to match ``SCALE``. Tk works it
+    out itself when the process is DPI aware; this keeps both the same when OPENFILL_UI_SCALE
+    sets another. Nothing at scale 1."""
+    if SCALE != 1:
+        with contextlib.suppress(tk.TclError):
+            root.tk.call("tk", "scaling", SCALE * 96 / 72)
+
+
 BG, PANEL, LINE, TEXT, DIM, ACCENT, BAD, OK, WARN = (
     "#1e1f22",
     "#2b2d31",
@@ -41,11 +69,11 @@ PLACEHOLDER_FG = "#757575"  # a text box placeholder, as the browser draws one
 ACCENT_HOVER = "#5d9cf5"
 WHITE = "#ffffff"
 
-W = 400  # window width
-PAD = 16  # side padding
+W = px(400)  # window width
+PAD = px(16)  # side padding
 CW = W - 2 * PAD  # content width
-LABEL_W = 84  # label column of a form row
-FIELD_W = CW - LABEL_W - 12  # the control in a form row
+LABEL_W = px(84)  # label column of a form row
+FIELD_W = CW - LABEL_W - px(12)  # the control in a form row
 SS = 4  # supersampling for drawn shapes
 
 
@@ -62,10 +90,10 @@ class Fonts:
         semibold = "Segoe UI Semibold" if sys.platform == "win32" and "Segoe UI Semibold" in families else ""
         self.family = family
 
-        def make(px: int, strong: bool = False) -> tkfont.Font:
+        def make(size: int, strong: bool = False) -> tkfont.Font:
             if strong and semibold:
-                return tkfont.Font(root, family=semibold, size=-px)
-            return tkfont.Font(root, family=family, size=-px, weight="bold" if strong else "normal")
+                return tkfont.Font(root, family=semibold, size=-px(size))
+            return tkfont.Font(root, family=family, size=-px(size), weight="bold" if strong else "normal")
 
         self.body = make(13)
         self.bold = make(13, True)
@@ -75,7 +103,7 @@ class Fonts:
         self.tiny = make(11)
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont"):
             try:
-                tkfont.nametofont(name).configure(family=family, size=-13)
+                tkfont.nametofont(name).configure(family=family, size=-px(13))
             except tk.TclError:
                 pass
 
@@ -146,7 +174,8 @@ def rrect(w: int, h: int, r: float, fill: str, bg: str, border: str | None = Non
     return _cache[key]
 
 
-def dot(color: str, bg: str, size: int = 6) -> tk.PhotoImage:
+def dot(color: str, bg: str, size: int | None = None) -> tk.PhotoImage:
+    size = size or px(6)
     return rrect(size, size, size / 2, color, bg)
 
 
@@ -321,9 +350,10 @@ def _dashes(points, on: float, off: float) -> list[list[tuple[float, float]]]:
 
 
 def icon_image(name: str, color: str, size: int = 16, bg: str | None = None) -> Image.Image:
-    """Icon ``name`` at ``size`` px in ``color`` (1.5 px round strokes), on ``bg`` or transparent."""
+    """Icon ``name`` at ``size`` screen px in ``color`` (1.5 design px round strokes), on
+    ``bg`` or transparent."""
     k = size * SS / 24
-    width = 1.5 * SS
+    width = 1.5 * SCALE * SS
     mask = Image.new("L", (size * SS, size * SS), 0)
     d = ImageDraw.Draw(mask)
 
@@ -406,7 +436,8 @@ def frame(parent: tk.Misc, bg: str = BG, **kw) -> tk.Frame:
     return tk.Frame(parent, bg=bg, bd=0, highlightthickness=0, **kw)
 
 
-LINE_HEIGHT = {11: 14, 12: 16, 13: 18}  # px line height for each font size, as in the design
+# line height for each font size (screen px, keyed by the font's size), as in the design
+LINE_HEIGHT = {px(11): px(14), px(12): px(16), px(13): px(18)}
 
 
 class Para(tk.Canvas):
@@ -509,8 +540,8 @@ def divider(parent: tk.Misc, color: str = LINE) -> tk.Frame:
     return tk.Frame(parent, bg=color, height=1, bd=0, highlightthickness=0)
 
 
-def gap(parent: tk.Misc, px: int, bg: str = BG) -> tk.Frame:
-    return tk.Frame(parent, bg=bg, height=px, width=1, bd=0, highlightthickness=0)
+def gap(parent: tk.Misc, height: int, bg: str = BG) -> tk.Frame:
+    return tk.Frame(parent, bg=bg, height=height, width=1, bd=0, highlightthickness=0)
 
 
 def round_corners(widget: tk.Misc, r: int, inside: str, outside: str, border: str | None = None) -> list[tk.Label]:
@@ -535,8 +566,8 @@ class Card(tk.Frame):
     def __init__(self, parent: tk.Misc, width: int = CW, bg: str = BG) -> None:
         super().__init__(parent, bg=PANEL, bd=0, highlightthickness=0, width=width)
         self.inner = frame(self, PANEL)
-        self.inner.pack(fill="x", padx=12, pady=12)
-        self._corners = round_corners(self, 4, PANEL, bg)
+        self.inner.pack(fill="x", padx=px(12), pady=px(12))
+        self._corners = round_corners(self, px(4), PANEL, bg)
 
     def lift_corners(self) -> None:
         for c in self._corners:
@@ -550,7 +581,7 @@ class Box(tk.Frame):
         super().__init__(parent, bg=LINE, bd=0, highlightthickness=0)
         self.inner = frame(self, bg)
         self.inner.pack(fill="x", padx=1, pady=1)
-        self._corners = round_corners(self, 4, bg, BG, LINE)
+        self._corners = round_corners(self, px(4), bg, BG, LINE)
 
     def lift_corners(self) -> None:
         for c in self._corners:
@@ -563,6 +594,8 @@ class Box(tk.Frame):
 class Seg(tk.Canvas):
     """A segmented control: one of ``items`` (key, label) is selected. 32 px tall."""
 
+    H = px(32)
+
     def __init__(
         self,
         parent: tk.Misc,
@@ -573,7 +606,7 @@ class Seg(tk.Canvas):
         fit: bool = False,
         bg: str = BG,
     ) -> None:
-        super().__init__(parent, width=width, height=32, bg=bg, bd=0, highlightthickness=0)
+        super().__init__(parent, width=width, height=self.H, bg=bg, bd=0, highlightthickness=0)
         self.items, self.command, self.w, self.size, self.fit, self.bgc = list(items), command, width, size, fit, bg
         self.value: Any = self.items[0][0] if self.items else None
         f = fonts(self)
@@ -583,31 +616,32 @@ class Seg(tk.Canvas):
         self._draw()
 
     def _layout(self) -> list[tuple[int, int]]:
-        n = len(self.items)
-        inner = self.w - 4 - 2 * (n - 1)
+        n, m = len(self.items), px(2)  # m: the inset round the segments and between them
+        inner = self.w - 2 * m - m * (n - 1)
         if not self.fit:
             edges = [round(inner * i / n) for i in range(n + 1)]
-            return [(2 + edges[i] + 2 * i, edges[i + 1] - edges[i]) for i in range(n)]
-        pad = 8 if self.size == 13 else 4
+            return [(m + edges[i] + m * i, edges[i + 1] - edges[i]) for i in range(n)]
+        pad = px(8) if self.size == 13 else px(4)
         base = [self.f_on.measure(label) + 2 * pad for _k, label in self.items]
         extra = (inner - sum(base)) / n
-        widths, x, out = [b + extra for b in base], 2.0, []
+        widths, x, out = [b + extra for b in base], float(m), []
         for w in widths:
             out.append((round(x), round(x + w) - round(x)))
-            x += w + 2
+            x += w + m
         return out
 
     def _draw(self) -> None:
         self.delete("all")
-        self.create_image(0, 0, image=rrect(self.w, 32, 4, PANEL, self.bgc), anchor="nw")
+        h, m = self.H, px(2)
+        self.create_image(0, 0, image=rrect(self.w, h, px(4), PANEL, self.bgc), anchor="nw")
         self._cells = self._layout()
         for (key, label), (x, w) in zip(self.items, self._cells, strict=False):
             on = key == self.value
             if on:
-                self.create_image(x, 2, image=rrect(w, 28, 3, SEG_ON, PANEL), anchor="nw")
+                self.create_image(x, m, image=rrect(w, h - 2 * m, px(3), SEG_ON, PANEL), anchor="nw")
             font = self.f_on if on else self.f_off
             self.create_text(
-                x + w / 2, 16, text=ellipsize(label, font, w - 4), font=font, fill=TEXT if on else DIM, anchor="center"
+                x + w / 2, h / 2, text=ellipsize(label, font, w - px(4)), font=font, fill=TEXT if on else DIM
             )
 
     def set(self, key: Any) -> None:
@@ -644,10 +678,10 @@ class Button(tk.Canvas):
         bg: str = BG,
     ) -> None:
         self.kind, self.label, self.command, self.bgc = kind, label, command, bg
-        self.h = height or (36 if kind == "primary" else 32)
+        self.h = height or (px(36) if kind == "primary" else px(32))
         f = fonts(parent)
         self.font = f.bold if kind in ("primary", "accent") else f.body
-        self.w = width or (self.font.measure(label) + 24)
+        self.w = width or (self.font.measure(label) + px(24))
         super().__init__(parent, width=self.w, height=self.h, bg=bg, bd=0, highlightthickness=0, cursor="hand2")
         self.disabled = False
         self.hover = False
@@ -668,9 +702,9 @@ class Button(tk.Canvas):
     def _draw(self) -> None:
         self.delete("all")
         fill, fg, border = self._colors()
-        self.create_image(0, 0, image=rrect(self.w, self.h, 4, fill, self.bgc, border), anchor="nw")
+        self.create_image(0, 0, image=rrect(self.w, self.h, px(4), fill, self.bgc, border), anchor="nw")
         self.create_text(
-            self.w / 2, self.h / 2, text=ellipsize(self.label, self.font, self.w - 16), font=self.font, fill=fg
+            self.w / 2, self.h / 2, text=ellipsize(self.label, self.font, self.w - px(16)), font=self.font, fill=fg
         )
         self.configure(cursor="" if self.disabled else "hand2")
 
@@ -706,14 +740,17 @@ class Button(tk.Canvas):
 class IconButton(tk.Canvas):
     """A 28 px square button with a 16 px icon; ``active`` gives it the panel colour."""
 
+    SIZE = px(28)
+
     def __init__(
         self, parent: tk.Misc, name: str, command: Callable[[], Any] | None = None, bg: str = BG, active: bool = False
     ) -> None:
-        super().__init__(parent, width=28, height=28, bg=bg, bd=0, highlightthickness=0, cursor="hand2")
+        s = self.SIZE
+        super().__init__(parent, width=s, height=s, bg=bg, bd=0, highlightthickness=0, cursor="hand2")
         self.name, self.command, self.bgc, self.active, self.hover = name, command, bg, active, False
         self.bind("<Enter>", lambda _e: self._set_hover(True))
         self.bind("<Leave>", lambda _e: self._set_hover(False))
-        self.bind("<ButtonRelease-1>", lambda e: self.invoke() if 0 <= e.x < 28 and 0 <= e.y < 28 else None)
+        self.bind("<ButtonRelease-1>", lambda e: self.invoke() if 0 <= e.x < s and 0 <= e.y < s else None)
         self._draw()
 
     def _draw(self) -> None:
@@ -721,9 +758,10 @@ class IconButton(tk.Canvas):
         filled = self.active or self.hover
         back = PANEL if filled else self.bgc
         if filled:
-            self.create_image(0, 0, image=rrect(28, 28, 4, PANEL, self.bgc), anchor="nw")
+            self.create_image(0, 0, image=rrect(self.SIZE, self.SIZE, px(4), PANEL, self.bgc), anchor="nw")
+        inset = (self.SIZE - px(16)) // 2
         self.create_image(
-            6, 6, image=icon(self.name, TEXT if self.active or self.hover else DIM, 16, back), anchor="nw"
+            inset, inset, image=icon(self.name, TEXT if self.active or self.hover else DIM, px(16), back), anchor="nw"
         )
 
     def _set_hover(self, on: bool) -> None:
@@ -752,7 +790,7 @@ class Field(tk.Canvas):
         bg: str = BG,
         on_enter: Callable[[], Any] | None = None,
     ) -> None:
-        super().__init__(parent, width=width, height=32, bg=bg, bd=0, highlightthickness=0)
+        super().__init__(parent, width=width, height=px(32), bg=bg, bd=0, highlightthickness=0)
         self.w, self.bgc, self.placeholder, self.secret = width, bg, placeholder, secret
         f = fonts(self)
         self.entry = tk.Entry(
@@ -769,7 +807,7 @@ class Field(tk.Canvas):
             font=f.body,
         )
         self._bgimg = self.create_image(0, 0, anchor="nw")
-        self.create_window(10, 16, window=self.entry, anchor="w", width=width - 20, height=20)
+        self.create_window(px(10), px(16), window=self.entry, anchor="w", width=width - px(20), height=px(20))
         self.showing_placeholder = False
         self.entry.bind("<FocusIn>", lambda _e: self._focus(True), add="+")
         self.entry.bind("<FocusOut>", lambda _e: self._focus(False), add="+")
@@ -785,7 +823,9 @@ class Field(tk.Canvas):
         self.set(value)
 
     def _draw(self) -> None:
-        self.itemconfigure(self._bgimg, image=rrect(self.w, 32, 4, PANEL, self.bgc, ACCENT if self._focused else LINE))
+        self.itemconfigure(
+            self._bgimg, image=rrect(self.w, px(32), px(4), PANEL, self.bgc, ACCENT if self._focused else LINE)
+        )
 
     def _focus(self, on: bool) -> None:
         self._focused = on
@@ -855,9 +895,10 @@ class PromptBox(tk.Canvas):
         on_submit: Callable[[], Any],
         on_recall: Callable[[int], Any],
         width: int = CW,
-        height: int = 76,
+        height: int | None = None,
         bg: str = BG,
     ) -> None:
+        height = height or px(76)
         super().__init__(parent, width=width, height=height, bg=bg, bd=0, highlightthickness=0)
         self.w, self.h, self.bgc = width, height, bg
         f = fonts(self)
@@ -882,7 +923,7 @@ class PromptBox(tk.Canvas):
         )
         self.text.tag_configure("placeholder", foreground=PLACEHOLDER_FG)
         self._bgimg = self.create_image(0, 0, anchor="nw")
-        self.create_window(10, 8, window=self.text, anchor="nw", width=width - 20, height=height - 16)
+        self.create_window(px(10), px(8), window=self.text, anchor="nw", width=width - px(20), height=height - px(16))
         self.placeholder = ""
         self.showing_placeholder = False
         self._focused = False
@@ -904,7 +945,7 @@ class PromptBox(tk.Canvas):
         self._show_placeholder()
 
     def _draw(self) -> None:
-        self.itemconfigure(self._bgimg, image=rrect(self.w, self.h, 4, PANEL, self.bgc, LINE))
+        self.itemconfigure(self._bgimg, image=rrect(self.w, self.h, px(4), PANEL, self.bgc, LINE))
 
     def _focus(self, on: bool) -> None:
         self._focused = on
@@ -992,7 +1033,7 @@ class Checkbox(tk.Canvas):
     """A 16 px check box and its text, 32 px tall."""
 
     def __init__(self, parent: tk.Misc, label: str, width: int = CW, bg: str = BG) -> None:
-        super().__init__(parent, width=width, height=32, bg=bg, bd=0, highlightthickness=0, cursor="hand2")
+        super().__init__(parent, width=width, height=px(32), bg=bg, bd=0, highlightthickness=0, cursor="hand2")
         self.var = tk.BooleanVar(self, False)
         self.label, self.bgc = label, bg
         self.bind("<Button-1>", lambda _e: self.var.set(not self.var.get()))
@@ -1003,11 +1044,11 @@ class Checkbox(tk.Canvas):
         self.delete("all")
         on = self.var.get()
         if on:
-            self.create_image(0, 8, image=rrect(16, 16, 3, ACCENT, self.bgc), anchor="nw")
-            self.create_image(2, 10, image=icon("check", WHITE, 12, ACCENT), anchor="nw")
+            self.create_image(0, px(8), image=rrect(px(16), px(16), px(3), ACCENT, self.bgc), anchor="nw")
+            self.create_image(px(2), px(10), image=icon("check", WHITE, px(12), ACCENT), anchor="nw")
         else:
-            self.create_image(0, 8, image=rrect(16, 16, 3, PANEL, self.bgc, LINE), anchor="nw")
-        self.create_text(26, 16, text=self.label, font=fonts(self).body, fill=TEXT, anchor="w")
+            self.create_image(0, px(8), image=rrect(px(16), px(16), px(3), PANEL, self.bgc, LINE), anchor="nw")
+        self.create_text(px(26), px(16), text=self.label, font=fonts(self).body, fill=TEXT, anchor="w")
 
     def get(self) -> bool:
         return bool(self.var.get())
@@ -1020,7 +1061,8 @@ class Progress(tk.Canvas):
     """A 4 px progress bar (LINE track, rounded ends)."""
 
     def __init__(self, parent: tk.Misc, width: int, bg: str = PANEL) -> None:
-        super().__init__(parent, width=width, height=4, bg=bg, bd=0, highlightthickness=0)
+        self.h = px(4)
+        super().__init__(parent, width=width, height=self.h, bg=bg, bd=0, highlightthickness=0)
         self.w, self.bgc = width, bg
         self.value, self.color = -1.0, ACCENT
         self.set(0.0)
@@ -1031,15 +1073,16 @@ class Progress(tk.Canvas):
             return
         self.value, self.color = fraction, color
         self.delete("all")
-        self.create_image(0, 0, image=rrect(self.w, 4, 2, LINE, self.bgc), anchor="nw")
+        h, r = self.h, self.h / 2
+        self.create_image(0, 0, image=rrect(self.w, h, r, LINE, self.bgc), anchor="nw")
         fill = round(self.w * fraction)
         if fill >= 1:
             # the filled part is cut by the track's rounded ends, as overflow: hidden does
             key = ("bar", self.w, fill, color, self.bgc)
             if key not in _cache:
-                track = rrect_image(self.w, 4, 2, LINE, self.bgc)
-                full = rrect_image(self.w, 4, 2, color, self.bgc)
-                track.paste(full.crop((0, 0, fill, 4)), (0, 0))
+                track = rrect_image(self.w, h, r, LINE, self.bgc)
+                full = rrect_image(self.w, h, r, color, self.bgc)
+                track.paste(full.crop((0, 0, fill, h)), (0, 0))
                 if len(_cache) > 600:
                     _cache.clear()
                 _cache[key] = photo(track)
@@ -1058,7 +1101,8 @@ class Select(tk.Canvas):
         manage: Callable[[], Any] | None = None,
         bg: str = BG,
     ) -> None:
-        super().__init__(parent, width=width, height=32, bg=bg, bd=0, highlightthickness=0, cursor="hand2")
+        self.h = px(32)
+        super().__init__(parent, width=width, height=self.h, bg=bg, bd=0, highlightthickness=0, cursor="hand2")
         self.w, self.bgc, self.command, self.manage = width, bg, command, manage
         self.values: list[str] = []
         self.value = ""
@@ -1073,12 +1117,14 @@ class Select(tk.Canvas):
         self.create_image(
             0,
             0,
-            image=rrect(self.w, 32, 4, PANEL, self.bgc, ACCENT if self.popdown or self._native_menu else LINE),
+            image=rrect(self.w, self.h, px(4), PANEL, self.bgc, ACCENT if self.popdown or self._native_menu else LINE),
             anchor="nw",
         )
         f = fonts(self).body
-        self.create_text(10, 16, text=ellipsize(self.value, f, self.w - 38), font=f, fill=TEXT, anchor="w")
-        self.create_image(self.w - 24, 8, image=icon("chevron", DIM, 16, PANEL), anchor="nw")
+        self.create_text(
+            px(10), self.h / 2, text=ellipsize(self.value, f, self.w - px(38)), font=f, fill=TEXT, anchor="w"
+        )
+        self.create_image(self.w - px(24), px(8), image=icon("chevron", DIM, px(16), PANEL), anchor="nw")
 
     def set_values(self, values: list[str]) -> None:
         self.values = list(values)
@@ -1120,7 +1166,7 @@ class Select(tk.Canvas):
         try:
             # Aqua returns after the native menu has been dismissed. Defer actions
             # until then, so they cannot destroy a menu during native tracking.
-            menu.tk_popup(self.winfo_rootx(), self.winfo_rooty() + 32)
+            menu.tk_popup(self.winfo_rootx(), self.winfo_rooty() + px(32))
         finally:
             self._tracking = False
             self.close()
@@ -1166,7 +1212,8 @@ MANAGE = "Manage models..."
 class Popdown(tk.Toplevel):
     """A select's open list: 28 px rows, the current one in the accent colour."""
 
-    ROW = 28
+    ROW = px(28)
+    INSET = 1 + px(4)  # the 1 px border and the space inside it
 
     def __init__(self, select: Select) -> None:
         super().__init__(select, bg=BG)
@@ -1180,22 +1227,22 @@ class Popdown(tk.Toplevel):
         rows = [*select.values]
         self.rows = rows + ([MANAGE] if select.manage else [])
         self.w = select.w + 2
-        extra = 7 if select.manage and rows else 0
-        self.h = 8 + 2 + len(self.rows) * self.ROW + max(0, len(self.rows) - 1) + extra
+        extra = px(7) if select.manage and rows else 0
+        self.h = 2 * self.INSET + len(self.rows) * self.ROW + max(0, len(self.rows) - 1) + extra
         self.canvas = tk.Canvas(self, width=self.w, height=self.h, bg=BG, bd=0, highlightthickness=0)
         self.canvas.pack()
         self.hover = -1
         self._tops: list[int] = []
-        y = 5
+        y = self.INSET
         for i, _row in enumerate(self.rows):
             if select.manage and i == len(rows) and rows:
-                y += 7  # a divider before "Manage models..."
+                y += px(7)  # a divider before "Manage models..."
             self._tops.append(y)
             y += self.ROW + 1
         self._draw()
-        x, top = select.winfo_rootx() - 1, select.winfo_rooty() + 34
+        x, top = select.winfo_rootx() - 1, select.winfo_rooty() + select.h + px(2)
         if top + self.h > select.winfo_screenheight():
-            top = select.winfo_rooty() - 2 - self.h
+            top = select.winfo_rooty() - px(2) - self.h
         self.geometry(f"{self.w}x{self.h}+{x}+{top}")
         self.deiconify()
         self.lift()
@@ -1219,22 +1266,33 @@ class Popdown(tk.Toplevel):
     def _draw(self) -> None:
         c = self.canvas
         c.delete("all")
-        c.create_image(0, 0, image=rrect(self.w, self.h, 4, PANEL, BG, LINE), anchor="nw")
+        c.create_image(0, 0, image=rrect(self.w, self.h, px(4), PANEL, BG, LINE), anchor="nw")
+        inset = self.INSET
         f = fonts(self).body
         current = self.select.value
         n_values = len(self.select.values)
         if self.select.manage and n_values:
-            y = self._tops[n_values] - 4
-            c.create_line(5, y, self.w - 5, y, fill=LINE)
+            y = self._tops[n_values] - px(4)
+            c.create_line(inset, y, self.w - inset, y, fill=LINE)
         for i, (row, top) in enumerate(zip(self.rows, self._tops, strict=False)):
             manage = row == MANAGE and i >= n_values
             on = row == current and not manage
             if on or i == self.hover:
                 c.create_image(
-                    5, top, image=rrect(self.w - 10, self.ROW, 3, ACCENT if on else SEG_ON, PANEL), anchor="nw"
+                    inset,
+                    top,
+                    image=rrect(self.w - 2 * inset, self.ROW, px(3), ACCENT if on else SEG_ON, PANEL),
+                    anchor="nw",
                 )
             color = WHITE if on else (DIM if manage and i != self.hover else TEXT)
-            c.create_text(15, top + self.ROW / 2, text=ellipsize(row, f, self.w - 30), font=f, fill=color, anchor="w")
+            c.create_text(
+                inset + px(10),
+                top + self.ROW / 2,
+                text=ellipsize(row, f, self.w - px(30)),
+                font=f,
+                fill=color,
+                anchor="w",
+            )
 
     def _row_at(self, y: int) -> int:
         for i, top in enumerate(self._tops):
@@ -1262,7 +1320,7 @@ class Popdown(tk.Toplevel):
         if not (0 <= x < self.w and 0 <= y < self.h):
             sx, sy = event.x_root - self.select.winfo_rootx(), event.y_root - self.select.winfo_rooty()
             self.select.close()
-            if 0 <= sx < self.select.w and 0 <= sy < 32:
+            if 0 <= sx < self.select.w and 0 <= sy < self.select.h:
                 return  # a click on the select itself only closes it
 
     def destroy_quietly(self) -> None:
@@ -1611,7 +1669,7 @@ class Dialog(tk.Toplevel):
     """OpenFill's own message box: its header (icon, name, close), an icon and the text, and
     buttons on the right (the last is the default, in the accent colour)."""
 
-    WIDTH = 380
+    WIDTH = px(380)
 
     def __init__(
         self,
@@ -1639,31 +1697,33 @@ class Dialog(tk.Toplevel):
         box.pack(padx=1, pady=1)
         head = frame(box)
         head.pack(fill="x")
-        head.configure(height=40, width=self.WIDTH - 2)
+        head.configure(height=px(40), width=self.WIDTH - 2)
         head.pack_propagate(False)
-        logo = tk.Label(head, image=app_icon(16, BG), bg=BG, bd=0, highlightthickness=0)
-        logo.pack(side="left", padx=(16, 0))
+        logo = tk.Label(head, image=app_icon(px(16), BG), bg=BG, bd=0, highlightthickness=0)
+        logo.pack(side="left", padx=px((16, 0)))
         name = text(head, title, f.bold)
-        name.pack(side="left", padx=(10, 0))
-        IconButton(head, "close", lambda: self._done(None)).pack(side="right", padx=(0, 6))
+        name.pack(side="left", padx=px((10, 0)))
+        IconButton(head, "close", lambda: self._done(None)).pack(side="right", padx=px((0, 6)))
         drag_handle((head, logo, name), self)
         divider(box).pack(fill="x")
         body = frame(box)
-        body.pack(fill="x", padx=16, pady=16)
+        body.pack(fill="x", padx=px(16), pady=px(16))
         color = {"warn": WARN, "error": BAD}.get(kind, ACCENT)
-        mark = tk.Label(body, image=icon({"ask": "warn"}.get(kind, kind), color, 20, BG), bg=BG, bd=0)
-        mark.pack(side="left", anchor="n", pady=(1, 0))
+        mark = tk.Label(body, image=icon({"ask": "warn"}.get(kind, kind), color, px(20), BG), bg=BG, bd=0)
+        mark.pack(side="left", anchor="n", pady=px((1, 0)))
         paras = frame(body)
-        paras.pack(side="left", fill="x", padx=(12, 0))
+        paras.pack(side="left", fill="x", padx=px((12, 0)))
         for i, para in enumerate(p for p in message.split("\n\n") if p.strip()):
-            text(paras, para.strip(), f.body, wrap=self.WIDTH - 2 - 32 - 32).pack(anchor="w", pady=(10 if i else 0, 0))
+            text(paras, para.strip(), f.body, wrap=self.WIDTH - 2 - px(32) - px(32)).pack(
+                anchor="w", pady=px((10 if i else 0, 0))
+            )
         row = frame(box)
-        row.pack(fill="x", padx=16, pady=(0, 16))
+        row.pack(fill="x", padx=px(16), pady=px((0, 16)))
         self.buttons: dict[str, Button] = {}
         for label in reversed(buttons):
             kind_ = "accent" if label == buttons[-1] else "secondary"
-            b = Button(row, label, lambda v=label: self._done(v), kind_, width=96)
-            b.pack(side="right", padx=(8, 0) if label != buttons[-1] else 0)
+            b = Button(row, label, lambda v=label: self._done(v), kind_, width=px(96))
+            b.pack(side="right", padx=px((8, 0)) if label != buttons[-1] else 0)
             self.buttons[label] = b
         self.protocol("WM_DELETE_WINDOW", lambda: self._done(None))
         self.bind("<Return>", lambda _e: self._done(buttons[-1]))

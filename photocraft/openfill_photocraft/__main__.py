@@ -309,6 +309,9 @@ def tell(title: str, text: str, ask: bool = False) -> bool:
         if sys.platform == "win32":
             import ctypes
 
+            from openfill_photocraft import dpi
+
+            dpi.enable()  # sharp text in the message box on a high-DPI screen
             flags = 0x1 | 0x30 if ask else 0x40  # OK/Cancel with a warning icon, or OK with info
             return ctypes.windll.user32.MessageBoxW(None, text, title, flags | 0x10000) == 1
     return False

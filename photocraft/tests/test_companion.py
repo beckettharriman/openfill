@@ -2200,6 +2200,197 @@ class FactsCacheTests(unittest.TestCase):
             self.assertEqual(again._load_cache(), {})
 
 
+class DpiTests(unittest.TestCase):
+    """Issue #17: on Windows the panel's process says it is DPI aware before Tk starts, and
+    the panel's sizes follow the screen's scale. Windows is faked here (no window, no ctypes
+    calls into Windows); the real calls run in the Windows-only test below."""
+
+    def setUp(self):
+        from openfill_photocraft import dpi
+
+        self.dpi = dpi
+        dpi._state = None
+        self.addCleanup(setattr, dpi, "_state", None)
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("OPENFILL_DPI", None)
+        os.environ.pop("OPENFILL_UI_SCALE", None)
+
+    def windows(self, user32, shcore=None, gdi32=None, last_error=0):
+        """Run ``dpi.enable()`` and ``dpi.scale()`` as on Windows with these fake DLLs."""
+        import ctypes
+        from types import SimpleNamespace
+
+        gdi32 = gdi32 or SimpleNamespace(GetDeviceCaps=mock.Mock(return_value=96))
+        with (
+            mock.patch.object(self.dpi.sys, "platform", "win32"),
+            mock.patch.object(self.dpi, "_dlls", return_value=(user32, shcore, gdi32)),
+            mock.patch.object(ctypes, "get_last_error", create=True, return_value=last_error),
+        ):
+            return self.dpi.enable(), self.dpi.scale()
+
+    @staticmethod
+    def win10(dpi=144, set_ok=True, awareness=1):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            SetProcessDpiAwarenessContext=mock.Mock(return_value=set_ok),
+            GetThreadDpiAwarenessContext=mock.Mock(return_value=0x1234),
+            GetAwarenessFromDpiAwarenessContext=mock.Mock(return_value=awareness),
+            GetDpiForSystem=mock.Mock(return_value=dpi),
+            SetProcessDPIAware=mock.Mock(return_value=True),
+        )
+
+    def test_nothing_happens_outside_windows(self):
+        with (
+            mock.patch.object(self.dpi.sys, "platform", "linux"),
+            mock.patch.object(self.dpi, "_dlls", side_effect=AssertionError("no ctypes here")),
+        ):
+            self.assertEqual(self.dpi.enable(), {"how": "", "awareness": 0, "dpi": 96})
+            self.assertEqual(self.dpi.scale(), 1.0)
+
+    def test_windows_10_asks_for_system_awareness_and_scales_by_its_dpi(self):
+        user32 = self.win10(dpi=144)
+        state, scale = self.windows(user32)
+        self.assertEqual(state, {"how": "SetProcessDpiAwarenessContext", "awareness": 1, "dpi": 144})
+        self.assertEqual(scale, 1.5)
+        (context,) = user32.SetProcessDpiAwarenessContext.call_args.args
+        self.assertEqual(context.value, __import__("ctypes").c_void_p(-2).value)  # DPI_AWARENESS_CONTEXT_SYSTEM_AWARE
+        user32.SetProcessDPIAware.assert_not_called()
+        self.dpi._state = None
+        self.assertEqual(self.windows(self.win10(dpi=168))[1], 1.75)
+        self.dpi._state = None
+        self.assertEqual(self.windows(self.win10(dpi=96))[1], 1.0)
+
+    def test_windows_8_1_uses_shcore(self):
+        import ctypes
+        from types import SimpleNamespace
+
+        def get_awareness(_process, value):
+            ctypes.cast(value, ctypes.POINTER(ctypes.c_int)).contents.value = 1
+            return 0
+
+        user32 = SimpleNamespace(GetDC=mock.Mock(return_value=7), ReleaseDC=mock.Mock())
+        shcore = SimpleNamespace(
+            SetProcessDpiAwareness=mock.Mock(return_value=0),
+            GetProcessDpiAwareness=mock.Mock(side_effect=get_awareness),
+        )
+        gdi32 = SimpleNamespace(GetDeviceCaps=mock.Mock(return_value=120))
+        state, scale = self.windows(user32, shcore, gdi32)
+        self.assertEqual(state, {"how": "SetProcessDpiAwareness", "awareness": 1, "dpi": 120})
+        self.assertEqual(scale, 1.25)
+        shcore.SetProcessDpiAwareness.assert_called_once_with(1)  # PROCESS_SYSTEM_DPI_AWARE
+        gdi32.GetDeviceCaps.assert_called_once_with(7, 90)  # LOGPIXELSY of the screen
+        user32.ReleaseDC.assert_called_once_with(None, 7)
+
+    def test_windows_7_uses_set_process_dpi_aware(self):
+        from types import SimpleNamespace
+
+        user32 = SimpleNamespace(
+            SetProcessDPIAware=mock.Mock(return_value=1),
+            IsProcessDPIAware=mock.Mock(return_value=1),
+            GetDC=mock.Mock(return_value=7),
+            ReleaseDC=mock.Mock(),
+        )
+        state, scale = self.windows(user32, None, SimpleNamespace(GetDeviceCaps=mock.Mock(return_value=192)))
+        self.assertEqual(state, {"how": "SetProcessDPIAware", "awareness": 1, "dpi": 192})
+        self.assertEqual(scale, 2.0)
+
+    def test_awareness_set_before_is_respected(self):
+        # An "Override high DPI scaling" setting (System (Enhanced) leaves the process unaware):
+        # the call is refused and the panel stays at scale 1, as Windows then scales it.
+        user32 = self.win10(set_ok=False, awareness=0)
+        state, scale = self.windows(user32, last_error=5)
+        self.assertEqual((state["how"], state["awareness"], scale), ("already", 0, 1.0))
+        user32.SetProcessDPIAware.assert_not_called()
+        # "Application": per-monitor aware already; the panel scales itself to the system DPI.
+        self.dpi._state = None
+        state, scale = self.windows(self.win10(set_ok=False, awareness=2), last_error=5)
+        self.assertEqual((state["how"], state["awareness"], scale), ("already", 2, 1.5))
+
+    def test_a_failure_never_stops_the_panel(self):
+        with (
+            mock.patch.object(self.dpi.sys, "platform", "win32"),
+            mock.patch.object(self.dpi, "_dlls", side_effect=OSError("no user32")),
+        ):
+            state = self.dpi.enable()
+            self.assertTrue(state["how"].startswith("failed"))
+            self.assertEqual(self.dpi.scale(), 1.0)
+        self.dpi._state = None
+        user32 = self.win10()
+        user32.GetDpiForSystem.side_effect = OSError("access violation")
+        state, scale = self.windows(user32)
+        self.assertTrue(state["how"].startswith("failed"))
+        self.assertEqual(scale, 1.0)
+
+    def test_switches_and_one_call_per_process(self):
+        os.environ["OPENFILL_DPI"] = "off"
+        with (
+            mock.patch.object(self.dpi.sys, "platform", "win32"),
+            mock.patch.object(self.dpi, "_dlls", side_effect=AssertionError("turned off")),
+        ):
+            self.assertEqual(self.dpi.enable()["how"], "off")
+            self.assertEqual(self.dpi.scale(), 1.0)
+        del os.environ["OPENFILL_DPI"]
+        self.dpi._state = None
+        user32 = self.win10()
+        self.windows(user32)
+        self.windows(user32)
+        user32.SetProcessDpiAwarenessContext.assert_called_once()
+        for wanted, scale in (("1.75", 1.75), ("9", 4.0), ("0.1", 0.5), ("big", 1.5)):
+            os.environ["OPENFILL_UI_SCALE"] = wanted
+            self.assertEqual(self.dpi.scale(), scale, wanted)
+
+    def test_px_is_identity_at_scale_1_and_rounds_otherwise(self):
+        try:
+            from openfill_photocraft import ui
+        except ImportError:
+            self.skipTest("no tkinter")
+        if sys.platform != "win32":
+            self.assertEqual(ui.SCALE, 1.0)  # Linux and macOS: nothing changes
+            self.assertEqual((ui.W, ui.PAD, ui.CW), (400, 16, 368))
+        with mock.patch.object(ui, "SCALE", 1.0):
+            pad = (8, 0)
+            self.assertIs(ui.px(pad), pad)
+            self.assertEqual(ui.px(1.5), 1.5)
+        with mock.patch.object(ui, "SCALE", 1.5):
+            self.assertEqual(ui.px(13), 20)
+            self.assertEqual(ui.px((12, 0)), (18, 0))
+            self.assertEqual(ui.px((8 if True else 0, 0)), (12, 0))
+        with mock.patch.object(ui, "SCALE", 1.75):
+            self.assertEqual(ui.px(400), 700)
+            root = mock.Mock()
+            ui.apply_scaling(root)
+            root.tk.call.assert_called_once_with("tk", "scaling", 1.75 * 96 / 72)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows only")
+    def test_windows_really_becomes_dpi_aware(self):
+        # A fresh process, as the panel's: the real calls, no window. The panel's import path
+        # (ui, which sets it up) and the scale it gets.
+        code = (
+            "import json, sys; sys.path[:0] = sys.argv[1:3]\n"
+            "from openfill_photocraft import dpi, ui\n"
+            "print(json.dumps({**dpi.enable(), 'scale': ui.SCALE, 'W': ui.W}))\n"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", code, str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        ).stdout
+        state = json.loads(out.strip().splitlines()[-1])
+        # On a desktop the process starts unaware and the first call works. A process started
+        # without a desktop (a service, an SSH session) is per-monitor aware from the start, so
+        # the call is refused there ("already"); the panel then scales itself all the same.
+        calls = ("SetProcessDpiAwarenessContext", "SetProcessDpiAwareness", "SetProcessDPIAware", "already")
+        self.assertIn(state["how"], calls, state)
+        self.assertIn(state["awareness"], (1, 2), state)
+        self.assertEqual(state["scale"], max(1.0, round(state["dpi"] / 96, 2)))
+        self.assertEqual(state["W"], round(400 * state["scale"]))
+
+
 class LookTests(unittest.TestCase):
     """The panel's drawing helpers (no window needed) and its text inputs (with a display)."""
 

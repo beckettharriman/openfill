@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version numbers below (0.2.x) are OpenFill for PhotoCraft's own, not PhotoCraft's.
 Each entry from now on says which PhotoCraft versions it works with.
 
+## [Unreleased]
+
+Fixed:
+- On Windows with display scaling above 100 % (a 4K screen at 150 % or 175 %, say), the OpenFill panel was blurry because Windows stretched it. It is now drawn at the screen's real pixels, at the same size as before ([#17](https://github.com/beckettharriman/openfill/issues/17)). It follows your main screen's scale; on a second screen with another scale Windows still stretches it. If you changed "Override high DPI scaling" for pythonw.exe to work around this, set it back.
+
 ## [0.2.6] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
 
 Fixed (update recommended on Windows):
