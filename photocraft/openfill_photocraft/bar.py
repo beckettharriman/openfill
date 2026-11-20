@@ -530,6 +530,7 @@ class Bar:
             ui.FIELD_W,
             command=self._model_picked,
             manage=lambda: self.select_view("models"),
+            on_hide=self._model_hidden,
         )
         self.model_box.pack(side="left")
 
@@ -1186,6 +1187,22 @@ class Bar:
 
             threading.Thread(target=self._safe, args=(activate,), daemon=True).start()
 
+    def _hidden_models(self) -> list[str]:
+        try:
+            return self.service.app.hidden_models()
+        except Exception:  # noqa: BLE001 - the menu then lists every model
+            return []
+
+    def _model_hidden(self, label: str, hidden: bool) -> None:
+        """A model hidden from the Model menu, or listed again (kept in the settings)."""
+        model_id = self._model_ids.get(label)
+        if not model_id:
+            return
+        try:
+            self.service.app.set_model_hidden(model_id, hidden)
+        except Exception as err:  # noqa: BLE001 - shown on the panel
+            self._say(str(err), BAD)
+
     def generate(self) -> None:
         if self.service.busy() or self.go.disabled:
             return
@@ -1334,8 +1351,7 @@ class Bar:
             wanted = facts.get("active_name") or ""
         self._model_ids = choices
         names = list(choices)
-        if self.model_box.values != names:
-            self.model_box.set_values(names)
+        self.model_box.set_values(names, choices, self._hidden_models())
         current = self.model_choice.get()
         if current not in names:
             current = wanted if wanted in names else (names[0] if names else "")

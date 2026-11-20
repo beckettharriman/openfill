@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version numbers below (0.2.x) are OpenFill for PhotoCraft's own, not PhotoCraft's.
 Each entry from now on says which PhotoCraft versions it works with.
 
+## [Unreleased]
+
+Fixed:
+- With many models (a shared folder of 90 checkpoints, say) the Model menu was taller than the screen and could not scroll, so LaMa (default) at the top of Remove object was out of reach ([#14](https://github.com/beckettharriman/openfill/issues/14)). The menu now fits the screen and scrolls (mouse wheel, scroll bar, arrow keys), and with 10 or more models it has a search field: type part of a name, Enter picks the first match. LaMa (default) and OpenFill's own models come first, your model files after them.
+- You can hide models from the menu: point at one and click Hide. "Show hidden models" at the bottom lists them again. In the browser view, Hide from menu is in Models.
+
 ## [0.2.6] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
 
 Fixed (update recommended on Windows):

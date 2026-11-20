@@ -3325,6 +3325,230 @@ class ShellInterpreterTests(unittest.TestCase):
         self.assertIn("OPENFILL_PYTHON", result.stderr)
 
 
+def _mock_select(values, value, ids=None, hidden=(), on_hide=None):
+    """A stand-in for ui.Select (no Tk window) whose list logic is the real one."""
+    from openfill_photocraft import ui
+
+    select = mock.Mock()
+    select.values, select.value, select.manage = list(values), value, None
+    select.ids, select.hidden, select.show_hidden, select.on_hide = dict(ids or {}), set(hidden), False, on_hide
+    select._native_menu, select.popdown = None, None
+    for name in ("model_id", "rows", "hidden_count", "hide", "toggle_show_hidden"):
+        setattr(select, name, getattr(ui.Select, name).__get__(select))
+    return select
+
+
+class ModelMenuTests(unittest.TestCase):
+    """Issue #14: a model menu of a hundred models scrolls, can be searched, and models can be hidden."""
+
+    LABELS = ["LaMa (default)", "MAT Places512", "RealVisXL V5.0"] + [f"juggernautXL_v{i}" for i in range(95)]
+    IDS = {"LaMa (default)": "default", "MAT Places512": "mat-places512", "RealVisXL V5.0": "realvisxl-v5"}
+    IDS.update({f"juggernautXL_v{i}": f"local-{i:012x}" for i in range(95)})
+
+    def test_select_lists_the_default_first_and_hides_by_model_id(self):
+        calls = []
+        select = _mock_select(self.LABELS, "LaMa (default)", self.IDS, on_hide=lambda v, h: calls.append((v, h)))
+        rows = select.rows()
+        self.assertEqual(rows[0].label, "LaMa (default)")
+        self.assertEqual(rows[3].kind, "head")
+        select.hide("MAT Places512", True)
+        self.assertEqual(select.hidden, {"mat-places512"})
+        self.assertEqual(calls, [("MAT Places512", True)])
+        self.assertNotIn("MAT Places512", [r.label for r in select.rows()])
+        self.assertEqual(select.hidden_count(), 1)
+        select.hide("LaMa (default)", True)  # the model in use is never hidden
+        self.assertEqual(select.hidden, {"mat-places512"})
+        select.toggle_show_hidden()
+        self.assertIn("MAT Places512", [r.label for r in select.rows()])
+        self.assertEqual([r.label for r in select.rows("juggernautxl_v42")], ["juggernautXL_v42"])
+        select.hide("MAT Places512", False)
+        self.assertEqual(select.hidden, set())
+
+    def test_mac_menu_has_the_rows_and_a_hide_submenu(self):
+        from openfill_photocraft import ui
+
+        calls = []
+        select = _mock_select(
+            self.LABELS[:4],
+            "LaMa (default)",
+            self.IDS,
+            hidden={"realvisxl-v5"},
+            on_hide=lambda v, h: calls.append((v, h)),
+        )
+        select.close.side_effect = lambda: ui.Select.close(select)
+        select.winfo_rootx.return_value, select.winfo_rooty.return_value = 10, 20
+        menu, sub = mock.Mock(), mock.Mock()
+        checks = []
+        sub.add_checkbutton.side_effect = lambda **kw: checks.append(kw)
+        radios = []
+        menu.add_radiobutton.side_effect = lambda **kw: radios.append(kw["label"])
+        variables = []
+
+        def boolean_var(_master, value):
+            var = mock.Mock()
+            var.get.return_value = not value  # a click toggles it
+            variables.append(value)
+            return var
+
+        menu.tk_popup.side_effect = lambda *_a: next(c for c in checks if c["label"] == "MAT Places512")["command"]()
+        with (
+            mock.patch.object(ui.tk, "Menu", side_effect=[menu, sub]),
+            mock.patch.object(ui.tk, "StringVar"),
+            mock.patch.object(ui.tk, "BooleanVar", side_effect=boolean_var),
+        ):
+            ui.Select._mac_menu(select)
+        self.assertEqual(radios, ["LaMa (default)", "MAT Places512", self.LABELS[3]])  # RealVisXL is hidden
+        self.assertEqual([c["label"] for c in checks], self.LABELS[1:4])  # not the model in use
+        self.assertEqual(variables, [False, True, False])
+        self.assertEqual(calls, [("MAT Places512", True)])
+        self.assertEqual(select.hidden, {"realvisxl-v5", "mat-places512"})
+
+    def test_bar_keeps_hidden_models_in_the_settings_by_id(self):
+        try:
+            from openfill_photocraft.bar import Bar
+        except ImportError:
+            self.skipTest("no tkinter")
+        bar = Bar.__new__(Bar)
+        bar.service = mock.Mock()
+        bar.service.app.hidden_models.return_value = ["mat-places512"]
+        bar._model_ids = {"MAT Places512": "mat-places512"}
+        self.assertEqual(bar._hidden_models(), ["mat-places512"])
+        bar._model_hidden("MAT Places512", False)
+        bar.service.app.set_model_hidden.assert_called_once_with("mat-places512", False)
+        bar._model_hidden("Not in the menu", True)
+        bar.service.app.set_model_hidden.assert_called_once()
+        bar.service.app.hidden_models.side_effect = RuntimeError("settings unreadable")
+        self.assertEqual(bar._hidden_models(), [])
+
+    def test_page_api_hides_models_and_lists_them(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft import web
+
+        hidden = []
+
+        def set_hidden(model_id, hide):
+            hidden[:] = [i for i in hidden if i != model_id] + ([model_id] if hide else [])
+            return list(hidden)
+
+        app = SimpleNamespace(set_model_hidden=set_hidden, hidden_models=lambda: list(hidden))
+        api = web.Api.__new__(web.Api)
+        api.service = SimpleNamespace(app=app)
+        self.assertEqual(api.post("/api/models/hide", {"id": "local-abc"}), {"hidden": ["local-abc"]})
+        self.assertEqual(
+            api.post("/api/models/hide", {"id": "lama-big", "hidden": True}), {"hidden": ["local-abc", "lama-big"]}
+        )
+        self.assertEqual(api.post("/api/models/hide", {"id": "local-abc", "hidden": False}), {"hidden": ["lama-big"]})
+        page = (Path(web.__file__).with_name("static") / "index.html").read_text(encoding="utf-8")
+        for needle in ('id="model-search"', 'id="show-hidden"', "/api/models/hide", "Your model files", "data-hide"):
+            self.assertIn(needle, page)
+        self.assertIn('"hidden": app.hidden_models()', Path(web.__file__).read_text(encoding="utf-8"))
+
+
+@unittest.skipUnless(os.environ.get("OPENFILL_TK_TESTS"), "opens Tk windows: set OPENFILL_TK_TESTS=1 (under Xvfb)")
+class PopdownTests(unittest.TestCase):
+    """The panel's open model list on a real Tk (issue #14). Opens windows, so it only runs when asked."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tkinter as tk
+
+        cls.root = tk.Tk()  # one for the class: the drawn images are cached per Tk
+        cls.root.geometry("400x200+100+400")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.root.destroy()
+
+    def setUp(self):
+        from openfill_photocraft import ui
+
+        self.ui = ui
+        self.hidden = []
+        self.picked = []
+        self.select = ui.Select(
+            self.root,
+            command=self.picked.append,
+            manage=lambda: self.picked.append("manage"),
+            on_hide=lambda v, h: self.hidden.append((v, h)),
+        )
+        self.select.pack(pady=40)
+        self.addCleanup(self.select.destroy)
+        self.addCleanup(self.select.close)
+        self.select.set_values(ModelMenuTests.LABELS, ModelMenuTests.IDS, [])
+        self.select.set("LaMa (default)")
+        self.root.update()
+        self.select.toggle()
+        self.root.update()
+        self.pop = self.select.popdown
+
+    def test_fits_the_screen_and_scrolls_with_the_wheel(self):
+        pop, root = self.pop, self.root
+        self.assertGreaterEqual(pop.winfo_rooty(), 0)
+        self.assertLessEqual(pop.winfo_rooty() + pop.winfo_height(), root.winfo_screenheight())
+        self.assertLessEqual(pop.list_h, pop.MAX_ROWS * (pop.ROW + 1))
+        self.assertGreater(pop.content_h, pop.list_h)
+        self.assertEqual(pop.rows[0].label, "LaMa (default)")
+        pop.list.event_generate("<Button-5>", x=40, y=40)  # Tk 8.6 on X11
+        root.update()
+        self.assertEqual(pop.scroll, 3 * (pop.ROW + 1))
+        pop.list.event_generate("<MouseWheel>", delta=-120, x=40, y=40)  # Windows, macOS, Tk 9
+        root.update()
+        self.assertEqual(pop.scroll, 6 * (pop.ROW + 1))
+        for _ in range(60):
+            pop._wheel(3)
+        self.assertEqual(pop.scroll, pop.content_h - pop.list_h)
+        for _ in range(60):
+            pop.list.event_generate("<Button-4>", x=40, y=40)
+        root.update()
+        self.assertEqual(pop.scroll, 0)
+
+    def test_typing_filters_and_return_picks_the_first_match(self):
+        entry = self.pop.field.entry
+        entry.focus_force()
+        for ch in "v42":
+            entry.event_generate(f"<KeyPress-{ch}>")
+            entry.event_generate(f"<KeyRelease-{ch}>")
+        self.root.update()
+        self.assertEqual([r.label for r in self.pop.rows], ["juggernautXL_v42"])
+        entry.event_generate("<KeyPress-Return>")
+        self.root.update()
+        self.assertEqual(self.picked, ["juggernautXL_v42"])
+        self.assertIsNone(self.select.popdown)
+
+    def test_the_hide_button_hides_and_show_hidden_lists_it_again(self):
+        pop = self.pop
+        y = pop.tops[1] + pop.ROW // 2
+        x = pop.lw - pop.BAR_W - 20
+        pop.list.event_generate("<Motion>", x=x, y=y)
+        pop.list.event_generate("<ButtonRelease-1>", x=x, y=y)
+        self.root.update()
+        self.assertEqual(self.hidden, [("MAT Places512", True)])
+        self.assertNotIn("MAT Places512", [r.label for r in pop.rows])
+        self.assertEqual(pop.foot, ["hidden", "manage"])
+        top = pop.foot_tops[0] + pop.ROW // 2
+        pop.canvas.event_generate("<ButtonRelease-1>", x=40, y=top)
+        self.root.update()
+        self.assertIn("MAT Places512", [r.label for r in pop.rows])
+        self.assertEqual(self.picked, [])  # hiding and showing never picks
+
+    def test_a_click_picks_and_down_return_picks_the_next(self):
+        pop = self.pop
+        y = pop.tops[2] + pop.ROW // 2
+        pop.list.event_generate("<ButtonRelease-1>", x=40, y=y)
+        self.root.update()
+        self.assertEqual(self.picked, ["RealVisXL V5.0"])
+        self.select.toggle()
+        self.root.update()
+        entry = self.select.popdown.field.entry  # keys go to the search field, as a user's do
+        entry.focus_force()
+        self.root.update()
+        entry.event_generate("<KeyPress-Down>")
+        entry.event_generate("<KeyPress-Return>")
+        self.root.update()
+        self.assertEqual(self.picked[-1], "juggernautXL_v0")
+
+
 class MacInputTests(unittest.TestCase):
     def test_mac_keyboard_window_stays_managed(self):
         from openfill_photocraft import ui
@@ -3339,9 +3563,7 @@ class MacInputTests(unittest.TestCase):
     def test_native_menu_defers_action_until_dismissed_and_restores_focus(self):
         from openfill_photocraft import ui
 
-        select = mock.Mock()
-        select.values, select.value, select.manage = ["LaMa", "DreamShaper"], "LaMa", None
-        select._native_menu, select.popdown = None, None
+        select = _mock_select(["LaMa", "DreamShaper"], "LaMa")
         menu = mock.Mock()
         select.winfo_rootx.return_value, select.winfo_rooty.return_value = 10, 20
         previous = select.focus_get.return_value
@@ -3367,9 +3589,7 @@ class MacInputTests(unittest.TestCase):
         # tkMacOSXMenu.c): a close from one of them must not destroy the menu under it.
         from openfill_photocraft import ui
 
-        select = mock.Mock()
-        select.values, select.value, select.manage = ["DreamShaper", "RealVisXL"], "DreamShaper", None
-        select._native_menu, select.popdown = None, None
+        select = _mock_select(["DreamShaper", "RealVisXL"], "DreamShaper")
         select.winfo_rootx.return_value, select.winfo_rooty.return_value = 10, 20
         select.close.side_effect = lambda: ui.Select.close(select)
         menu = mock.Mock()
