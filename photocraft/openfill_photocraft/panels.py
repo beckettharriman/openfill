@@ -50,7 +50,7 @@ def field(parent: tk.Misc, label: str, control_factory, gap: int = 6) -> tuple[t
     box = ui.frame(parent)
     ui.caption(box, label).pack(anchor="w")
     control = control_factory(box)
-    control.pack(anchor="w", pady=(gap, 0))
+    control.pack(anchor="w", pady=(ui.px(gap), 0))
     return box, control
 
 
@@ -63,7 +63,7 @@ class GearView(tk.Frame):
         self.section = "models"
         # the section control stays under the header; only the section below it scrolls
         self.tabs = ui.Seg(bar.gear_bar, SECTIONS, self._section_picked, CW, 13)
-        self.tabs.pack(anchor="w", padx=16, pady=(12, 0))
+        self.tabs.pack(anchor="w", padx=ui.px(16), pady=ui.px((12, 0)))
         self.models = ModelsView(bar, self)
         self.engine = EngineView(bar, self)
         self.generation = GenerationView(bar, self)
@@ -224,7 +224,7 @@ class ModelsView(tk.Frame):
         super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
         self.bar = bar
         self.hardware = ui.small(self, "Looking...")
-        self.hardware.pack(fill="x", pady=(12, 0))
+        self.hardware.pack(fill="x", pady=ui.px((12, 0)))
         self.note = ui.small(self, "")
         self.installed_title = ui.caption(self, "Installed")
         self.installed = ui.Box(self)
@@ -233,12 +233,12 @@ class ModelsView(tk.Frame):
         self.key_box = ui.frame(self)
         ui.caption(self.key_box, "Hugging Face key (for FLUX)").pack(anchor="w")
         row = ui.frame(self.key_box)
-        row.pack(fill="x", pady=(6, 0))
+        row.pack(fill="x", pady=ui.px((6, 0)))
         save = ui.Button(row, "Save", self._save_token)
-        self.token = ui.Field(row, CW - 8 - save.w, "hf_...", secret=True, on_enter=self._save_token)
+        self.token = ui.Field(row, CW - ui.px(8) - save.w, "hf_...", secret=True, on_enter=self._save_token)
         self.token.pack(side="left")
-        save.pack(side="left", padx=(8, 0))
-        self.key_box.pack(fill="x", pady=(12, 0))
+        save.pack(side="left", padx=ui.px((8, 0)))
+        self.key_box.pack(fill="x", pady=ui.px((12, 0)))
         self._shown: tuple = ()
         self._rows: dict[str, dict[str, Any]] = {}
 
@@ -247,7 +247,7 @@ class ModelsView(tk.Frame):
             self.note.pack_forget()
             return
         self.note.configure(text=text, fg=color)
-        self.note.pack(fill="x", pady=(8, 0), after=self.hardware)
+        self.note.pack(fill="x", pady=ui.px((8, 0)), after=self.hardware)
 
     def update_view(self, facts: dict[str, Any]) -> None:
         hardware = facts.get("hardware") or ""
@@ -323,8 +323,8 @@ class ModelsView(tk.Frame):
             box.pack_forget()
             if not rows:
                 continue
-            title.pack(anchor="w", pady=(12, 0), before=self.key_box)
-            box.pack(fill="x", pady=(6, 0), before=self.key_box)
+            title.pack(anchor="w", pady=ui.px((12, 0)), before=self.key_box)
+            box.pack(fill="x", pady=ui.px((6, 0)), before=self.key_box)
             for i, row in enumerate(rows):
                 self._row(box.inner, row, first=i == 0)
             box.lift_corners()
@@ -340,7 +340,7 @@ class ModelsView(tk.Frame):
         if not first:
             ui.divider(line).pack(fill="x")
         body = ui.frame(line)
-        body.pack(fill="x", padx=12, pady=10)
+        body.pack(fill="x", padx=ui.px(12), pady=ui.px(10))
         top = ui.frame(body)
         top.pack(fill="x")
         right = ui.frame(top)
@@ -369,21 +369,21 @@ class ModelsView(tk.Frame):
                 t = ui.small(right, status, wrap=0)
                 add(t, f.small.measure(status))
             elif row["runnable"]:
-                add(ui.IconButton(right, "trash", lambda r=row: self._uninstall(r)), 28)
+                add(ui.IconButton(right, "trash", lambda r=row: self._uninstall(r)), ui.IconButton.SIZE)
         elif mode == "busy":
             parts["percent"] = ui.small(right, "", wrap=0)
-            add(parts["percent"], f.small.measure("Waiting"), (0, 4))
-            add(ui.IconButton(right, "close", lambda i=row["id"]: self._stop(i)), 28)
+            add(parts["percent"], f.small.measure("Waiting"), ui.px((0, 4)))
+            add(ui.IconButton(right, "close", lambda i=row["id"]: self._stop(i)), ui.IconButton.SIZE)
             if status.startswith("Downloading"):
-                parts["bar"] = ui.Progress(body, CW - 2 - 24, BG)
-                parts["bar"].pack(fill="x", pady=(8, 0))
+                parts["bar"] = ui.Progress(body, CW - 2 - ui.px(24), BG)
+                parts["bar"].pack(fill="x", pady=ui.px((8, 0)))
         elif mode == "working":
             t = ui.small(right, status, wrap=0)
             add(t, f.small.measure(status))
         else:
             b = ui.Button(right, "Resume" if row["partial"] else "Download", lambda i=row["id"]: self._get(i))
             add(b, b.w)
-        wrap = CW - 2 - 24 - 12 - width
+        wrap = CW - 2 - ui.px(24) - ui.px(12) - width
         names = ui.frame(top)
         names.pack(side="left", fill="x")
         ui.text(names, row["name"], f.body, wrap=wrap).pack(anchor="w")
@@ -449,7 +449,7 @@ class EngineView(tk.Frame):
         box, self.backend = field(
             self, "Where images are made", lambda b: ui.Seg(b, choices, self._backend_picked, CW, 13)
         )
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
         self.local = ui.frame(self)
         self.cloud = ui.frame(self)
         self.remote = ui.frame(self)
@@ -457,58 +457,58 @@ class EngineView(tk.Frame):
         self._build_cloud(self.cloud)
         self._build_local(self.local)
         self.local.pack(fill="x")
-        ui.divider(self).pack(fill="x", pady=(12, 0))
+        ui.divider(self).pack(fill="x", pady=ui.px((12, 0)))
         tools = ui.frame(self)
-        tools.pack(fill="x", pady=(12, 0))
+        tools.pack(fill="x", pady=ui.px((12, 0)))
         ui.caption(tools, "Engine").pack(anchor="w")
         row = ui.frame(tools)
-        row.pack(anchor="w", pady=(8, 0))
+        row.pack(anchor="w", pady=ui.px((8, 0)))
         for i, (label, command) in enumerate((("Check", self.check), ("Stop engine", self.stop), ("Logs", self.logs))):
-            ui.Button(row, label, command).pack(side="left", padx=(8 if i else 0, 0))
+            ui.Button(row, label, command).pack(side="left", padx=ui.px((8 if i else 0, 0)))
         self.result = ui.small(tools, "")
         self._tools = tools
-        ui.divider(self).pack(fill="x", pady=(12, 0))
+        ui.divider(self).pack(fill="x", pady=ui.px((12, 0)))
         info = ui.frame(self)
-        info.pack(fill="x", pady=(12, 0))
+        info.pack(fill="x", pady=ui.px((12, 0)))
         ui.caption(info, "About").pack(anchor="w")
-        ui.small(info, about().replace(" · works", "\nWorks")).pack(fill="x", pady=(8, 0))  # one line each
+        ui.small(info, about().replace(" · works", "\nWorks")).pack(fill="x", pady=ui.px((8, 0)))  # one line each
 
     def _build_cloud(self, parent: tk.Misc) -> None:
         from openfill import ui_text
 
-        ui.small(parent, f"{ui_text.CLOUD_INTRO} {ui_text.CLOUD_WHEN}").pack(fill="x", pady=(12, 0))
+        ui.small(parent, f"{ui_text.CLOUD_INTRO} {ui_text.CLOUD_WHEN}").pack(fill="x", pady=ui.px((12, 0)))
         box, self.provider = field(
             parent,
             "Service",
             lambda b: ui.Seg(b, ui_text.PHOTOCRAFT_CLOUD_PROVIDERS, self._cloud_changed, CW, 12, fit=True),
         )
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
         box, self.key = field(parent, "API key", lambda b: ui.Field(b, CW, ui_text.CLOUD_KEY_EMPTY, secret=True))
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
         self.key_hint = ui.small(parent, ui_text.CLOUD_KEY_HINT)
-        self.key_hint.pack(fill="x", pady=(6, 0))
+        self.key_hint.pack(fill="x", pady=ui.px((6, 0)))
         box, self.model = field(parent, "Model", lambda b: ui.Field(b, CW))
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
         box, self.url = field(parent, "Address", lambda b: ui.Field(b, CW))
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
         self._url_hint = ui.small(parent, "Empty model or address: the service's own. For LiteLLM, its /v1 address.")
-        self._url_hint.pack(fill="x", pady=(6, 0))
+        self._url_hint.pack(fill="x", pady=ui.px((6, 0)))
         self.mask_box, self.mask_mode = field(
             parent, "Mask method", lambda b: ui.Seg(b, ui_text.CLOUD_MASK_MODES, None, CW, 12)
         )
 
         def timeout_row(box):
             row = ui.frame(box)
-            self.timeout = ui.Field(row, 88)
+            self.timeout = ui.Field(row, ui.px(88))
             self.timeout.pack(side="left")
-            ui.small(row, "seconds, 0 = auto (local jobs too)", wrap=0).pack(side="left", padx=(8, 0))
+            ui.small(row, "seconds, 0 = auto (local jobs too)", wrap=0).pack(side="left", padx=ui.px((8, 0)))
             return row
 
         box, _ = field(parent, "Time limit", timeout_row)
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
         self.note = ui.small(parent, "", fg=WARN)
-        self.note.pack(fill="x", pady=(12, 0))
-        ui.small(parent, ui_text.CLOUD_COST).pack(fill="x", pady=(6, 0))
+        self.note.pack(fill="x", pady=ui.px((12, 0)))
+        ui.small(parent, ui_text.CLOUD_COST).pack(fill="x", pady=ui.px((6, 0)))
         self.url.entry.bind("<KeyRelease>", lambda _e: self._cloud_changed(), add="+")
 
     def _cloud_changed(self, _key: object = None) -> None:
@@ -536,7 +536,7 @@ class EngineView(tk.Frame):
         if not self.key.get():
             self.key.set("")
         if info.id == "gemini":
-            self.mask_box.pack(fill="x", pady=(12, 0), after=self._url_hint)
+            self.mask_box.pack(fill="x", pady=ui.px((12, 0)), after=self._url_hint)
             if _key == "gemini" and hasattr(self.bar, "pick_variations"):
                 self.bar.pick_variations(1)
         else:
@@ -560,16 +560,16 @@ class EngineView(tk.Frame):
     def _build_remote(self, parent: tk.Misc) -> None:
         """Remote GPU: ComfyUI on another computer of yours (docs/remote-gpu.md)."""
         ui.small(parent, "ComfyUI runs on another computer of yours, with the OpenFill GPU server.").pack(
-            fill="x", pady=(12, 0)
+            fill="x", pady=ui.px((12, 0))
         )
         box, self.remote_url = field(
             parent, "Remote GPU pairing code", lambda b: ui.Field(b, CW, "ofgpu://... from the OpenFill GPU server")
         )
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
         box, self.remote_ssh = field(
             parent, "Over SSH (optional)", lambda b: ui.Field(b, CW, "user@computer, empty = connect directly")
         )
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
 
     def load_backend(self, settings) -> None:
         backend = settings.backend if settings.backend in ("comfyui", "remote", "cloud") else "comfyui"
@@ -606,50 +606,50 @@ class EngineView(tk.Frame):
         def folder_row(box):
             row = ui.frame(box)
             browse = ui.Button(row, "Browse", self._browse)
-            self.folder = ui.Field(row, CW - 8 - browse.w)
+            self.folder = ui.Field(row, CW - ui.px(8) - browse.w)
             self.folder.pack(side="left")
-            browse.pack(side="left", padx=(8, 0))
+            browse.pack(side="left", padx=ui.px((8, 0)))
             return row
 
         box, _ = field(parent, "ComfyUI folder", folder_row)
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
         self.autostart = ui.Checkbox(parent, f"Start the AI engine with {self.bar.host}")
-        self.autostart.pack(anchor="w", pady=(12, 0))
+        self.autostart.pack(anchor="w", pady=ui.px((12, 0)))
 
         def idle_row(box):
             row = ui.frame(box)
-            self.idle = ui.Field(row, 72)
+            self.idle = ui.Field(row, ui.px(72))
             self.idle.pack(side="left")
-            ui.small(row, "minutes, 0 = never", wrap=0).pack(side="left", padx=(8, 0))
+            ui.small(row, "minutes, 0 = never", wrap=0).pack(side="left", padx=ui.px((8, 0)))
             return row
 
         box, _ = field(parent, "Stop after idle", idle_row)
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
         box, self.extra = field(parent, "Extra ComfyUI options", lambda b: ui.Field(b, CW, "for example --lowvram"))
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
 
         def shared_row(box):
             column = ui.frame(box)
             row = ui.frame(column)
             add = ui.Button(row, "Add", self._add_shared)
             find = ui.Button(row, "Find", self._find_shared)
-            self.shared = ui.Field(row, CW - 16 - add.w - find.w, "Krita AI Diffusion's server folder")
+            self.shared = ui.Field(row, CW - ui.px(16) - add.w - find.w, "Krita AI Diffusion's server folder")
             self.shared.pack(side="left")
-            add.pack(side="left", padx=(8, 0))
-            find.pack(side="left", padx=(8, 0))
+            add.pack(side="left", padx=ui.px((8, 0)))
+            find.pack(side="left", padx=ui.px((8, 0)))
             row.pack(anchor="w")
-            ui.small(column, SHARED_HINT).pack(anchor="w", pady=(6, 0))
+            ui.small(column, SHARED_HINT).pack(anchor="w", pady=ui.px((6, 0)))
             return column
 
         box, _ = field(parent, "Models from another ComfyUI", shared_row)
-        box.pack(fill="x", pady=(12, 0))
+        box.pack(fill="x", pady=ui.px((12, 0)))
 
     def say(self, text: str, color: str = OK) -> None:
         if not text:
             self.result.pack_forget()
             return
         self.result.configure(text=text, fg=color)
-        self.result.pack(fill="x", pady=(8, 0))
+        self.result.pack(fill="x", pady=ui.px((8, 0)))
 
     def _browse(self) -> None:
         from tkinter import filedialog
@@ -715,22 +715,22 @@ class GenerationView(tk.Frame):
     def __init__(self, bar: Bar, parent: tk.Misc) -> None:
         super().__init__(parent, bg=BG, bd=0, highlightthickness=0)
         self.bar = bar
-        half = (CW - 12) // 2
+        half = (CW - ui.px(12)) // 2
         self.fields: dict[str, ui.Field] = {}
         keys = (("steps", "cfg"), ("grow_percent", "feather_percent"))
         labels = {key: label for key, label, _kind in SETTINGS}
         for pair in keys:
             row = ui.frame(self)
-            row.pack(fill="x", pady=(12, 0))
+            row.pack(fill="x", pady=ui.px((12, 0)))
             for i, key in enumerate(pair):
                 box, entry = field(row, labels[key], lambda b: ui.Field(b, half))
-                box.pack(side="left", padx=(12 if i else 0, 0))
+                box.pack(side="left", padx=ui.px((12 if i else 0, 0)))
                 self.fields[key] = entry
         ui.small(
             self,
             "Steps: more is slower and finer. Strictness: how closely the prompt is followed. "
             "Margin: how far past the selection the fill may repaint, as a share of its size.",
-        ).pack(fill="x", pady=(12, 0))
+        ).pack(fill="x", pady=ui.px((12, 0)))
         self.result = ui.small(self, "")
 
     def say(self, text: str, color: str = OK) -> None:
@@ -738,4 +738,4 @@ class GenerationView(tk.Frame):
             self.result.pack_forget()
             return
         self.result.configure(text=text, fg=color)
-        self.result.pack(fill="x", pady=(8, 0))
+        self.result.pack(fill="x", pady=ui.px((8, 0)))

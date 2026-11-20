@@ -24,9 +24,10 @@ from .ui import BG, CW, LINE, WELL
 if TYPE_CHECKING:
     from .bar import Bar
 
-AREA = (CW - 2, 228)  # inside the editor's 1 px border: 368 x 230 in all
+AREA = (CW - 2, ui.px(228))  # inside the editor's 1 px border: 368 x 230 in all (design px)
 ROOM = 0.45  # the image takes this share of the editor at zoom 1, leaving room to drag outward
 ZOOM_STEP = 1.2
+HIT = ui.px(ue.HIT_PX)  # how near a handle or edge the pointer grabs it
 TK_CURSORS = {
     "left": "sb_h_double_arrow",
     "right": "sb_h_double_arrow",
@@ -68,14 +69,14 @@ class ExpandView(tk.Frame):
         self.ratio_seg.pack(anchor="w")
         self.ratio_buttons = {button: _Choice(self.ratio_seg, button) for button, _label in ratios}
         self.turn_seg = ui.Seg(self, ((False, "Landscape"), (True, "Portrait")), self._turn, CW, 12)
-        self.turn_seg.pack(anchor="w", pady=(8, 0))
+        self.turn_seg.pack(anchor="w", pady=ui.px((8, 0)))
         self.turn_buttons = {portrait: _Choice(self.turn_seg, portrait) for portrait in (False, True)}
 
         well = tk.Frame(self, bg=LINE, bd=0, highlightthickness=0)
-        well.pack(anchor="w", pady=(8, 0))
+        well.pack(anchor="w", pady=ui.px((8, 0)))
         self.canvas = tk.Canvas(well, width=AREA[0], height=AREA[1], bg=WELL, highlightthickness=0, bd=0)
         self.canvas.pack(padx=1, pady=1)
-        ui.round_corners(well, 4, WELL, BG, LINE)
+        ui.round_corners(well, ui.px(4), WELL, BG, LINE)
         self.canvas.bind("<ButtonPress-1>", self._press)
         self.canvas.bind("<B1-Motion>", self._motion_drag)
         self.canvas.bind("<ButtonRelease-1>", self._release)
@@ -84,7 +85,7 @@ class ExpandView(tk.Frame):
         self.canvas.bind("<Button-4>", lambda _e: self._wheel(ZOOM_STEP))
         self.canvas.bind("<Button-5>", lambda _e: self._wheel(1 / ZOOM_STEP))
         self.size = ui.small(self, "", anchor="center", justify="center")
-        self.size.pack(fill="x", pady=(8, 0))
+        self.size.pack(fill="x", pady=ui.px((8, 0)))
         self._changed()
 
     # state ---------------------------------------------------------------------------
@@ -141,7 +142,7 @@ class ExpandView(tk.Frame):
         the frame would not fit (so it never leaves the editor)."""
         s = self.state
         thumb = max(1.0, scale_cap * max(s.image_w, s.image_h))
-        return ue.fit_view(AREA[0], AREA[1], s.image_w, s.image_h, s.margins, thumb_px=thumb, pad=10)
+        return ue.fit_view(AREA[0], AREA[1], s.image_w, s.image_h, s.margins, thumb_px=thumb, pad=ui.px(10))
 
     def base_scale(self) -> float:
         s = self.state
@@ -205,7 +206,7 @@ class ExpandView(tk.Frame):
         if not self.painted and self.thumbnail is None:
             return None
         m = self.job_margins or ue.Margins()
-        k = min(1.0, 420 / max(width, height))
+        k = min(1.0, ui.px(420) / max(width, height))
         out = Image.new("RGB", (max(1, round(width * k)), max(1, round(height * k))), (60, 60, 60))
         ox, oy = m.left, m.top  # the old image's place in the new canvas (no crop in an expand)
         if self.thumbnail is not None:
@@ -222,7 +223,7 @@ class ExpandView(tk.Frame):
     def _press(self, event) -> None:
         if self.job_view is not None:
             return
-        handle = ue.hit_region(self.view(), event.x, event.y)
+        handle = ue.hit_region(self.view(), event.x, event.y, HIT)
         if handle:
             self._drag = (handle, event.x, event.y, self.state.margins, self.view())
 
@@ -248,7 +249,7 @@ class ExpandView(tk.Frame):
 
     def _hover(self, event) -> None:
         if self._drag is None and self.job_view is None:
-            handle = ue.hit_region(self.view(), event.x, event.y)
+            handle = ue.hit_region(self.view(), event.x, event.y, HIT)
             self.canvas.configure(cursor=TK_CURSORS.get(handle, ""))
 
     # drawing -------------------------------------------------------------------------
@@ -283,7 +284,7 @@ class ExpandView(tk.Frame):
             (v.ix, min(v.iy + v.ih, v.fy + v.fh), v.iw, abs(v.fy + v.fh - v.iy - v.ih), m.bottom),
         )
         for x, y, w, h, amount in sides:
-            if amount and w > 34 and h > 16:
+            if amount and w > ui.px(34) and h > ui.px(16):
                 text = f"+{amount}" if amount > 0 else f"-{-amount}"
                 c.create_text(x + w / 2, y + h / 2, text=text, fill="white", font=ui.fonts(c).tiny)
         self._painted_photos = []
@@ -295,10 +296,10 @@ class ExpandView(tk.Frame):
             image = photo(frame.resize((sw, sh), Image.BILINEAR))
             self._painted_photos.append(image)
             c.create_image(round(sx), round(sy), image=image, anchor="nw")
-        c.create_rectangle(v.fx, v.fy, v.fx + v.fw, v.fy + v.fh, outline="white", dash=(6, 4), width=2)
+        c.create_rectangle(v.fx, v.fy, v.fx + v.fw, v.fy + v.fh, outline="white", dash=(6, 4), width=ui.px(2))
         if self.job_view is not None:
             return  # no handles while it runs
-        half = ue.HANDLE_PX / 2
+        half = ui.px(ue.HANDLE_PX) / 2
         for _name, (hx, hy) in ue.handle_points(v).items():
             c.create_rectangle(hx - half, hy - half, hx + half, hy + half, fill="white", outline="#1a1a1a")
 

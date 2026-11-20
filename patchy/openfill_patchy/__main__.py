@@ -73,6 +73,9 @@ def tell(title: str, text: str) -> None:
         if sys.platform == "win32":
             import ctypes
 
+            from openfill_photocraft import dpi
+
+            dpi.enable()  # sharp text in the message box on a high-DPI screen
             ctypes.windll.user32.MessageBoxW(None, text, title, 0x40 | 0x10000)
 
 

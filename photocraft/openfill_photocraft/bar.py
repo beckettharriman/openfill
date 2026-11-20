@@ -28,23 +28,24 @@ from PIL import Image, ImageDraw
 
 from openfill.server import SLOW_START_S
 
-from . import ui
+from . import dpi, ui
 from .menu import Watcher
 from .modelinfo import choose_card_line, comfy_help_url, download_card_line, hardware_line, needed_by
 from .service import ENGINE_RESTARTING, ENGINE_STOPPED, Service, photocraft_text
 from .ui import ACCENT, BAD, BG, CW, DIM, LABEL_W, LINE, OK, PAD, PANEL, TEXT, WARN, W, photo
 
 WIDTH = W
-PREVIEW_MAX = (CW - 24, 230)
-THUMB_H = 72
+PREVIEW_MAX = (CW - ui.px(24), ui.px(230))
+THUMB_H = ui.px(72)
 
 TABS = (("fill", "Fill"), ("remove", "Remove"), ("expand", "Expand"), ("txt2img", "Create"), ("bgremove", "Cutout"))
 CREATE_SIZES = (("Square", 1024, 1024), ("Landscape", 1216, 832), ("Portrait", 832, 1216))
 STARTER = ("lama-big", "dreamshaper-8-inpainting")
-HEAD_H = 45  # the header and its divider
-FOOTER_H = 65  # the action bar: divider, 12 px, a 36 px button, 16 px
-GEAR_BAR_H = 44  # Models and settings' section control: 12 px and 32 px
-CREATE_TOTAL = 474  # the Create tools, as on the board: Models and settings is about this tall
+HEAD_H = ui.px(44) + 1  # the header and its divider
+FOOTER_H = 1 + ui.px(12) + ui.px(36) + ui.px(16)  # the action bar: divider, 12 px, a 36 px button, 16 px
+GEAR_BAR_H = ui.px(12) + ui.px(32)  # Models and settings' section control: 12 px and 32 px
+CREATE_TOTAL = ui.px(474)  # the Create tools, as on the board: Models and settings is about this tall
+PILL_W, PILL_H = ui.px(236), ui.px(36)  # the collapsed strip
 GO = {"fill": "Generate", "remove": "Remove", "expand": "Expand", "txt2img": "Create", "bgremove": "Remove background"}
 PLACEHOLDERS = {
     "fill": "Describe what to add, or leave it empty to fill from the surroundings.",
@@ -400,7 +401,10 @@ class Bar:
         self.wrap = CW
         self.colors = {"BG": BG, "OK": OK, "BAD": BAD, "DIM": DIM, "TEXT": TEXT, "WARN": WARN}
         self.view = ""  # "" (the tools) or "settings" (Models and settings)
+        if sys.platform == "win32":
+            print(dpi.describe())  # importing ui made the process DPI aware, before this first window
         self.root = tk.Tk(className="OpenFill")
+        ui.apply_scaling(self.root)
         self.root.title("OpenFill")
         self.root.configure(bg=BG)
         self.root.resizable(False, False)
@@ -478,7 +482,7 @@ class Bar:
         self._resize_soon = False
         self.main = ui.frame(self.inner)
         self.main.pack(fill="x", padx=PAD)
-        self.bottom_gap = ui.gap(self.inner, 16)
+        self.bottom_gap = ui.gap(self.inner, ui.px(16))
         self.bottom_gap.pack(fill="x")
 
         m = self.main
@@ -486,9 +490,9 @@ class Bar:
         self.tab_buttons = {key: _SegKey(self.modes, key) for key, _label in TABS}
         self.context_row = ui.frame(m)
         self.context_icon = tk.Label(self.context_row, bg=BG, bd=0, highlightthickness=0)
-        self.context_icon.pack(side="left", anchor="n", pady=(1, 0))
-        self.context = ui.small(self.context_row, "", wrap=CW - 20)
-        self.context.pack(side="left", padx=(6, 0), fill="x")
+        self.context_icon.pack(side="left", anchor="n", pady=ui.px((1, 0)))
+        self.context = ui.small(self.context_row, "", wrap=CW - ui.px(20))
+        self.context.pack(side="left", padx=ui.px((6, 0)), fill="x")
         # Shown under the context whenever the cloud is the backend: what leaves this computer.
         self.cloud_line = ui.small(m, "", fg=WARN)
         self.remove_line = ui.small(m, "Erases what you selected and fills in the background around it.")
@@ -515,9 +519,9 @@ class Bar:
         self.size_seg.pack(side="left")
         self.size_buttons = {label: _SegKey(self.size_seg, label) for label, _w, _h in CREATE_SIZES}
         self.size_px = ui.small(self.create_rows, "", wrap=ui.FIELD_W, anchor="center")
-        self.size_px.pack(fill="x", padx=(LABEL_W + 12, 0), pady=(4, 0))
+        self.size_px.pack(fill="x", padx=(LABEL_W + ui.px(12), 0), pady=ui.px((4, 0)))
         self.target_seg = ui.Seg(
-            self._row(self.create_rows, "Result as", pady=(8, 0)),
+            self._row(self.create_rows, "Result as", pady=ui.px((8, 0))),
             (("image", "New image"), ("layer", "Layer in this image")),
             self.pick_target,
             ui.FIELD_W,
@@ -538,7 +542,7 @@ class Bar:
         self.var_seg.pack(side="left")
         self.var_buttons = [_SegKey(self.var_seg, n) for n in range(1, 6)]
         self.model_box = ui.Select(
-            self._row(self.options, "Model", pady=(8, 0)),
+            self._row(self.options, "Model", pady=ui.px((8, 0))),
             ui.FIELD_W,
             command=self._model_picked,
             manage=lambda: self.select_view("models"),
@@ -556,15 +560,15 @@ class Bar:
         self.job_title.pack(side="left")
         self.job_model = ui.small(head, "", bg=PANEL, wrap=0)
         self.job_model.pack(side="right")
-        self.progress = ui.Progress(j, CW - 24)
-        self.progress.pack(fill="x", pady=(8, 0))
-        self.job_text = ui.text(j, "", f.small, DIM, PANEL, CW - 24)
-        self.job_text.pack(fill="x", pady=(8, 0))
+        self.progress = ui.Progress(j, CW - ui.px(24))
+        self.progress.pack(fill="x", pady=ui.px((8, 0)))
+        self.job_text = ui.text(j, "", f.small, DIM, PANEL, CW - ui.px(24))
+        self.job_text.pack(fill="x", pady=ui.px((8, 0)))
         self.preview = tk.Label(j, bg=PANEL, bd=0, highlightthickness=0)
         self.thumbs = ui.frame(j, PANEL)
         ui.caption(self.thumbs, "Pick a variation", PANEL).pack(anchor="w")
         self.thumb_row = ui.frame(self.thumbs, PANEL)
-        self.thumb_row.pack(fill="x", pady=(8, 0))
+        self.thumb_row.pack(fill="x", pady=ui.px((8, 0)))
         self.thumb_cells: list[tk.Canvas] = []
 
         # Models and settings, behind the gear
@@ -577,14 +581,15 @@ class Bar:
         # The action bar at the bottom
         ui.divider(self.footer).pack(fill="x")
         self.actions = ui.frame(self.footer)
-        self.actions.pack(fill="x", padx=PAD, pady=(12, PAD))
-        third = (CW - 16) // 3
+        self.actions.pack(fill="x", padx=PAD, pady=(ui.px(12), PAD))
+        gap, tall = ui.px(8), ui.px(36)
+        third = (CW - 2 * gap) // 3
         self.go = ui.Button(self.actions, "Generate", self.generate, "primary", CW)
-        self.cancel_button = ui.Button(self.actions, "Cancel", self.service.cancel, "secondary", CW, 36)
-        self.discard_button = ui.Button(self.actions, "Discard", lambda: self.keep("none"), "secondary", third, 36)
-        self.keep_all_button = ui.Button(self.actions, "Keep all", lambda: self.keep("all"), "secondary", third, 36)
+        self.cancel_button = ui.Button(self.actions, "Cancel", self.service.cancel, "secondary", CW, tall)
+        self.discard_button = ui.Button(self.actions, "Discard", lambda: self.keep("none"), "secondary", third, tall)
+        self.keep_all_button = ui.Button(self.actions, "Keep all", lambda: self.keep("all"), "secondary", third, tall)
         self.keep_button = ui.Button(
-            self.actions, "Keep", lambda: self.keep("selected"), "primary", CW - 2 * third - 16
+            self.actions, "Keep", lambda: self.keep("selected"), "primary", CW - 2 * third - 2 * gap
         )
         self.save_button = ui.Button(self.actions, "Save", self.gear.save, "primary", CW)
         self._footer_key: tuple = ()
@@ -600,32 +605,32 @@ class Bar:
         """A form row: an 84 px grey label, then the control (packed into the returned frame)."""
         row = ui.frame(parent)
         row.pack(fill="x", pady=pady)
-        cell = ui.frame(row, width=LABEL_W, height=32)
+        cell = ui.frame(row, width=LABEL_W, height=ui.px(32))
         cell.pack_propagate(False)
         cell.pack(side="left")
         ui.small(cell, label, wrap=0).pack(side="left")
         holder = ui.frame(row)
-        holder.pack(side="left", padx=(12, 0))
+        holder.pack(side="left", padx=ui.px((12, 0)))
         return holder
 
     def _build_header(self) -> None:
         f = self.fonts
-        head = self.header = ui.frame(self.root, width=W, height=44)
+        head = self.header = ui.frame(self.root, width=W, height=HEAD_H - 1)
         head.pack_propagate(False)
         head.pack(fill="x")
         self.collapse_button = ui.IconButton(head, "collapse", self.collapse)
-        self.collapse_button.pack(side="right", padx=(2, 10))
+        self.collapse_button.pack(side="right", padx=ui.px((2, 10)))
         self.gear_button = ui.IconButton(head, "gear", self.toggle_gear)
         self.gear_button.pack(side="right")
         self.head_tools = ui.frame(head)
-        logo = tk.Label(self.head_tools, image=ui.app_icon(18, BG), bg=BG, bd=0, highlightthickness=0)
+        logo = tk.Label(self.head_tools, image=ui.app_icon(ui.px(18), BG), bg=BG, bd=0, highlightthickness=0)
         logo.pack(side="left")
         name = ui.text(self.head_tools, "OpenFill", f.bold)
-        name.pack(side="left", padx=(8, 0))
+        name.pack(side="left", padx=ui.px((8, 0)))
         self.status_dot = tk.Label(self.head_tools, bg=BG, bd=0, highlightthickness=0)
-        self.status_dot.pack(side="left", padx=(12, 0))
+        self.status_dot.pack(side="left", padx=ui.px((12, 0)))
         self.status = ui.small(self.head_tools, "Checking...", wrap=0)
-        self.status.pack(side="left", padx=(6, 0))
+        self.status.pack(side="left", padx=ui.px((6, 0)))
         self.head_view = ui.frame(head)
         ui.IconButton(self.head_view, "back", lambda: self.select_tab(self.tab.get())).pack(side="left")
         view_title = ui.text(self.head_view, "Models and settings", f.bold)
@@ -647,7 +652,7 @@ class Bar:
         self.pill.attributes("-topmost", True)  # dropped when tied to PhotoCraft (Windows)
         self.pill.withdraw()
         self.pill_canvas = tk.Canvas(
-            self.pill, width=236, height=36, bg=PANEL, bd=0, highlightthickness=0, cursor="hand2"
+            self.pill, width=PILL_W, height=PILL_H, bg=PANEL, bd=0, highlightthickness=0, cursor="hand2"
         )
         self.pill_canvas.pack()
         self.pill_canvas.bind("<ButtonPress-1>", self._pill_press)
@@ -665,16 +670,19 @@ class Bar:
         self._pill_shown = key
         c, f = self.pill_canvas, self.fonts
         c.delete("all")
-        c.create_rectangle(0, 0, 235, 35, outline=LINE, fill=PANEL)
-        c.create_image(11, 9, image=ui.app_icon(18, PANEL), anchor="nw")
-        x = 11 + 18 + 8
-        c.create_text(x, 18, text="OpenFill", font=f.bold, fill=TEXT, anchor="w")
-        x += f.bold.measure("OpenFill") + 8
-        c.create_image(x, 15, image=ui.dot(color, PANEL), anchor="nw")
-        x += 6 + 8
-        c.create_text(x, 18, text=ui.ellipsize(status, f.small, 236 - 13 - x), font=f.small, fill=DIM, anchor="w")
+        w, h, logo, dot = PILL_W, PILL_H, ui.px(18), ui.px(6)
+        c.create_rectangle(0, 0, w - 1, h - 1, outline=LINE, fill=PANEL)
+        c.create_image(ui.px(11), (h - logo) // 2, image=ui.app_icon(logo, PANEL), anchor="nw")
+        x = ui.px(11) + logo + ui.px(8)
+        c.create_text(x, h / 2, text="OpenFill", font=f.bold, fill=TEXT, anchor="w")
+        x += f.bold.measure("OpenFill") + ui.px(8)
+        c.create_image(x, (h - dot) // 2, image=ui.dot(color, PANEL), anchor="nw")
+        x += dot + ui.px(8)
+        c.create_text(
+            x, h / 2, text=ui.ellipsize(status, f.small, w - ui.px(13) - x), font=f.small, fill=DIM, anchor="w"
+        )
         if fraction is not None:
-            c.create_rectangle(1, 33, 1 + round(234 * fraction), 35, outline="", fill=ACCENT)
+            c.create_rectangle(1, h - 1 - ui.px(2), 1 + round((w - 2) * fraction), h - 1, outline="", fill=ACCENT)
         self.pill_text = status
 
     def _pill_press(self, event) -> None:
@@ -687,20 +695,22 @@ class Bar:
 
     def _pill_release(self, event) -> None:
         grab, self._pill_grab = self._pill_grab, None
-        if grab is None or (abs(event.x_root - grab[0]) < 4 and abs(event.y_root - grab[1]) < 4):
+        still = ui.px(4)
+        if grab is None or (abs(event.x_root - grab[0]) < still and abs(event.y_root - grab[1]) < still):
             self.expand()  # a click
             return
         self.pill.update_idletasks()  # a drag: remember where, relative to PhotoCraft
         right, bottom = self._anchor()
+        # kept in design pixels, so the strip stays in its place when the display scale changes
         self.prefs["pill_off"] = [
-            right - (self.pill.winfo_x() + self.pill.winfo_width()),
-            bottom - (self.pill.winfo_y() + self.pill.winfo_height()),
+            round((right - (self.pill.winfo_x() + self.pill.winfo_width())) / ui.SCALE),
+            round((bottom - (self.pill.winfo_y() + self.pill.winfo_height())) / ui.SCALE),
         ]
 
     # scrolling -----------------------------------------------------------------------
 
     def _max_body(self) -> int:
-        return max(200, self.root.winfo_screenheight() - HEAD_H - GEAR_BAR_H - FOOTER_H - 64)
+        return max(ui.px(200), self.root.winfo_screenheight() - HEAD_H - GEAR_BAR_H - FOOTER_H - ui.px(64))
 
     def _footer_shown(self) -> bool:
         return bool(self._footer_key)
@@ -711,7 +721,7 @@ class Bar:
         if self.view:
             return self._gear_total() - HEAD_H - GEAR_BAR_H - (FOOTER_H if self._footer_shown() else 0)
         parts = self._shown.get("parts") or []
-        return sum(p.winfo_reqheight() + 12 for p in parts) + 16
+        return sum(p.winfo_reqheight() + ui.px(12) for p in parts) + ui.px(16)
 
     def _gear_total(self) -> int:
         """Models and settings keep one window height for all three sections: as tall as the
@@ -723,8 +733,10 @@ class Bar:
                 self.gear.engine.cloud.winfo_reqheight() - self.gear.engine.local.winfo_reqheight(),
                 self.gear.engine.remote.winfo_reqheight() - self.gear.engine.local.winfo_reqheight(),
             )
-            sections = max(self.gear.engine.winfo_reqheight() + extra + 48, self.gear.generation.winfo_reqheight())
-            settings = HEAD_H + GEAR_BAR_H + sections + 16 + FOOTER_H
+            sections = max(
+                self.gear.engine.winfo_reqheight() + extra + ui.px(48), self.gear.generation.winfo_reqheight()
+            )
+            settings = HEAD_H + GEAR_BAR_H + sections + ui.px(16) + FOOTER_H
             self._gear_h = max(settings, CREATE_TOTAL)
         return self._gear_h
 
@@ -743,7 +755,7 @@ class Bar:
         x, y, cur = self.root.winfo_x(), self.root.winfo_y(), self.root.winfo_height()
         if self._bottom is None:
             self._bottom = y + cur
-        limit = self.root.winfo_screenheight() - 56  # above a taskbar
+        limit = self.root.winfo_screenheight() - ui.px(56)  # above a taskbar
         bottom = min(self._bottom, limit)
         # a mode taller than the room above the anchor (Expand on a short screen) starts at the
         # top of the screen while it is shown; the next one is back on the anchor
@@ -772,9 +784,9 @@ class Bar:
             return None
         num, delta = getattr(event, "num", 0), getattr(event, "delta", 0)
         if num == 4:
-            px = -40
+            px = -ui.px(40)
         elif num == 5:
-            px = 40
+            px = ui.px(40)
         elif str(event.type) in ("TouchpadScroll", "39"):
             try:
                 _dx, dy = self.root.tk.splitlist(self.root.tk.call("tk::PreciseScrollDeltas", delta))
@@ -784,7 +796,7 @@ class Bar:
         elif sys.platform == "darwin":
             px = -delta * 8
         elif delta:  # Windows (and Tk 9 on X11): 120 per notch; a touchpad sends smaller steps
-            px = -round(delta * 40 / 120) or (-1 if delta > 0 else 1)
+            px = -round(delta * ui.px(40) / 120) or (-1 if delta > 0 else 1)
         else:
             return None
         if px:
@@ -803,7 +815,7 @@ class Bar:
         return mx + mw, my + mh
 
     def _default_pill_off(self) -> list[int]:
-        return [360, 52] if self.tied else [40, 70]  # left of PhotoCraft's panels, above its status bar
+        return [360, 52] if self.tied else [40, 70]  # left of PhotoCraft's panels, above its status bar (design px)
 
     def _clamp(self, x: int, y: int, w: int, h: int) -> tuple[int, int]:
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
@@ -829,7 +841,7 @@ class Bar:
         """The strip's bottom right on screen (where it is, or where it would go)."""
         self.pill.update_idletasks()
         w, h = self.pill.winfo_reqwidth(), self.pill.winfo_reqheight()
-        dx, dy = self.prefs.get("pill_off") or self._default_pill_off()
+        dx, dy = (ui.px(v) for v in self.prefs.get("pill_off") or self._default_pill_off())
         right, bottom = self._anchor()
         x, y = self._clamp(right - dx - w, bottom - dy - h, w, h)
         return x + w, y + h
@@ -888,7 +900,7 @@ class Bar:
             return
         sh = self.root.winfo_screenheight()
         bottom = self.root.winfo_y() + self.root.winfo_height()
-        limit = sh - 56  # above a taskbar
+        limit = sh - ui.px(56)  # above a taskbar
         if bottom > limit:
             self._placing = True
             self.root.geometry(f"+{self.root.winfo_x()}+{max(0, limit - self.root.winfo_height())}")
@@ -1107,7 +1119,7 @@ class Bar:
         for w in old[prefix:]:
             w.pack_forget()
         for w in parts[prefix:]:
-            w.pack(fill="x", pady=(12, 0), anchor="w")
+            w.pack(fill="x", pady=ui.px((12, 0)), anchor="w")
         for card in (self.setup, self.job):
             card.lift_corners()
 
@@ -1135,7 +1147,7 @@ class Bar:
             if not self.footer.winfo_manager():
                 self.footer.pack(side="bottom", fill="x", before=self.scroller)
             for i, b in enumerate(buttons):
-                b.pack(side="left", padx=(8 if i else 0, 0))
+                b.pack(side="left", padx=ui.px((8 if i else 0, 0)))
         if not self.view:
             self._inner_changed()
 
@@ -1154,7 +1166,7 @@ class Bar:
                 if image is not None:
                     visible, _selection = self.service.bridge._snapshot(image)
                     thumb = visible.copy()
-                    thumb.thumbnail((420, 420))
+                    thumb.thumbnail(ui.px((420, 420)))
                     if self.expand_view.image_key == key:
                         self.call_soon(self.expand_view.set_thumbnail, thumb)
             except Exception:  # noqa: BLE001 - the editor works without a thumbnail
@@ -1409,7 +1421,7 @@ class Bar:
         if self._shown.get("context") != key:
             self._shown["context"] = key
             self.context.configure(text=text, fg=color)
-            self.context_icon.configure(image=ui.icon(mark, color, 14, BG))
+            self.context_icon.configure(image=ui.icon(mark, color, ui.px(14), BG))
 
     def _tick(self) -> None:
         try:
@@ -1469,7 +1481,7 @@ class Bar:
         status = self._engine_status(facts)
         if self._shown.get("status") != status:
             self._shown["status"] = status
-            self.status.configure(text=ui.ellipsize(status, self.small, 200))
+            self.status.configure(text=ui.ellipsize(status, self.small, ui.px(200)))
             self.status_dot.configure(image=ui.dot(status_color(status), BG))
         self._update_setup(facts)
         if facts.get("rows") is not self._shown.get("rows") or self.view:
@@ -1584,22 +1596,23 @@ class Bar:
         f = self.fonts
         head = ui.frame(inner, PANEL)
         head.pack(fill="x")
-        tk.Label(head, image=ui.icon(mark, color, 16, PANEL), bg=PANEL, bd=0).pack(side="left")
-        ui.text(head, title, f.bold, bg=PANEL).pack(side="left", padx=(8, 0))
+        tk.Label(head, image=ui.icon(mark, color, ui.px(16), PANEL), bg=PANEL, bd=0).pack(side="left")
+        ui.text(head, title, f.bold, bg=PANEL).pack(side="left", padx=ui.px((8, 0)))
         self.setup_percent = ui.small(head, "", bg=PANEL, wrap=0)
         self.setup_percent.pack(side="right")
+        room, gap = CW - ui.px(24), ui.px(8)
         if kind in ("download", "setup"):
-            self.setup_bar = ui.Progress(inner, CW - 24)
-            self.setup_bar.pack(fill="x", pady=(8, 0))
-        ui.small(inner, line, bg=PANEL, wrap=CW - 24).pack(fill="x", pady=(8, 0))
+            self.setup_bar = ui.Progress(inner, room)
+            self.setup_bar.pack(fill="x", pady=(gap, 0))
+        ui.small(inner, line, bg=PANEL, wrap=room).pack(fill="x", pady=(gap, 0))
         if buttons:
             row = ui.frame(inner, PANEL)
-            row.pack(fill="x", pady=(8, 0))
+            row.pack(fill="x", pady=(gap, 0))
             n = len(buttons)
-            width = (CW - 24 - 8 * (n - 1)) // n
+            width = (room - gap * (n - 1)) // n
             for i, (label, style, command) in enumerate(buttons):
-                w = width if i < n - 1 else CW - 24 - (width + 8) * (n - 1)
-                ui.Button(row, label, command, style, w, 32, PANEL).pack(side="left", padx=(8 if i else 0, 0))
+                w = width if i < n - 1 else room - (width + gap) * (n - 1)
+                ui.Button(row, label, command, style, w, ui.px(32), PANEL).pack(side="left", padx=(gap if i else 0, 0))
         self.setup.lift_corners()
 
     def _update_job(self, st: dict[str, Any]) -> None:
@@ -1662,13 +1675,13 @@ class Bar:
             with Image.open(io.BytesIO(data)) as im:
                 im = im.convert("RGB")
                 im.thumbnail(PREVIEW_MAX)
-                frame = photo(rounded(im, 4, PANEL))
+                frame = photo(rounded(im, ui.px(4), PANEL))
         except Exception:  # noqa: BLE001 - a bad frame is skipped
             return
         self._images = [frame, *[i for i in self._images if i is not frame][:8]]
         self.preview.configure(image=frame)
         if not self.preview.winfo_ismapped():
-            self.preview.pack(pady=(12, 0))
+            self.preview.pack(pady=ui.px((12, 0)))
             self.job.lift_corners()
 
     def _update_variations(self, st: dict[str, Any]) -> None:
@@ -1684,32 +1697,37 @@ class Bar:
         for child in self.thumb_row.winfo_children():
             child.destroy()
         n = len(names)
-        inner = CW - 24
-        width = (inner - 8 * (n - 1)) / n
+        inner, gap = CW - ui.px(24), ui.px(8)
+        width = (inner - gap * (n - 1)) / n
         photos = []
         self.thumb_cells = []
         f = self.fonts
         for index, layer in enumerate(self.service.layers[:n]):
-            x0 = round(index * (width + 8))
-            cw = round((index + 1) * (width + 8) - 8) - x0
+            x0 = round(index * (width + gap))
+            cw = round((index + 1) * (width + gap) - gap) - x0
             on = index == st["shown"]
-            cell = tk.Canvas(self.thumb_row, width=cw, height=100, bg=PANEL, bd=0, highlightthickness=0, cursor="hand2")
-            cell.pack(side="left", padx=(8 if index else 0, 0))
+            cell = tk.Canvas(
+                self.thumb_row, width=cw, height=ui.px(100), bg=PANEL, bd=0, highlightthickness=0, cursor="hand2"
+            )
+            cell.pack(side="left", padx=(gap if index else 0, 0))
             if on:
-                cell.create_image(0, 0, image=ui.rrect(cw, 80, 4, PANEL, PANEL, ACCENT, 2), anchor="nw")
+                ring = ui.rrect(cw, ui.px(80), ui.px(4), PANEL, PANEL, ACCENT, ui.px(2))
+                cell.create_image(0, 0, image=ring, anchor="nw")
             try:
                 im = Image.frombytes("RGBA", (layer.origin.width, layer.origin.height), layer.rgba)
-                thumb = photo(cover(im, cw - 8, THUMB_H, 2))
-                cell.create_image(4, 4, image=thumb, anchor="nw")
+                thumb = photo(cover(im, cw - ui.px(8), THUMB_H, ui.px(2)))
+                cell.create_image(ui.px(4), ui.px(4), image=thumb, anchor="nw")
                 photos.append(thumb)
             except Exception:  # noqa: BLE001
                 pass
-            cell.create_text(cw / 2, 92, text=str(index + 1), font=f.small, fill=TEXT if on else DIM, anchor="center")
+            cell.create_text(
+                cw / 2, ui.px(92), text=str(index + 1), font=f.small, fill=TEXT if on else DIM, anchor="center"
+            )
             cell.bind("<Button-1>", lambda _e, i=index: self.pick_variation(i))
             self.thumb_cells.append(cell)
         self._images = photos + self._images[:4]
         if not self.thumbs.winfo_ismapped():
-            self.thumbs.pack(fill="x", pady=(12, 0))
+            self.thumbs.pack(fill="x", pady=ui.px((12, 0)))
             self.job.lift_corners()
 
     def run(self, alive) -> None:

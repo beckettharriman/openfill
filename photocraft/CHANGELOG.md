@@ -16,6 +16,7 @@ Fixed:
 - A large Fill with SDXL (RealVisXL, Juggernaut) or SD 1.5 and more than one variation failed with "INPAINT_MaskedFill: Image and mask batch size does not match" ([#16](https://github.com/beckettharriman/openfill/issues/16)). One variation and smaller selections worked. The same went for RORem and the FLUX eraser.
 - The Tk panel failed to open with some Python 3.14 and Tk 8.6 setups ("bad screen distance "1.5""), so OpenFill fell back to the browser page.
 - The Flatpak PhotoCraft (0.21) could not open any image ("needs about 0.0 GB and 0.0 GB is free"), because it could not read the memory limits in /sys/fs/cgroup. OpenFill now starts it with read access to that folder.
+- On Windows with display scaling above 100 % (a 4K screen at 150 % or 175 %, say), the OpenFill panel was blurry because Windows stretched it. It is now drawn at the screen's real pixels, at the same size as before ([#17](https://github.com/beckettharriman/openfill/issues/17)). It follows your main screen's scale; on a second screen with another scale Windows still stretches it. If you changed "Override high DPI scaling" for pythonw.exe to work around this, set it back.
 
 New:
 - When the engine takes longer than 90 seconds to start, the status line says "Still starting (slow, see Logs)", and a job's progress says why that can happen. A model folder on an unplugged or sleeping drive is named when it doesn't answer.

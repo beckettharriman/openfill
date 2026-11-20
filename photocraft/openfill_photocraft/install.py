@@ -341,6 +341,9 @@ def windows_uninstall_shortcut() -> Path:
 def uninstall_windows_dialog() -> int:
     import ctypes
 
+    from openfill_photocraft import dpi
+
+    dpi.enable()  # sharp text in the message boxes on a high-DPI screen
     message = ctypes.windll.user32.MessageBoxW
     if (
         message(
