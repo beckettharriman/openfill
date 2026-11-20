@@ -18,6 +18,7 @@ Patchy uses the same panel and engine as OpenFill for PhotoCraft, so it gets the
 - The panel no longer fails to open with some Python 3.14 and Tk 8.6 setups ("bad screen distance "1.5"") ([#16](https://github.com/beckettharriman/openfill/issues/16)).
 - On Windows with display scaling above 100 %, the panel and OpenFill's messages are sharp instead of blurry, at the same size as before ([#17](https://github.com/beckettharriman/openfill/issues/17)).
 - Google Gemini as a third optional cloud service, by Kaya Furkan İpekci (kayafurkanipekci) ([#19](https://github.com/beckettharriman/openfill/pull/19)). Pick it under Engine > Cloud service. Cloud service also has a Time limit in seconds (0 = automatic).
+- Remove Background (Cutout tab) keeps the image's own transparency, by Pedro (PedroArthurr) ([#15](https://github.com/beckettharriman/openfill/pull/15)). See-through parts such as glass or a soft shadow stay see-through and keep their own colour, and the cutout is never more opaque than the original. A fully transparent image now says there is nothing to cut out instead of adding an empty layer.
 
 ## [0.1.0] - 2026-11-08
 
