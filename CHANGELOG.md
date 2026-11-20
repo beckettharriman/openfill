@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Model lists with many models ([#14](https://github.com/beckettharriman/openfill/issues/14)): in the GIMP dialogs the Model field opens a list that fits the screen and scrolls, with a search field. Your own model files are listed after OpenFill's models, under "Your model files". Each model has a Hide button; "Show hidden models" lists them again. The same in OpenFill for PhotoCraft and Patchy.
 - Fixed a large Fill with SDXL or SD 1.5 and more than one variation, which failed with "INPAINT_MaskedFill: Image and mask batch size does not match" ([#16](https://github.com/beckettharriman/openfill/issues/16)). The same went for RORem and the FLUX eraser.
 - OpenFill for PhotoCraft and Patchy: Remove Background (Cutout tab) keeps the image's own transparency, by Pedro (PedroArthurr) ([#15](https://github.com/beckettharriman/openfill/pull/15)). See-through parts such as glass or a soft shadow stay see-through and keep their own colour, and the cutout is never more opaque than the original. A fully transparent image now says there is nothing to cut out instead of adding an empty layer.
+- OpenFill for PhotoCraft: tested with PhotoCraft 0.21 to 0.23.1, so it now says it works with PhotoCraft 0.12 to 0.23. Filter > Plug-ins > OpenFill is added once a PhotoCraft dialog that was open at start closes (#12).
 - Fixed in OpenFill for PhotoCraft 0.2.6: on Windows the installer said PhotoCraft is not installed when PhotoCraft 0.17 or newer was installed just for you.
 
 Development:

@@ -8,11 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version numbers below (0.2.x) are OpenFill for PhotoCraft's own, not PhotoCraft's.
 Each entry from now on says which PhotoCraft versions it works with.
 
-## [Unreleased]
+## [Unreleased] · works with PhotoCraft 0.12 to 0.23
+
+Works with PhotoCraft 0.21, 0.22, 0.23 and 0.23.1:
+- Tested on PhotoCraft 0.21.0, 0.22.0, 0.23.0 and 0.23.1: install, the menu entry, and Fill, Remove, Expand and Create in PhotoCraft (with a stand-in for the models). OpenFill for PhotoCraft 0.2.6 already works with them; the panel and the docs said "0.12 to 0.20" only because they had not been tested yet.
 
 Fixed:
 - If another ComfyUI or another program already used port 8188, OpenFill said the engine was ready while it was talking to that other ComfyUI, and its own ComfyUI then failed to start (#12). OpenFill now starts its own on the next free port. The status line says "Ready on port 8189 (8188 is taken)", and Check says why.
 - On Linux, the AMD setting for Radeon cards is no longer used when ComfyUI runs on an NVIDIA card in the same computer (#12).
+- If a PhotoCraft dialog was open when OpenFill started, Filter > Plug-ins > OpenFill was never added, and the log said "this PhotoCraft has no plug-ins". OpenFill now adds it as soon as the dialog closes, and the log says why it is waiting ([#12](https://github.com/beckettharriman/openfill/issues/12)).
+- If a PhotoCraft dialog opened at the exact moment OpenFill made one of its short-lived actions, that action could stay recording. OpenFill now stops and deletes it, and one such moment no longer makes OpenFill stop using actions for the rest of the session.
 - The Qwen-Image-Edit 2511 download failed its check because the file was replaced on Hugging Face ([#13](https://github.com/beckettharriman/openfill/issues/13)). Every model download now comes from a fixed version of the file, so a change upstream can't break it again. If a file still doesn't match, OpenFill says its own list is out of date, not your download.
 - A large Fill with SDXL (RealVisXL, Juggernaut) or SD 1.5 and more than one variation failed with "INPAINT_MaskedFill: Image and mask batch size does not match" ([#16](https://github.com/beckettharriman/openfill/issues/16)). One variation and smaller selections worked. The same went for RORem and the FLUX eraser.
 - The Tk panel failed to open with some Python 3.14 and Tk 8.6 setups ("bad screen distance "1.5""), so OpenFill fell back to the browser page.
@@ -20,8 +25,8 @@ Fixed:
 - On Windows with display scaling above 100 % (a 4K screen at 150 % or 175 %, say), the OpenFill panel was blurry because Windows stretched it. It is now drawn at the screen's real pixels, at the same size as before ([#17](https://github.com/beckettharriman/openfill/issues/17)). It follows your main screen's scale; on a second screen with another scale Windows still stretches it. If you changed "Override high DPI scaling" for pythonw.exe to work around this, set it back.
 - With many models (a shared folder of 90 checkpoints, say) the Model menu was taller than the screen and could not scroll, so LaMa (default) at the top of Remove object was out of reach ([#14](https://github.com/beckettharriman/openfill/issues/14)). The menu now fits the screen and scrolls (mouse wheel, scroll bar, arrow keys), and with 10 or more models it has a search field: type part of a name, Enter picks the first match. LaMa (default) and OpenFill's own models come first, your model files after them.
 - You can hide models from the menu: point at one and click Hide. "Show hidden models" at the bottom lists them again. In the browser view, Hide from menu is in Models.
-
 - Remove Background (Cutout tab) keeps the image's own transparency, by Pedro (PedroArthurr) ([#15](https://github.com/beckettharriman/openfill/pull/15)). See-through parts such as glass or a soft shadow stay see-through and keep their own colour, and the cutout is never more opaque than the original. A fully transparent image now says there is nothing to cut out instead of adding an empty layer.
+
 New:
 - When the engine takes longer than 90 seconds to start, the status line says "Still starting (slow, see Logs)", and a job's progress says why that can happen. A model folder on an unplugged or sleeping drive is named when it doesn't answer.
 - Google Gemini as a third optional cloud service, by Kaya Furkan İpekci (kayafurkanipekci) ([#19](https://github.com/beckettharriman/openfill/pull/19)). Pick it under Engine > Cloud service and paste your Gemini API key, or set GEMINI_API_KEY (a key from the environment only goes to Google's own address). Gemini has a Mask method choice, and Variations starts at 1 for it. See [docs/cloud.md](../docs/cloud.md).

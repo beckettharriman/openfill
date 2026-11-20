@@ -26,7 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .control import ControlClient, ControlError
+from .control import ControlClient, ControlError, stop_recording
 
 # (action, menu label). The label is also the name of the history step the entry leaves.
 # One entry: everything else is in the OpenFill bar it opens.
@@ -142,23 +142,43 @@ def manifest(action: str, label: str) -> dict[str, Any]:
     }
 
 
-def install(client: ControlClient) -> list[str]:
+def try_install(client: ControlClient) -> tuple[list[str], str]:
     """Add OpenFill's entries to Filter > Plug-ins (plug-ins last as long as the PhotoCraft
-    process). The labels installed; empty when this PhotoCraft has no plug-ins."""
-    for action in OLD_ACTIONS:
-        try:
-            client.run("plugin.remove", id=PLUGIN_PREFIX + action)
-        except ControlError:
-            pass  # not installed
-    done = []
+    process): (the labels installed, why not when that is empty). PhotoCraft refuses it while
+    one of its dialogs is open, so ``Watcher`` tries again until it works."""
+    done: list[str] = []
+    problem = ""
     for action, label in ENTRIES:
         data = base64.b64encode(plugin_module(manifest(action, label))).decode("ascii")
         try:
             client.run("plugin.install", data=data, replace=True)
             done.append(label)
-        except ControlError:
+        except ControlError as err:
+            problem = str(err).removeprefix("engine.execute: ")
             break
-    return done
+    if done:
+        for action in OLD_ACTIONS:
+            try:
+                client.run("plugin.remove", id=PLUGIN_PREFIX + action)
+            except ControlError:
+                pass  # not installed
+    return done, problem
+
+
+def install(client: ControlClient) -> list[str]:
+    """``try_install``'s labels; empty when PhotoCraft did not take them."""
+    return try_install(client)[0]
+
+
+def install_message(labels: list[str], problem: str) -> str:
+    """The companion log's line about the menu entry."""
+    if labels:
+        return "Filter > Plug-ins: " + ", ".join(labels)
+    if "modal dialog" in problem:
+        return "Filter > Plug-ins: not added yet, a dialog is open in PhotoCraft (added once it closes)"
+    if "unknown" in problem:
+        return f"Filter > Plug-ins: this PhotoCraft has no plug-ins ({problem})"
+    return f"Filter > Plug-ins: not added ({problem or 'PhotoCraft gave no reason'}); trying again"
 
 
 # Watching -----------------------------------------------------------------------------
@@ -208,6 +228,13 @@ class Watcher:
     lock: threading.Lock = field(default_factory=threading.Lock)
     _seen: dict[tuple[int, str], int] = field(default_factory=dict)
     _stop: threading.Event = field(default_factory=threading.Event)
+    # Filter > Plug-ins > OpenFill is not in PhotoCraft yet (a dialog was open when it was
+    # added): tried again every ``menu_retry`` seconds. ``log`` hears when it is in.
+    menu_missing: bool = False
+    menu_retry: float = 3.0
+    log: Callable[[str], None] = print
+    _menu_next: float = 0.0
+    _recording_left: str = ""  # OpenFill's own action PhotoCraft would not stop recording yet
 
     def start(self) -> None:
         threading.Thread(target=self._loop, name="openfill-watch", daemon=True).start()
@@ -228,8 +255,33 @@ class Watcher:
                     self.info.connected, self.info.error = False, str(err)
             self._stop.wait(self.interval)
 
+    def install_menu(self) -> list[str]:
+        """Add OpenFill to Filter > Plug-ins; when PhotoCraft refuses (one of its dialogs is
+        open), ``poll`` tries again until it is in. The labels added."""
+        labels, problem = try_install(self.client)
+        self.menu_missing = not labels and "unknown" not in problem  # a PhotoCraft without plug-ins: never
+        self._menu_next = time.monotonic() + self.menu_retry
+        self.log(install_message(labels, problem))
+        return labels
+
+    def _tidy(self) -> None:
+        """What an earlier look could not finish: the menu entry, a recording left on."""
+        if self._recording_left and not stop_recording(self.client, self._recording_left, tries=1)[1]:
+            try:
+                self.client.run("actions.delete", action=self._recording_left)
+            except ControlError:
+                pass
+            self._recording_left = ""
+        if self.menu_missing and time.monotonic() >= self._menu_next:
+            labels, problem = try_install(self.client)
+            self._menu_next = time.monotonic() + self.menu_retry
+            if labels:
+                self.menu_missing = False
+                self.log(install_message(labels, problem))
+
     def poll(self) -> str | None:
         """One look at PhotoCraft; the action picked from the menu since the last look, if any."""
+        self._tidy()
         session = self.client.call("ui.inspect").get("session") or {}
         docs = session.get("documents") or []
         active = next((d for d in docs if d.get("index") == session.get("active")), None)
@@ -294,7 +346,11 @@ class Watcher:
             while action in taken:
                 action = f"OpenFill menu {len(taken)}-{int(time.time() * 1000) % 100000}"
             self.client.run("actions.record", name=action)
-            stopped = self.client.run("actions.stop") or {}
+            stopped, still = stop_recording(self.client, action)
+            if stopped is None:
+                if still:  # a dialog came up: stopped and deleted on a later look
+                    self._recording_left, action = action, None
+                return False
             for step in reversed(range(int(stopped.get("steps") or 0))):
                 self.client.run("actions.delete", action=action, step=step)  # the user's: never replayed
             self.client.run("actions.insert", action=action, id="document.activate", params={"document": index})

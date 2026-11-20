@@ -223,6 +223,7 @@ class FakePhotoCraft:
     def __init__(self, exchange: Path, size=(64, 48), version: str | None = None, actions: bool = True) -> None:
         self.exchange = exchange
         self.actions = {} if actions else None  # recorded actions; None: a PhotoCraft without them
+        self.recording: str | None = None  # the action being recorded
         self.version = version  # what ui.inspect reports; None as PhotoCraft before 0.16
         self.views: list[dict] = []
         self.calls: list[tuple[str, dict]] = []
@@ -343,19 +344,26 @@ class FakePhotoCraft:
             if self.actions is None:
                 raise control.ControlError(f"engine.execute: unknown command `{command}`")
             if command == "actions.list":
-                return {"actions": [{"name": n} for n in self.actions], "recording": None}
+                return {"actions": [{"name": n} for n in self.actions], "recording": self.recording}
             if command == "actions.record":
                 self.actions[params["name"]] = []
+                self.recording = params["name"]
                 return {"action": params["name"]}
             if command == "actions.stop":  # what was done while recording (``recorded``), as PhotoCraft does
+                if self.recording is None:
+                    raise control.ControlError("engine.execute: not recording an action")
                 steps = getattr(self, "recorded", [])
-                self.actions[next(reversed(self.actions))] = list(steps)
-                self.recorded = []
+                self.actions[self.recording] = list(steps)
+                self.recording, self.recorded = None, []
                 return {"steps": len(steps)}
             if command == "actions.insert":
                 self.actions[params["action"]].append((params["id"], params.get("params") or {}))
                 return {}
             if command == "actions.delete":
+                if params["action"] == self.recording:  # as PhotoCraft 0.21 says it
+                    raise control.ControlError(
+                        "engine.execute: invalid parameters for `actions.delete`: stop recording before deleting an action"
+                    )
                 if "step" in params:
                     del self.actions[params["action"]][params["step"]]
                     return {"action": params["action"]}
@@ -1158,6 +1166,54 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(other["history"], ["Open"] + ["Layer Properties"] * 3)  # nothing replayed on it
         self.assertEqual(self.pc.actions, {})
 
+    def _refuse(self, command, times):
+        """PhotoCraft refuses ``command`` ``times`` times, as it does while one of its dialogs is open."""
+        real_run, left = self.pc.run, [times]
+
+        def run(cmd, **params):
+            if cmd == command and left[0]:
+                left[0] -= 1
+                raise control.ControlError("engine.execute: command is unavailable while a modal dialog is open")
+            return real_run(cmd, **params)
+
+        self.pc.run = run
+
+    def test_a_dialog_between_record_and_stop_never_leaves_a_recording_on(self):
+        # A dialog opens right after OpenFill starts its throwaway action and closes again:
+        # the stop is tried again, the action is played and deleted.
+        self._round_one_in()
+        self._refuse("actions.stop", times=2)
+        with mock.patch("openfill_photocraft.control.time.sleep"):
+            self.assertEqual(self.bridge.discard(self.image), "undone")
+        self.assertIsNone(self.pc.recording)
+        self.assertEqual(self.pc.actions, {})
+        self.assertIsNot(self.bridge._actions, False)
+
+    def test_a_recording_photocraft_would_not_stop_is_stopped_at_the_next_chance(self):
+        self._round_one_in()
+        self._refuse("actions.stop", times=5)  # the dialog stays open
+        with mock.patch("openfill_photocraft.control.time.sleep"):
+            self.assertEqual(self.bridge.discard(self.image), "kept")  # nothing played, said so
+        self.assertEqual(self.target["history"], ["Open", "Duplicate Layer", "Crop"])
+        self.assertEqual(self.pc.recording, "OpenFill History")
+        # the dialog is closed: the next change stops and deletes it first, then runs as usual
+        self.bridge.rewind(self.image, 1)
+        self.assertIsNone(self.pc.recording)
+        self.assertEqual(self.pc.actions, {})
+        self.assertEqual(self.target["history"], ["Open"])
+
+    def test_a_dialog_during_the_record_keeps_actions_for_later(self):
+        # Before, one refused actions.record made OpenFill drop actions (and their one-request
+        # safety) for the rest of the session.
+        self._round_one_in()
+        self._refuse("actions.record", times=1)
+        self.assertEqual(self.bridge.discard(self.image), "kept")
+        self.assertIsNot(self.bridge._actions, False)
+        plays = self.pc.commands().count("actions.play")
+        self.bridge.rewind(self.image, 1)
+        self.assertEqual(self.pc.commands().count("actions.play"), plays + 1)
+        self.assertEqual(self.target["history"], ["Open"])
+
     def test_without_actions_a_rollback_that_lands_elsewhere_is_put_back(self):
         self._with(actions=False)
         other = self._other_doc()
@@ -1467,13 +1523,17 @@ class MenuTests(unittest.TestCase):
                 return {"actions": [{"name": n} for n in self.actions], "recording": self.recording}
             if command == "actions.record":
                 self.actions[params["name"]] = []
+                self.recording = params["name"]
                 return {}
             if command == "actions.stop":
+                self.recording = None
                 return {"steps": 0}
             if command == "actions.insert":
                 self.actions[params["action"]].append((params["id"], params["params"]))
                 return {}
             if command == "actions.delete":
+                if params["action"] == self.recording:
+                    raise control.ControlError("engine.execute: stop recording before deleting an action")
                 self.actions.pop(params["action"], None)
                 return {}
             if command == "actions.play":
@@ -1578,6 +1638,104 @@ class MenuTests(unittest.TestCase):
         menu.Watcher(pc, lambda _a: None).poll()
         self.assertEqual(pc.docs[0]["history"], ["Open", "Rectangular Marquee", "OpenFill"])
         self.assertNotIn("actions.record", pc.commands)
+
+    def test_a_dialog_between_record_and_stop_never_leaves_the_menus_action_recording(self):
+        from openfill_photocraft import menu
+
+        pc = self._MenuPhotoCraft()
+        real_run, refused = pc.run, [5]
+
+        def run(command, **params):  # a dialog opens right after the record and stays a while
+            if command in ("actions.stop", "actions.list") and refused[0] and pc.recording:
+                refused[0] -= command == "actions.stop"
+                raise control.ControlError("engine.execute: command is unavailable while a modal dialog is open")
+            return real_run(command, **params)
+
+        pc.run = run
+        watcher = menu.Watcher(pc, lambda _a: None)
+        with mock.patch("openfill_photocraft.control.time.sleep"):
+            self.assertEqual(watcher.poll(), "panel")  # still reported
+        a = pc.docs[0]
+        self.assertEqual(a["history"], ["Open", "Rectangular Marquee", "OpenFill"])  # the step stays
+        self.assertEqual(pc.recording, "OpenFill menu")
+        self.assertEqual(pc.commands.count("actions.play"), 0)
+        watcher.poll()  # the dialog is closed: stopped and deleted on the next look
+        self.assertIsNone(pc.recording)
+        self.assertEqual(pc.actions, {})
+
+    class _PluginPhotoCraft:
+        """A PhotoCraft that refuses plug-ins while ``dialog`` (one of its dialogs) is open."""
+
+        def __init__(self):
+            self.dialog, self.installed, self.removed = True, [], []
+
+        def call(self, method, **params):
+            return {"session": {"active": None, "documents": []}}
+
+        def run(self, command, **params):
+            if self.dialog:
+                raise control.ControlError("engine.execute: command is unavailable while a modal dialog is open")
+            if command == "plugin.install":
+                self.installed.append(params["data"])
+                return {}
+            if command == "plugin.remove":
+                self.removed.append(params["id"])
+                raise control.ControlError("engine.execute: no plug-in " + params["id"])
+            raise AssertionError(command)
+
+    def test_the_menu_entry_waits_for_photocrafts_dialog_to_close(self):
+        # Issue #12: OpenFill started while a PhotoCraft dialog was open said "this PhotoCraft
+        # has no plug-ins" and never added Filter > Plug-ins > OpenFill.
+        from openfill_photocraft import menu
+
+        pc, said = self._PluginPhotoCraft(), []
+        watcher = menu.Watcher(pc, lambda _a: None, menu_retry=0.0, log=said.append)
+        self.assertEqual(watcher.install_menu(), [])
+        self.assertEqual(
+            said, ["Filter > Plug-ins: not added yet, a dialog is open in PhotoCraft (added once it closes)"]
+        )
+        watcher.poll()
+        self.assertEqual((pc.installed, len(said)), ([], 1))  # still open: tried again, quietly
+        pc.dialog = False
+        watcher.poll()
+        self.assertEqual(len(pc.installed), 1)
+        self.assertEqual(said[-1], "Filter > Plug-ins: OpenFill")
+        self.assertEqual(pc.removed, [menu.PLUGIN_PREFIX + a for a in menu.OLD_ACTIONS])  # once it is in
+        watcher.poll()
+        self.assertEqual(len(pc.installed), 1)  # in: not added again
+
+    def test_the_menu_entry_is_tried_again_only_now_and_then(self):
+        from openfill_photocraft import menu
+
+        pc = self._PluginPhotoCraft()
+        watcher = menu.Watcher(pc, lambda _a: None, menu_retry=60.0, log=lambda _t: None)
+        watcher.install_menu()
+        pc.dialog = False
+        watcher.poll()
+        self.assertEqual(pc.installed, [])  # not before menu_retry
+        self.assertTrue(watcher.menu_missing)
+
+    def test_the_menu_message_names_the_reason(self):
+        from openfill_photocraft import menu
+
+        self.assertEqual(menu.install_message(["OpenFill"], ""), "Filter > Plug-ins: OpenFill")
+        self.assertIn("has no plug-ins", menu.install_message([], "unknown command `plugin.install`"))
+        self.assertNotIn("has no plug-ins", menu.install_message([], ""))
+        self.assertNotIn(
+            "has no plug-ins", menu.install_message([], "command is unavailable while a modal dialog is open")
+        )
+
+    def test_a_photocraft_without_plug_ins_is_not_asked_again(self):
+        from openfill_photocraft import menu
+
+        pc = self._PluginPhotoCraft()
+        pc.dialog = False
+        pc.run = mock.Mock(side_effect=control.ControlError("engine.execute: unknown command `plugin.install`"))
+        watcher = menu.Watcher(pc, lambda _a: None, menu_retry=0.0, log=lambda _t: None)
+        self.assertEqual(watcher.install_menu(), [])
+        self.assertFalse(watcher.menu_missing)
+        watcher.poll()
+        self.assertEqual(pc.run.call_count, 1)
 
 
 class InstallTests(unittest.TestCase):

@@ -7,7 +7,7 @@ control channel and runs OpenFill's ComfyUI pipeline (the ``openfill`` package).
 __version__ = "0.2.6"
 
 # The oldest and newest PhotoCraft releases this version was tested on.
-PHOTOCRAFT_TESTED = ("0.12", "0.20")
+PHOTOCRAFT_TESTED = ("0.12", "0.23")
 
 
 def about() -> str:

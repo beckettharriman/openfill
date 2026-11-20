@@ -94,10 +94,10 @@ jobs:
           - photocraft: "0.12.0"
             scope: machine
             hive: HKLM
-          - photocraft: "0.20.2"
+          - photocraft: "0.23.1"
             scope: user
             hive: HKCU
-          - photocraft: "0.20.2"
+          - photocraft: "0.23.1"
             scope: machine
             hive: HKLM
     name: photocraft-windows-fresh-install (PhotoCraft ${{ matrix.photocraft }}, ${{ matrix.scope }})
