@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Fixed in OpenFill for PhotoCraft 0.2.6: on Windows the installer said PhotoCraft is not installed when PhotoCraft 0.17 or newer was installed just for you.
+- Fixed a large Fill with SDXL or SD 1.5 and more than one variation, which failed with "INPAINT_MaskedFill: Image and mask batch size does not match" ([#16](https://github.com/beckettharriman/openfill/issues/16)). The same went for RORem and the FLUX eraser.
 
 ## [2.0.0-beta.7] - 2026-11-08
 
