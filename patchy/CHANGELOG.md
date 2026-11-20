@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- The Model menu fits the screen, scrolls, has a search field with 10 or more models, and models can be hidden from it ([#14](https://github.com/beckettharriman/openfill/issues/14)). Same panel as OpenFill for PhotoCraft.
+Patchy uses the same panel and engine as OpenFill for PhotoCraft, so it gets the same fixes:
+
+- The Model menu fits the screen, scrolls, has a search field with 10 or more models, and models can be hidden from it ([#14](https://github.com/beckettharriman/openfill/issues/14)).
+- If another ComfyUI or another program used port 8188, OpenFill used that one or its own ComfyUI failed to start ([#12](https://github.com/beckettharriman/openfill/issues/12)). It now starts its own on the next free port and says so in the status line.
+- On Linux, the AMD setting for Radeon cards is no longer used when ComfyUI runs on an NVIDIA card in the same computer ([#12](https://github.com/beckettharriman/openfill/issues/12)).
+- When the engine takes longer than 90 seconds to start, the status line says so, and a model folder on an unplugged or sleeping drive is named when it doesn't answer ([#12](https://github.com/beckettharriman/openfill/issues/12)).
+- The Qwen-Image-Edit 2511 download no longer fails its check: every model download comes from a fixed version of the file ([#13](https://github.com/beckettharriman/openfill/issues/13)).
+- A large Fill with SDXL or SD 1.5 and more than one variation no longer fails with "Image and mask batch size does not match" ([#16](https://github.com/beckettharriman/openfill/issues/16)). The same for RORem and the FLUX eraser.
+- The panel no longer fails to open with some Python 3.14 and Tk 8.6 setups ("bad screen distance "1.5"") ([#16](https://github.com/beckettharriman/openfill/issues/16)).
+- On Windows with display scaling above 100 %, the panel and OpenFill's messages are sharp instead of blurry, at the same size as before ([#17](https://github.com/beckettharriman/openfill/issues/17)).
+- Google Gemini as a third optional cloud service, by Kaya Furkan İpekci (kayafurkanipekci) ([#19](https://github.com/beckettharriman/openfill/pull/19)). Pick it under Engine > Cloud service. Cloud service also has a Time limit in seconds (0 = automatic).
 
 ## [0.1.0] - 2026-11-08
 

@@ -13,6 +13,7 @@ Each entry from now on says which PhotoCraft versions it works with.
 Fixed:
 - If another ComfyUI or another program already used port 8188, OpenFill said the engine was ready while it was talking to that other ComfyUI, and its own ComfyUI then failed to start (#12). OpenFill now starts its own on the next free port. The status line says "Ready on port 8189 (8188 is taken)", and Check says why.
 - On Linux, the AMD setting for Radeon cards is no longer used when ComfyUI runs on an NVIDIA card in the same computer (#12).
+- The Qwen-Image-Edit 2511 download failed its check because the file was replaced on Hugging Face ([#13](https://github.com/beckettharriman/openfill/issues/13)). Every model download now comes from a fixed version of the file, so a change upstream can't break it again. If a file still doesn't match, OpenFill says its own list is out of date, not your download.
 - A large Fill with SDXL (RealVisXL, Juggernaut) or SD 1.5 and more than one variation failed with "INPAINT_MaskedFill: Image and mask batch size does not match" ([#16](https://github.com/beckettharriman/openfill/issues/16)). One variation and smaller selections worked. The same went for RORem and the FLUX eraser.
 - The Tk panel failed to open with some Python 3.14 and Tk 8.6 setups ("bad screen distance "1.5""), so OpenFill fell back to the browser page.
 - The Flatpak PhotoCraft (0.21) could not open any image ("needs about 0.0 GB and 0.0 GB is free"), because it could not read the memory limits in /sys/fs/cgroup. OpenFill now starts it with read access to that folder.
@@ -22,7 +23,8 @@ Fixed:
 
 New:
 - When the engine takes longer than 90 seconds to start, the status line says "Still starting (slow, see Logs)", and a job's progress says why that can happen. A model folder on an unplugged or sleeping drive is named when it doesn't answer.
-- Added Google Gemini as a third optional cloud service under Engine (`gemini-3.1-flash-image` default). Saves pasted API keys in `config.json` like the other cloud providers (while never returning them from `/api/settings`) or falls back to `GEMINI_API_KEY` / `GOOGLE_API_KEY` from the environment. Includes selectable Mask method (`Second image` or `Overlay`), editable Time limit (`request_timeout`), Variations defaulting to `1`, seam tone correction, and Engine/Generation scroll fixes. See [docs/cloud.md](../docs/cloud.md).
+- Google Gemini as a third optional cloud service, by Kaya Furkan İpekci (kayafurkanipekci) ([#19](https://github.com/beckettharriman/openfill/pull/19)). Pick it under Engine > Cloud service and paste your Gemini API key, or set GEMINI_API_KEY (a key from the environment only goes to Google's own address). Gemini has a Mask method choice, and Variations starts at 1 for it. See [docs/cloud.md](../docs/cloud.md).
+- Cloud service has a Time limit in seconds. 0 lets OpenFill work it out for each job, and it also applies to jobs on this computer.
 
 ## [0.2.6] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
 

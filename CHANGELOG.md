@@ -11,11 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When another ComfyUI or another program already uses ComfyUI's port (8188), OpenFill now starts its own ComfyUI on the next free port and says so, instead of silently using the other one while its own failed to start (#12). This also covers another ComfyUI that takes the port while OpenFill's is still loading. A ComfyUI that already runs at the URL is still used, and Check backend now says so.
 - On Linux, the AMD setting `HSA_OVERRIDE_GFX_VERSION` is no longer set when the computer also has an NVIDIA card that ComfyUI runs on, such as an RTX card next to a Radeon 610M in the processor (#12).
 - A ComfyUI start that takes longer than 90 seconds now says so, with a hint about model folders on sleeping or unplugged drives, and names such a folder when it doesn't answer (#12).
-- OpenFill for PhotoCraft: added Google Gemini (`gemini`) as a third optional cloud service under Engine (`gemini-3.1-flash-image` default, saved key in `config.json` or `GEMINI_API_KEY` / `GOOGLE_API_KEY` env var fallback, `second_image` and `overlay` mask methods, seam tone correction, `request_timeout` field in settings UI, `AIza...` / `x-goog-api-key` log redaction, and Generation/Engine scroll fixes). See [docs/cloud.md](docs/cloud.md).
-- Fixed Windows unittest collection in `photocraft/tests/test_companion.py` (`ShellInterpreterTests` skipped on the class instead of failing at import time).
+- OpenFill for PhotoCraft and Patchy: Google Gemini as a third optional cloud service, by Kaya Furkan İpekci (kayafurkanipekci) ([#19](https://github.com/beckettharriman/openfill/pull/19)). Pick it under Engine > Cloud service and paste your Gemini API key, or set GEMINI_API_KEY. A key from the environment is only ever sent to Google's own address. Not in the GIMP plug-in. See [docs/cloud.md](docs/cloud.md).
 - Model lists with many models ([#14](https://github.com/beckettharriman/openfill/issues/14)): in the GIMP dialogs the Model field opens a list that fits the screen and scrolls, with a search field. Your own model files are listed after OpenFill's models, under "Your model files". Each model has a Hide button; "Show hidden models" lists them again. The same in OpenFill for PhotoCraft and Patchy.
 - Fixed a large Fill with SDXL or SD 1.5 and more than one variation, which failed with "INPAINT_MaskedFill: Image and mask batch size does not match" ([#16](https://github.com/beckettharriman/openfill/issues/16)). The same went for RORem and the FLUX eraser.
 - Fixed in OpenFill for PhotoCraft 0.2.6: on Windows the installer said PhotoCraft is not installed when PhotoCraft 0.17 or newer was installed just for you.
+
+Development:
+- The PhotoCraft companion tests load on Windows again.
 
 ## [2.0.0-beta.7] - 2026-11-08
 
