@@ -251,9 +251,70 @@ class SeamCorrectionTest(unittest.TestCase):
         original = _sky(self.W, self.H)
         layer = _sky(self.W, self.H, tint=(36, -28, 32), box=self.SEL)
         mask = _rect_mask(self.W, self.H, self.SEL)
-        field = quality.seam_field(self.W, self.H, original, layer, mask, 4, band=8, side=self.W, inside_band=16)
+        field = quality.seam_field(
+            self.W,
+            self.H,
+            original,
+            layer,
+            mask,
+            4,
+            band=8,
+            side=self.W,
+            inside_band=16,
+            max_offset=quality.SEAM_CLOUD_MAX_OFFSET,
+            max_spread=quality.SEAM_CLOUD_MAX_SPREAD,
+            min_known_share=0.25,
+        )
         self.assertIsNotNone(field)
         fixed = quality.apply_seam_field(layer, self.W, self.H, 4, field)
         for x, y in ((55, 45), (80, 60), (105, 75)):
             for a, b in zip(self._px(fixed, x, y), self._px(original, x, y), strict=True):
                 self.assertLessEqual(abs(a - b), 3, (x, y))
+
+    def test_local_fill_is_not_pulled_towards_what_it_replaced(self):
+        # Remove: a dark object inside the selection, a clean fill that matches the sky around it.
+        # Local defaults look only outside the selection, so the fill is left as it is (no ghost).
+        original = _sky(self.W, self.H, tint=(-40, -40, -40), box=(56, 46, 104, 74))
+        clean = _sky(self.W, self.H)
+        mask = _rect_mask(self.W, self.H, self.SEL)
+        self.assertIsNone(quality.seam_field(self.W, self.H, original, clean, mask, 4, band=8, side=self.W))
+        # a real drift outside is still corrected, and the object does not leak into the fill
+        drifted = _sky(self.W, self.H, tint=(6, 6, 6), box=self.LAYER)
+        field = quality.seam_field(self.W, self.H, original, drifted, mask, 4, band=8, side=self.W)
+        self.assertIsNotNone(field)
+        fixed = quality.apply_seam_field(drifted, self.W, self.H, 4, field)
+        for a, b in zip(self._px(fixed, 80, 60), self._px(clean, 80, 60), strict=True):
+            self.assertLessEqual(abs(a - b), 2)
+
+    def test_local_defaults_are_unchanged(self):
+        self.assertEqual((quality.SEAM_MAX_OFFSET, quality.SEAM_MAX_SPREAD), (24, 10))
+        # a 30-level offset is content for a local fill, left alone
+        original = _sky(self.W, self.H)
+        layer = _sky(self.W, self.H, tint=(30, 30, 30), box=self.LAYER)
+        mask = _rect_mask(self.W, self.H, self.SEL)
+        self.assertIsNone(quality.seam_field(self.W, self.H, original, layer, mask, 4, band=8, side=self.W))
+
+
+class LocalSeamCallTest(unittest.TestCase):
+    def test_local_fills_measure_only_outside_the_selection(self):
+        # App._correct_seams (local Fill, Remove, Expand) uses the local defaults: no inside band,
+        # no cloud limits. Those are for the Gemini backend only.
+        import logging
+        from types import SimpleNamespace
+        from unittest import mock
+
+        from openfill.app import App
+
+        app = App.__new__(App)
+        app.log = logging.getLogger("test-seam")
+        app.io = SimpleNamespace(layer_rgba=lambda layer: b"\0" * 16, set_layer_rgba=lambda layer, data: None)
+        image = SimpleNamespace(undo_group_start=lambda: None, undo_group_end=lambda: None)
+        layer = SimpleNamespace(get_width=lambda: 2, get_height=lambda: 2)
+        ctx = SimpleNamespace(width=2, height=2)
+        with mock.patch.object(quality, "seam_field", return_value=None) as seam:
+            app._correct_seams(image, [layer], ctx, b"\0" * 16, b"\0" * 4, 24)
+            app._correct_seams(image, [layer], ctx, b"\0" * 16, b"\0" * 4, 0, (0, 0, 1, 2), "expand")
+        self.assertEqual(seam.call_count, 2)
+        for call in seam.call_args_list:
+            for name in ("inside_band", "max_offset", "max_spread", "min_known_share"):
+                self.assertNotIn(name, call.kwargs)

@@ -592,7 +592,19 @@ class GeminiBackend(CloudBackend):
                 images.append(imaging.overlay(generated, mask, w, h, source, feather).png())
                 continue
             cropped = imaging.overlay(generated, solid_mask, w, h, source, 1)
-            field = quality.seam_field(w, h, original.data, cropped.data, mask, 4, band=16, inside_band=16)
+            field = quality.seam_field(
+                w,
+                h,
+                original.data,
+                cropped.data,
+                mask,
+                4,
+                band=16,
+                inside_band=16,
+                max_offset=quality.SEAM_CLOUD_MAX_OFFSET,
+                max_spread=quality.SEAM_CLOUD_MAX_SPREAD,
+                min_known_share=0.25,
+            )
             if field is not None:
                 largest = max(max(abs(v) for v in cell) for cell in field.offsets)
                 cropped = imaging.Rgba(w, h, quality.apply_seam_field(cropped.data, w, h, 4, field))

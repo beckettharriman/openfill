@@ -326,8 +326,12 @@ def _normal_quantile(p: float) -> float:
 
 SEAM_SIDE = 256  # analysis resolution (longer side)
 SEAM_CELL = 8  # analysis pixels per offset cell
-SEAM_MAX_OFFSET = 64  # larger differences are content, not drift: left alone
-SEAM_MAX_SPREAD = 16  # cells whose difference varies more than this are texture: ignored
+SEAM_MAX_OFFSET = 24  # larger differences are content, not drift: left alone
+SEAM_MAX_SPREAD = 10  # cells whose difference varies more than this are texture: ignored
+# Google Gemini results drift more than local fills; its backend passes these instead.
+SEAM_CLOUD_MAX_OFFSET = 64
+SEAM_CLOUD_MAX_SPREAD = 16
+SEAM_TABLE_OFFSET = max(SEAM_MAX_OFFSET, SEAM_CLOUD_MAX_OFFSET)  # the largest offset apply_seam_field adds
 SEAM_MIN_OFFSET = 1.5  # below this nothing is visible: no change
 
 
@@ -358,6 +362,9 @@ def seam_field(
     side: int = SEAM_SIDE,
     original_rect: tuple[int, int, int, int] | None = None,
     inside_band: int = 0,
+    max_offset: float = SEAM_MAX_OFFSET,
+    max_spread: float = SEAM_MAX_SPREAD,
+    min_known_share: float = 0.0,
 ) -> SeamField | None:
     """Offsets that make ``layer`` meet ``original`` at the selection edge, or None when nothing needs fixing.
 
@@ -369,6 +376,10 @@ def seam_field(
     Generative Expand's old image) ``mask`` is the generated area instead: the
     difference is measured where it overlaps the old image, and the offsets
     spread over the whole generated area.
+
+    ``inside_band``, ``max_offset``, ``max_spread`` and ``min_known_share`` are for the Gemini
+    backend only. Local fills keep the defaults: measuring inside the selection compares the fill
+    with what it replaces (the removed object), which tints the fill towards it.
     """
     step = max(1, math.ceil(max(width, height) / side))
     sw, sh = len(range(0, width, step)), len(range(0, height, step))
@@ -386,7 +397,7 @@ def seam_field(
     flat_mask = b"".join(r[0] for r in sm)
     if original_rect is None:
         dist = signed_distance(sw, sh, flat_mask)
-        reach = max(1, round(band / step)) if band > 0 else 0
+        reach = max(1, round(band / step))
         min_dist = -max(1, round(inside_band / step)) if inside_band > 0 else 1
     else:
         # Measured: generated pixels over the old image (distance 1); shown: anything generated
@@ -421,10 +432,14 @@ def seam_field(
         eligible += 1
         meds = tuple(_median(v) for v in per)
         spread = max(_median([abs(a - m) for a in v]) for v, m in zip(per, meds, strict=True))
-        if spread > SEAM_MAX_SPREAD or max(abs(m) for m in meds) > SEAM_MAX_OFFSET:
+        if spread > max_spread or max(abs(m) for m in meds) > max_offset:
             continue
         known.append((key % gw + 0.5, key // gw + 0.5, meds))
-    if not known or len(known) * 4 < eligible or max(max(abs(m) for m in k[2]) for k in known) < SEAM_MIN_OFFSET:
+    if (
+        not known
+        or len(known) < min_known_share * eligible
+        or max(max(abs(m) for m in k[2]) for k in known) < SEAM_MIN_OFFSET
+    ):
         return None
     # Cells the layer shows (inside the selection or within reach of it); the rest stays at zero.
     shown = [False] * (gw * gh)
@@ -463,8 +478,8 @@ def apply_seam_field(data: bytes, width: int, height: int, channels: int, field:
     # blocks differ by at most a level, cheap enough for pure Python.
     fine = max(1, block // 4)
     fw, fh = math.ceil(width / fine), math.ceil(height / fine)
-    span = 2 * SEAM_MAX_OFFSET + 1
-    table = bytes(max(0, min(255, v + k - SEAM_MAX_OFFSET)) for v in range(256) for k in range(span))
+    span = 2 * SEAM_TABLE_OFFSET + 1
+    table = bytes(max(0, min(255, v + k - SEAM_TABLE_OFFSET)) for v in range(256) for k in range(span))
 
     def at(gx: float, gy: float, c: int) -> float:
         gx = min(max(gx - 0.5, 0.0), field.width - 1.0)
@@ -484,10 +499,10 @@ def apply_seam_field(data: bytes, width: int, height: int, channels: int, field:
         rows = range(fy * fine, min(height, (fy + 1) * fine))
         for c in range(colours):
             cells = [
-                max(0, min(span - 1, round(at((fx * fine + fine / 2) / block, gy, c)) + SEAM_MAX_OFFSET))
+                max(0, min(span - 1, round(at((fx * fine + fine / 2) / block, gy, c)) + SEAM_TABLE_OFFSET))
                 for fx in range(fw)
             ]
-            if all(k == SEAM_MAX_OFFSET for k in cells):
+            if all(k == SEAM_TABLE_OFFSET for k in cells):
                 continue
             line = b"".join(bytes((k,)) * fine for k in cells)[:width]
             for y in rows:

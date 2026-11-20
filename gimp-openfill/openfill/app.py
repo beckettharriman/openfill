@@ -1235,15 +1235,7 @@ class App:
                         continue
                     pixels = self.io.layer_rgba(layer)
                     field = quality.seam_field(
-                        ctx.width,
-                        ctx.height,
-                        image_rgba,
-                        pixels,
-                        mask_raw,
-                        4,
-                        band=band,
-                        original_rect=original_rect,
-                        inside_band=max(12, band) if original_rect is None else 0,
+                        ctx.width, ctx.height, image_rgba, pixels, mask_raw, 4, band=band, original_rect=original_rect
                     )
                     if field is None:
                         self.log.info(
