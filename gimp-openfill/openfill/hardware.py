@@ -749,6 +749,74 @@ def rocm_env(
     return {}
 
 
+def torch_build(python: str | Path | None) -> str:
+    """Which PyTorch build the venv of the ComfyUI ``python`` has, from the local part of its
+    version: ``rocm`` (AMD), ``cuda``, ``cpu`` or ``xpu`` (Intel). "" when unknown or without
+    one (on Linux, PyTorch from PyPI is the CUDA build and has none)."""
+    if not python:
+        return ""
+    venv = Path(python).parent.parent  # venv/bin/python; not resolved, the venv's python is a link
+    try:
+        for site in venv.glob("lib/python3*/site-packages"):
+            for info in site.glob("torch-*.dist-info"):
+                t = _TORCH_WHEEL.match(info.name)
+                local = t.group(1).lower().partition("+")[2] if t else ""
+                for prefix, kind in (("rocm", "rocm"), ("cu", "cuda"), ("cpu", "cpu"), ("xpu", "xpu")):
+                    if local.startswith(prefix):
+                        return kind
+    except OSError:
+        return ""
+    return ""
+
+
+def nvidia_present(root: Path = SYSFS_DRM, proc: Path = Path("/proc/driver/nvidia/gpus")) -> bool:
+    """True when Linux lists an NVIDIA graphics card (its driver's /proc folder, or a DRM card
+    with NVIDIA's PCI vendor id). Reads files only: no nvidia-smi."""
+    try:
+        if proc.is_dir() and any(proc.iterdir()):
+            return True
+    except OSError:
+        pass
+    try:
+        cards = [p for p in root.iterdir() if p.name.startswith("card") and p.name[4:].isdigit()]
+    except OSError:
+        return False
+    for card in cards:
+        try:
+            if int(_read(card / "device" / "vendor") or "0", 16) == 0x10DE:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def comfy_amd_env(
+    python: str | Path | None,
+    extra_args: str = "",
+    platform_name: str = sys.platform,
+    build: Callable[[str | Path | None], str] = torch_build,
+    nvidia: Callable[[], bool] = nvidia_present,
+    native: Callable[[str | Path | None], set[str]] = rocm_native_kernels,
+    env: Callable[..., dict[str, str]] = rocm_env,
+) -> tuple[dict[str, str], str]:
+    """:func:`rocm_env` for the ComfyUI of ``python``, but only when the AMD card is the one
+    that ComfyUI computes on: its PyTorch is the ROCm build, or (build unknown) there is no
+    NVIDIA card. A PC with an NVIDIA card and AMD graphics in the processor (a Radeon 610M)
+    runs ComfyUI on the NVIDIA card, which needs nothing. Returns (environment, why it was
+    left out, "" when it was not)."""
+    if not platform_name.startswith("linux"):
+        return {}, ""
+    if "--cpu" in extra_args.split():
+        return {}, "ComfyUI runs on the processor (--cpu): no AMD settings"
+    kind = build(python)
+    if kind in ("cuda", "cpu", "xpu"):
+        label = {"cuda": "NVIDIA cards (CUDA)", "cpu": "the processor", "xpu": "Intel graphics (XPU)"}[kind]
+        return {}, f"ComfyUI's PyTorch is built for {label}: no AMD settings"
+    if kind != "rocm" and nvidia():
+        return {}, "ComfyUI runs on the NVIDIA card: no AMD settings"
+    return env(native=native(python)), ""
+
+
 def parse_compute_capability(text: str) -> float | None:
     """Lowest ``compute_cap`` in ``nvidia-smi --query-gpu=compute_cap`` output (one card per line)."""
     caps = []

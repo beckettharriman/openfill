@@ -641,6 +641,8 @@ class EngineView(tk.Frame):
                 device = getattr(health, "device", "")
                 text = ("Working: " if health.ok else "Not working: ") + photocraft_text(str(health.detail))
                 text += f" on {device}." if device else "."
+                note = bar.service.app.backend_note() if health.ok else ""
+                text += f" {photocraft_text(note)}" if note else ""
                 bar.call_soon(self.say, text, OK if health.ok else BAD)
             except Exception as err:  # noqa: BLE001
                 bar.call_soon(self.say, photocraft_text(str(err)), BAD)

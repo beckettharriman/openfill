@@ -2557,6 +2557,51 @@ class EngineFeedbackTests(unittest.TestCase):
         service.check_engine()
         self.assertEqual(self.status(service), "Ready")
 
+    def test_slow_start_says_so_on_the_status_line(self):
+        """Issue #12: a start held up (a model folder on an unplugged drive) gets a hint."""
+        from openfill_photocraft.service import ENGINE_RESTARTING
+
+        from openfill.server import SLOW_START_S
+
+        service, _running = self.make(lambda *a, **k: [])
+        with mock.patch("openfill_photocraft.service.time.monotonic", return_value=1000.0):
+            service.engine = "starting"
+        self.assertEqual(service._engine_since, 1000.0)
+        with mock.patch("openfill_photocraft.service.time.monotonic", return_value=1010.0):
+            self.assertEqual(self.status(service), "Starting the AI engine...")
+            service.engine = ENGINE_RESTARTING  # still the same start: the clock keeps running
+        with mock.patch("openfill_photocraft.service.time.monotonic", return_value=1000.0 + SLOW_START_S + 1):
+            self.assertEqual(service.starting_for(), SLOW_START_S + 1)
+            self.assertEqual(self.status(service), "Still starting (slow, see Logs)")
+        from openfill_photocraft.bar import WARN, status_color
+
+        self.assertEqual(status_color("Still starting (slow, see Logs)"), WARN)
+        service.engine = "ready"
+        self.assertEqual(service.starting_for(), 0.0)
+
+    def test_ready_on_another_port_says_so(self):
+        """Issue #12: OpenFill's ComfyUI moved to a free port: the status line says which."""
+        service, _running = self.make(lambda *a, **k: [])
+        service.app.server.short_note = lambda: "Ready on port 8189 (8188 is taken)"
+        self.assertEqual(self.status(service), "Ready on port 8189 (8188 is taken)")
+        from openfill_photocraft.bar import OK, status_color
+
+        self.assertEqual(status_color("Ready on port 8189 (8188 is taken)"), OK)
+        service.app.server.short_note = lambda: ""
+        self.assertEqual(self.status(service), "Ready")
+
+    def test_backend_note_reaches_check(self):
+        from types import SimpleNamespace
+
+        from openfill.app import App
+
+        app = App.__new__(App)
+        app.settings = SimpleNamespace(backend="comfyui")
+        app.server = SimpleNamespace(note=lambda: "Port 8188 is used by another program, so ...")
+        self.assertEqual(app.backend_note(), "Port 8188 is used by another program, so ...")
+        app.settings = SimpleNamespace(backend="cloud")
+        self.assertEqual(app.backend_note(), "")  # nothing runs here
+
     def test_setup_problem_is_not_reported_as_stopped(self):
         port_taken = "Port 8188 on 127.0.0.1 is used by another program that is not ComfyUI."
         service, running = self.make(self.raiser(port_taken), alive=None)

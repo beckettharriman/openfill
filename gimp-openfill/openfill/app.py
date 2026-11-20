@@ -1686,6 +1686,17 @@ class App:
         self.refresh_models_cache(health)
         return health
 
+    def backend_note(self) -> str:
+        """A plain line about which ComfyUI is in use, for Check backend and the status line:
+        OpenFill's own on another port (the usual one was taken), or one OpenFill did not
+        start. "" when neither, or when nothing is checked here (cloud, Remote GPU)."""
+        if self.uses_cloud:
+            return ""
+        try:
+            return self.server.note()
+        except Exception:  # noqa: BLE001 - only a note
+            return ""
+
     def hardware(self) -> hardware.Hardware:
         """The graphics card the models run on: this computer's, or the Remote GPU's (as its
         ComfyUI reports it)."""

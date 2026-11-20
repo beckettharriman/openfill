@@ -198,10 +198,29 @@ class PortProbeTests(ManagerCase):
         self.listener.close()
         self.assertFalse(port_answers("127.0.0.1", self.port, timeout=0.5))
 
-    def test_taken_port_fails_fast_with_plain_message(self):
+    def test_taken_port_moves_to_a_free_port(self):
+        """Issue #12: a program that is not ComfyUI holds the port: OpenFill's ComfyUI starts on the next free one."""
         with (
             mock.patch.object(server, "comfy_layout", return_value=FAKE_LAYOUT),
             mock.patch.object(server.ComfyClient, "is_alive", return_value=False),
+            mock.patch.object(ServerManager, "_spawn_detached") as spawn,
+            mock.patch.object(ServerManager, "_wait_ready", side_effect=lambda url, *_a: url) as wait,
+        ):
+            started = time.monotonic()
+            url = self.manager.start()
+        self.assertLess(time.monotonic() - started, 5)
+        port = int(url.rsplit(":", 1)[1])
+        self.assertGreater(port, self.port)
+        args = build_parser().parse_args(spawn.call_args[0][0][2:])
+        self.assertEqual(args.port, port)
+        self.assertEqual(wait.call_args[0][0], f"http://127.0.0.1:{port}")
+        self.assertEqual(self.settings.url, f"http://127.0.0.1:{self.port}")  # the settings stay as they were
+
+    def test_taken_port_without_a_free_one_fails_fast_with_plain_message(self):
+        with (
+            mock.patch.object(server, "comfy_layout", return_value=FAKE_LAYOUT),
+            mock.patch.object(server.ComfyClient, "is_alive", return_value=False),
+            mock.patch.object(server, "free_port", return_value=None),
             mock.patch.object(ServerManager, "_spawn_detached") as spawn,
         ):
             started = time.monotonic()

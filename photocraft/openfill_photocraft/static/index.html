@@ -409,7 +409,7 @@ $("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=
   for(const k of ["backend","cloud_provider","cloud_url","cloud_model"])if(b[k]===loaded[k])delete b[k];
   const key=$("cloud-key").value.trim();if(key)b.cloud_api_key=key;
   try{await post("/api/settings",b);await loadSettings();settingsNote("Settings saved.","ok")}catch(e){settingsNote(e.message,"bad")}};
-$("check").onclick=async()=>{settingsNote("Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:"."),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};
+$("check").onclick=async()=>{settingsNote("Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:".")+(r.note?" "+r.note:""),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};
 $("stop").onclick=async()=>{const r=await post("/api/backend/stop");settingsNote(r.message,"dim")};
 $("logs").onclick=()=>post("/api/logs");
 $("shared-find").onclick=async()=>{try{const r=await post("/api/shared/find",{text:$("s-shared_models").value});$("s-shared_models").value=r.text;settingsNote(r.found.length?`Added ${r.found.join(", ")}. Save to use its models.`:"No other ComfyUI was found. Type its folder in the field.",r.found.length?"ok":"dim")}catch(e){settingsNote(e.message,"bad")}};

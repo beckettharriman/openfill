@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version numbers below (0.2.x) are OpenFill for PhotoCraft's own, not PhotoCraft's.
 Each entry from now on says which PhotoCraft versions it works with.
 
+## [Unreleased]
+
+Fixed:
+- If another ComfyUI or another program already used port 8188, OpenFill said the engine was ready while it was talking to that other ComfyUI, and its own ComfyUI then failed to start (#12). OpenFill now starts its own on the next free port. The status line says "Ready on port 8189 (8188 is taken)", and Check says why.
+- On Linux, the AMD setting for Radeon cards is no longer used when ComfyUI runs on an NVIDIA card in the same computer (#12).
+
+New:
+- When the engine takes longer than 90 seconds to start, the status line says "Still starting (slow, see Logs)", and a job's progress says why that can happen. A model folder on an unplugged or sleeping drive is named when it doesn't answer.
+
 ## [0.2.6] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
 
 Fixed (update recommended on Windows):
