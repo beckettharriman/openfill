@@ -135,3 +135,23 @@ class ControlClient:
             return True
         except ControlError:
             return False
+
+
+def stop_recording(client: ControlClient, name: str, tries: int = 5, wait: float = 0.2) -> tuple[dict | None, bool]:
+    """Stop the recording of OpenFill's own action ``name``, started a moment ago:
+    (``actions.stop``'s result or None, whether ``name`` may still be recording). PhotoCraft
+    refuses ``actions.stop`` while one of its dialogs is open, and a recording left on would
+    take in everything the user does, so it is tried a few times. Only ever stops ``name``."""
+    for attempt in range(tries):
+        if attempt:
+            time.sleep(wait)
+            try:
+                if (client.run("actions.list") or {}).get("recording") != name:
+                    return None, False  # not ours (any more): leave it
+            except ControlError:
+                pass
+        try:
+            return client.run("actions.stop") or {}, False
+        except ControlError:
+            pass
+    return None, True

@@ -52,7 +52,7 @@ from openfill import png
 from openfill.geometry import Rect, flatten_over_mean
 
 from . import psd
-from .control import ControlClient, ControlError
+from .control import ControlClient, ControlError, stop_recording
 
 # The first PhotoCraft that saves an alpha channel into a flat TIFF (``_selection_tiff``).
 TIFF_CHANNELS_FROM = (0, 18)
@@ -183,6 +183,7 @@ class PhotoCraftBridge:
         self._version: tuple[int, ...] | None = None
         self._left_open: set[str] = set()  # OpenFill's documents PhotoCraft could not close yet
         self._actions: bool | None = None  # whether PhotoCraft plays actions (see _run_at)
+        self._recording_left = ""  # OpenFill's own action PhotoCraft would not stop recording yet
         self._selection_colours: Image.Image | None = None  # the colours the selection's TIFF held
         self.exchange.mkdir(parents=True, exist_ok=True)
 
@@ -317,6 +318,9 @@ class PhotoCraftBridge:
         is played in a single request, so no tab click can come between them. The action is
         deleted right after. Without actions (or while the user records one): show, check, run;
         a click in that moment can still land it elsewhere, which ``_on_document`` notices."""
+        if self._recording_left and not stop_recording(self.client, self._recording_left, tries=1)[1]:
+            self._delete_action(self._recording_left)
+            self._recording_left = ""
         if atomic and self._actions is not False:
             try:
                 listed = self.client.run("actions.list") or {}
@@ -328,12 +332,22 @@ class PhotoCraftBridge:
                 while name in taken:
                     name = f"OpenFill {label} {next(self._names)}"
                 self.client.run("actions.record", name=name)
-                stopped = self.client.run("actions.stop") or {}
-            except ControlError:
+            except ControlError as err:
+                if "modal dialog" in str(err):
+                    raise  # it has actions, but one of its dialogs is open: not now
                 self._actions = False
             except BridgeError:
                 pass
             else:
+                stopped, still = stop_recording(self.client, name)
+                if stopped is None:
+                    # A dialog came up in that moment: stop and delete it at the next chance,
+                    # and tell the job PhotoCraft can't take the change now.
+                    if still:
+                        self._recording_left = name
+                    else:
+                        self._delete_action(name)
+                    raise ControlError(f"{command}: PhotoCraft would not take it now (is a dialog open?)")
                 try:
                     for step in reversed(range(int(stopped.get("steps") or 0))):
                         # what the user did in that moment (it happened already): never replayed
@@ -342,10 +356,7 @@ class PhotoCraftBridge:
                     self.client.run("actions.insert", action=name, id=command, params=params)
                     played = self.client.run("actions.play", action=name) or {}
                 finally:
-                    try:
-                        self.client.run("actions.delete", action=name)
-                    except ControlError:
-                        pass
+                    self._delete_action(name)
                 self._actions = True
                 failed = played.get("failed")
                 if failed:
@@ -355,6 +366,12 @@ class PhotoCraftBridge:
         if self.session().get("active") != index:
             raise BridgeError("another image came to the front")
         return self.client.run(command, **params) or {}
+
+    def _delete_action(self, name: str) -> None:
+        try:
+            self.client.run("actions.delete", action=name)
+        except ControlError:
+            pass
 
     def _put_back(self, key: tuple, states: int) -> bool:
         """Take the user's document ``key`` back to the history state it was at (``states``

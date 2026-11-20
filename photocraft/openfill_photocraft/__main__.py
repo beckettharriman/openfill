@@ -185,7 +185,7 @@ def port_open(port: int) -> bool:
 
 # PhotoCraft's own variables for what OpenFill passes as flags. A flag wins over its variable,
 # but an exported PHOTOCRAFT_CONTROL_TOKEN next to our --control-token-file is a usage error
-# (exit status 2, PhotoCraft 0.12 to 0.20) that stops the launch, so PhotoCraft gets none of them.
+# (exit status 2, PhotoCraft 0.12 to 0.23.1) that stops the launch, so PhotoCraft gets none of them.
 CONTROL_ENV = (
     "PHOTOCRAFT_CONTROL_PORT",
     "PHOTOCRAFT_CONTROL_TOKEN",
@@ -427,11 +427,7 @@ def main(argv: list[str] | None = None) -> int:
             traceback.print_exc()
             print("no OpenFill window (", err, "); using the page")
             bar = None
-    try:
-        labels = menu.install(client)
-        print("Filter > Plug-ins:", ", ".join(labels) or "(this PhotoCraft has no plug-ins)")
-    except ControlError as err:
-        print("menu entries not added:", err)
+    watcher.install_menu()  # tried again while a PhotoCraft dialog keeps it out
     try:
         watcher.poll()  # so the page and the bar know the document from the start
     except ControlError:
