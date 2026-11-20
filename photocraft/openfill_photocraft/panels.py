@@ -582,7 +582,7 @@ class EngineView(tk.Frame):
         self.mask_mode.set(mask_mode if mask_mode in ("second_image", "overlay") else "second_image")
         self._has_key, self._key_for = bool(settings.cloud_api_key), settings.cloud_key_for
         creds = getattr(settings, "gemini_credentials", None)
-        self._gemini_env = creds.env_var_name() if creds is not None else ""
+        self._gemini_env = getattr(settings, "gemini_env_var", "")
         self._gemini_session = bool(creds.has_session_key) if creds is not None else False
         self.key.set("")  # the saved key is never put on screen
         self._cloud_changed()

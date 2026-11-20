@@ -158,7 +158,7 @@ class Settings:
     # The service and address (scheme, host, port) the key was entered for (backends.cloud.key_scope).
     # The key is only ever sent where this still matches: changing either needs the key again.
     cloud_key_for: str = ""
-    # Not persisted: Gemini key comes from GEMINI_API_KEY / GOOGLE_API_KEY or a session-only in-memory key.
+    # Not persisted: reads GEMINI_API_KEY / GOOGLE_API_KEY (used only for Google's own Gemini address).
     gemini_credentials: GeminiCredentials = field(
         default_factory=GeminiCredentials, repr=False, compare=False, metadata={"persist": False}
     )
@@ -316,11 +316,24 @@ class Settings:
 
         return bool(self.cloud_api_key) and self.cloud_key_for == key_scope(self.cloud_provider, self.cloud_url)
 
+    def _gemini_default_address(self) -> bool:
+        """The address set is Google's own Gemini API (the only place an environment key goes)."""
+        from .backends.cloud import key_scope
+
+        return key_scope("gemini", self.cloud_url) == key_scope("gemini", "")
+
+    @property
+    def gemini_env_var(self) -> str:
+        """GEMINI_API_KEY or GOOGLE_API_KEY when that variable is set and would be used here, else ""."""
+        return self.gemini_credentials.env_var_name() if self._gemini_default_address() else ""
+
     def effective_gemini_key(self) -> str:
-        """Gemini API key: saved for this Gemini endpoint first, else GEMINI_API_KEY / GOOGLE_API_KEY."""
+        """Gemini API key: saved for this Gemini endpoint first, else GEMINI_API_KEY / GOOGLE_API_KEY,
+        but those only for Google's own address: a key from the environment was not entered for
+        any other address (a proxy, a LiteLLM, ...), so it is never sent there."""
         if self._saved_cloud_key_matches():
             return self.cloud_api_key
-        return self.gemini_credentials.get()
+        return self.gemini_credentials.get() if self._gemini_default_address() else ""
 
     @property
     def cloud_key_usable(self) -> bool:
@@ -334,6 +347,14 @@ class Settings:
         if self.cloud_provider == "gemini":
             if self.cloud_key_usable:
                 return ""
+            if self.gemini_credentials.env_var_name() and not self._gemini_default_address():
+                from .backends.cloud import destination
+
+                return (
+                    f"{self.gemini_credentials.env_var_name()} is only sent to Google's own address, not to "
+                    f"{destination(self.cloud_provider, self.cloud_url)}. Paste the API key for this address in "
+                    "the cloud settings, then try again."
+                )
             if not self.cloud_api_key:
                 return self.gemini_credentials.problem()
         if not self.cloud_api_key or self.cloud_key_usable:

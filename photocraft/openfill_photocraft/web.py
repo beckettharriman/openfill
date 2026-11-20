@@ -132,7 +132,7 @@ class Api:
         out["cloud_key_saved"] = s.cloud_key_usable
         out["cloud_key_elsewhere"] = bool(s.cloud_api_key) and not s.cloud_key_usable
         out["cloud_key_for"] = s.cloud_key_for
-        out["cloud_key_env"] = s.gemini_credentials.env_var_name()
+        out["cloud_key_env"] = s.gemini_env_var
         out["cloud_key_session"] = s.gemini_credentials.has_session_key
         return out
 

@@ -364,3 +364,23 @@ class GeminiSettingsAndAppTests(unittest.TestCase):
                     for handler in list(app.log.handlers):
                         handler.close()
                         app.log.removeHandler(handler)
+
+    def test_a_key_from_the_environment_goes_only_to_googles_own_address(self):
+        env_key = "AIzaSyEnvOnlyFakeKey00001111222233"
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": env_key}):
+            s = Settings(backend="cloud")
+            s.set_cloud("gemini", "", "", "")
+            self.assertEqual(s.effective_gemini_key(), env_key)
+            self.assertEqual(s.gemini_env_var, "GOOGLE_API_KEY")
+            s.set_cloud("gemini", "https://generativelanguage.googleapis.com/v1beta", "", "")
+            self.assertEqual(s.effective_gemini_key(), env_key)
+            for other in ("https://proxy.example.com/v1beta", "http://127.0.0.1:4000/v1beta"):
+                s.set_cloud("gemini", other, "", "")
+                self.assertEqual(s.effective_gemini_key(), "", other)
+                self.assertFalse(s.cloud_key_usable)
+                self.assertEqual(s.gemini_env_var, "")
+                self.assertIn("only sent to Google's own address", s.cloud_key_problem())
+                self.assertNotIn(env_key, s.cloud_key_problem())
+            # a key pasted for that address is used there
+            s.set_cloud("gemini", "https://proxy.example.com/v1beta", "", "AIzaSyPastedForProxy0000111122")
+            self.assertEqual(s.effective_gemini_key(), "AIzaSyPastedForProxy0000111122")
