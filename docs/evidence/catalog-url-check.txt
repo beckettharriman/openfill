@@ -1,37 +1,74 @@
 ok  sd15-inpainting              page     200 https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-inpainting
 ok  sd15-inpainting              license  200 https://huggingface.co/spaces/CompVis/stable-diffusion-license
-ok  sd15-inpainting              checkpoint 200 size=4265437280 expected=4265437280 https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-inpainting/resolve/main/sd-v1-5-inpainting.ckpt
+ok  sd15-inpainting              checkpoint 302 size=4265437280 expected=4265437280 sha256=matches https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-inpainting/resolve/8a4288a76071f7280aedbdb3253bdb9e9d5d84bb/sd-v1-5-inpainting.ckpt
+ok  sd15-inpainting              preview  200 size=4913399 expected=4913399 sha256=not sent https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesd_decoder.pth
 ok  sdxl-base                    page     200 https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0
 ok  sdxl-base                    license  200 https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/LICENSE.md
-ok  sdxl-base                    checkpoint 200 size=6938078334 expected=6938078334 https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors
+ok  sdxl-base                    checkpoint 302 size=6938078334 expected=6938078334 sha256=matches https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/462165984030d82259a11f4367a4eed129e94a7b/sd_xl_base_1.0.safetensors
+ok  sdxl-base                    preview  200 size=4913541 expected=4913541 sha256=not sent https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesdxl_decoder.pth
 ok  fooocus-inpaint-patch        page     200 https://huggingface.co/lllyasviel/fooocus_inpaint
 ok  fooocus-inpaint-patch        license  200 https://huggingface.co/lllyasviel/fooocus_inpaint
-ok  fooocus-inpaint-patch        fooocus_head 200 size=52602 expected=52602 https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/main/fooocus_inpaint_head.pth
-ok  fooocus-inpaint-patch        fooocus_patch 200 size=1323362033 expected=1323362033 https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/main/inpaint_v26.fooocus.patch
+ok  fooocus-inpaint-patch        fooocus_head 302 size=52602 expected=52602 sha256=matches https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/74bbcc070e55219adb9b6c3b0d035b34e3697d1d/fooocus_inpaint_head.pth
+ok  fooocus-inpaint-patch        fooocus_patch 302 size=1323362033 expected=1323362033 sha256=matches https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/74bbcc070e55219adb9b6c3b0d035b34e3697d1d/inpaint_v26.fooocus.patch
 ok  juggernaut-xl-v9             page     200 https://huggingface.co/RunDiffusion/Juggernaut-XL-v9
 ok  juggernaut-xl-v9             license  200 https://huggingface.co/RunDiffusion/Juggernaut-XL-v9
-ok  juggernaut-xl-v9             checkpoint 200 size=7105348188 expected=7105348188 https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors
+ok  juggernaut-xl-v9             checkpoint 302 size=7105348188 expected=7105348188 sha256=matches https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/cf419233522daa0b9ea36c3aff98fa2cab1fb0fb/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors
+ok  juggernaut-xl-v9             preview  200 size=4913541 expected=4913541 sha256=not sent https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesdxl_decoder.pth
 ok  flux1-fill-dev-gguf-q4       page     200 https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF
 ok  flux1-fill-dev-gguf-q4       license  200 https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/blob/main/LICENSE.md
-ok  flux1-fill-dev-gguf-q4       unet     200 size=6809920800 expected=6809920800 https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/main/flux1-fill-dev-Q4_0.gguf
-ok  flux1-fill-dev-gguf-q4       clip1    200 size=3386856640 expected=3386856640 https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/resolve/main/t5-v1_1-xxl-encoder-Q5_K_M.gguf
-ok  flux1-fill-dev-gguf-q4       clip2    200 size=246144152 expected=246144152 https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors
-ok  flux1-fill-dev-gguf-q4       vae      401 size=None expected=335304388 https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/main/ae.safetensors
+ok  flux1-fill-dev-gguf-q4       unet     302 size=6809920800 expected=6809920800 sha256=matches https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/78b83f1da140a4dcd6466580516544e1f6effe3e/flux1-fill-dev-Q4_0.gguf
+ok  flux1-fill-dev-gguf-q4       clip1    302 size=3386856640 expected=3386856640 sha256=matches https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/resolve/005a6ea51a7d0b84d677b3e633bb52a8c85a83d9/t5-v1_1-xxl-encoder-Q5_K_M.gguf
+ok  flux1-fill-dev-gguf-q4       clip2    302 size=246144152 expected=246144152 sha256=matches https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/clip_l.safetensors
+ok  flux1-fill-dev-gguf-q4       vae      401 size=None expected=335304388 sha256=not sent https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/169573f54945f633efbe126a40a5676b4228363c/ae.safetensors
+ok  flux1-fill-dev-gguf-q4       preview  200 size=4943336 expected=4943336 sha256=not sent https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taef1_decoder.pth
+ok  flux1-fill-dev-gguf-q6       page     200 https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF
+ok  flux1-fill-dev-gguf-q6       license  200 https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/blob/main/LICENSE.md
+ok  flux1-fill-dev-gguf-q6       unet     302 size=9860932896 expected=9860932896 sha256=matches https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/78b83f1da140a4dcd6466580516544e1f6effe3e/flux1-fill-dev-Q6_K.gguf
+ok  flux1-fill-dev-gguf-q6       clip1    302 size=3386856640 expected=3386856640 sha256=matches https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/resolve/005a6ea51a7d0b84d677b3e633bb52a8c85a83d9/t5-v1_1-xxl-encoder-Q5_K_M.gguf
+ok  flux1-fill-dev-gguf-q6       clip2    302 size=246144152 expected=246144152 sha256=matches https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/clip_l.safetensors
+ok  flux1-fill-dev-gguf-q6       vae      401 size=None expected=335304388 sha256=not sent https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/169573f54945f633efbe126a40a5676b4228363c/ae.safetensors
+ok  flux1-fill-dev-gguf-q6       preview  200 size=4943336 expected=4943336 sha256=not sent https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taef1_decoder.pth
 ok  flux1-fill-dev               page     200 https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev
 ok  flux1-fill-dev               license  200 https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/blob/main/LICENSE.md
-ok  flux1-fill-dev               unet     401 size=None expected=23804922408 https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/resolve/main/flux1-fill-dev.safetensors
-ok  flux1-fill-dev               clip1    200 size=4893934904 expected=4893934904 https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors
-ok  flux1-fill-dev               clip2    200 size=246144152 expected=246144152 https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors
-ok  flux1-fill-dev               vae      401 size=None expected=335304388 https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/resolve/main/ae.safetensors
+ok  flux1-fill-dev               unet     401 size=None expected=23804922408 sha256=not sent https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/resolve/7326a96224b2513681b5d97281c83af967926bb6/flux1-fill-dev.safetensors
+ok  flux1-fill-dev               clip1    302 size=4893934904 expected=4893934904 sha256=matches https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/t5xxl_fp8_e4m3fn.safetensors
+ok  flux1-fill-dev               clip2    302 size=246144152 expected=246144152 sha256=matches https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/clip_l.safetensors
+ok  flux1-fill-dev               vae      401 size=None expected=335304388 sha256=not sent https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/resolve/7326a96224b2513681b5d97281c83af967926bb6/ae.safetensors
+ok  flux1-fill-dev               preview  200 size=4943336 expected=4943336 sha256=not sent https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taef1_decoder.pth
 ok  qwen-image-edit-2511-gguf-q4 page     200 https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF
 ok  qwen-image-edit-2511-gguf-q4 license  200 https://huggingface.co/Qwen/Qwen-Image-Edit-2511
-ok  qwen-image-edit-2511-gguf-q4 unet     200 size=13244758624 expected=13244758624 https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/main/qwen-image-edit-2511-Q4_K_M.gguf
-ok  qwen-image-edit-2511-gguf-q4 clip1    200 size=9384670680 expected=9384670680 https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
-ok  qwen-image-edit-2511-gguf-q4 vae      200 size=253806246 expected=253806246 https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors
+ok  qwen-image-edit-2511-gguf-q4 unet     302 size=13244758624 expected=13244758624 sha256=matches https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q4_K_M.gguf
+ok  qwen-image-edit-2511-gguf-q4 clip1    302 size=9384670680 expected=9384670680 sha256=matches https://huggingface.co/Comfy-Org/Qwen-Image/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
+ok  qwen-image-edit-2511-gguf-q4 vae      302 size=253806246 expected=253806246 sha256=matches https://huggingface.co/Comfy-Org/Qwen-Image/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/vae/qwen_image_vae.safetensors
+ok  birefnet                     page     200 https://huggingface.co/ZhengPeng7/BiRefNet
+ok  birefnet                     license  200 https://github.com/ZhengPeng7/BiRefNet/blob/main/LICENSE
+ok  birefnet                     bg_removal_model 302 size=444473596 expected=444473596 sha256=matches https://huggingface.co/Comfy-Org/BiRefNet/resolve/884af709e9b795d89dafbf97f29c8d6a2386f5c6/background_removal/birefnet.safetensors
 ok  lama-big                     page     200 https://github.com/advimman/lama
 ok  lama-big                     license  200 https://github.com/advimman/lama/blob/main/LICENSE
-ok  lama-big                     inpaint_model 200 size=205669692 expected=205669692 https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt
+ok  lama-big                     inpaint_model 200 size=205669692 expected=205669692 sha256=not sent https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt
 ok  mat-places512                page     200 https://huggingface.co/Acly/MAT
 ok  mat-places512                license  200 https://creativecommons.org/licenses/by-nc/4.0/
-ok  mat-places512                inpaint_model 200 size=125280278 expected=125280278 https://huggingface.co/Acly/MAT/resolve/main/MAT_Places512_G_fp16.safetensors
+ok  mat-places512                inpaint_model 302 size=125280278 expected=125280278 sha256=matches https://huggingface.co/Acly/MAT/resolve/f8cc47fcbff3624a12ab408ff7852ae70d63b8d9/MAT_Places512_G_fp16.safetensors
+ok  rorem-sdxl                   page     200 https://huggingface.co/LetsThink/RORem
+ok  rorem-sdxl                   license  200 https://huggingface.co/LetsThink/RORem
+ok  rorem-sdxl                   unet     302 size=5135178560 expected=5135178560 sha256=matches https://huggingface.co/LetsThink/RORem/resolve/22d02de974c8dc92c717cd3431f8b0fe0eeecc3b/unet/diffusion_pytorch_model.safetensors
+ok  rorem-sdxl                   clip1    302 size=246144152 expected=246144152 sha256=matches https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/clip_l.safetensors
+ok  rorem-sdxl                   clip2    302 size=1389382176 expected=1389382176 sha256=matches https://huggingface.co/LetsThink/RORem/resolve/22d02de974c8dc92c717cd3431f8b0fe0eeecc3b/text_encoder_2/model.safetensors
+ok  rorem-sdxl                   vae      302 size=167335342 expected=167335342 sha256=matches https://huggingface.co/LetsThink/RORem/resolve/22d02de974c8dc92c717cd3431f8b0fe0eeecc3b/vae/diffusion_pytorch_model.safetensors
+ok  rorem-sdxl                   preview  200 size=4913541 expected=4913541 sha256=not sent https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesdxl_decoder.pth
+ok  flux1-fill-object-removal-lora page     200 https://huggingface.co/lrzjason/ObjectRemovalFluxFill
+ok  flux1-fill-object-removal-lora license  200 https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/blob/main/LICENSE.md
+ok  flux1-fill-object-removal-lora lora     302 size=315889584 expected=315889584 sha256=matches https://huggingface.co/lrzjason/ObjectRemovalFluxFill/resolve/867f2e6adb15232efd8d07bbb289e0f9f7551791/objectRemovalv1_r32.safetensors
+ok  realistic-vision-v6-inpainting page     200 https://huggingface.co/SG161222/Realistic_Vision_V6.0_B1_noVAE
+ok  realistic-vision-v6-inpainting license  200 https://huggingface.co/spaces/CompVis/stable-diffusion-license
+ok  realistic-vision-v6-inpainting checkpoint 302 size=2136906350 expected=2136906350 sha256=matches https://huggingface.co/SG161222/Realistic_Vision_V6.0_B1_noVAE/resolve/9a857a696b9aabbf509073e0aa55ec8200b6ef7d/Realistic_Vision_V6.0_NV_B1_inpainting_fp16.safetensors
+ok  realistic-vision-v6-inpainting preview  200 size=4913399 expected=4913399 sha256=not sent https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesd_decoder.pth
+ok  dreamshaper-8-inpainting     page     200 https://huggingface.co/Lykon/dreamshaper-8-inpainting
+ok  dreamshaper-8-inpainting     license  200 https://huggingface.co/Lykon/dreamshaper-8-inpainting
+ok  dreamshaper-8-inpainting     checkpoint 302 size=2132703862 expected=2132703862 sha256=matches https://huggingface.co/Lykon/DreamShaper/resolve/228d79cb20811466f5c5710aa91f05dabd0b8a14/DreamShaper_8_INPAINTING.inpainting.safetensors
+ok  dreamshaper-8-inpainting     preview  200 size=4913399 expected=4913399 sha256=not sent https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesd_decoder.pth
+ok  realvisxl-v5                 page     200 https://huggingface.co/SG161222/RealVisXL_V5.0
+ok  realvisxl-v5                 license  200 https://huggingface.co/SG161222/RealVisXL_V5.0
+ok  realvisxl-v5                 checkpoint 302 size=6938065488 expected=6938065488 sha256=matches https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/ac93e0dda1f6d448cae19bbfab8c5e720a5e48bc/RealVisXL_V5.0_fp16.safetensors
+ok  realvisxl-v5                 preview  200 size=4913541 expected=4913541 sha256=not sent https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesdxl_decoder.pth
 problems: 0
