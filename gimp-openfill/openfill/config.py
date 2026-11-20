@@ -33,6 +33,17 @@ HUB_CACHE_FILENAME = "hub-cache.json"
 HUB_SELECTED_FILENAME = "hub-selected.json"
 
 
+TIME_LIMIT_BELOW_ZERO = "Time limit: use 0 or more seconds. 0 lets OpenFill work it out for each job."
+
+
+def time_limit_problem(seconds: object) -> str:
+    """Why ``seconds`` cannot be the Time limit (request_timeout), or "" when it can."""
+    try:
+        return TIME_LIMIT_BELOW_ZERO if int(seconds) < 0 else ""
+    except (TypeError, ValueError):
+        return ""  # not a number: the caller says so in its own words
+
+
 @dataclass(frozen=True)
 class BackendChoice:
     """One entry of the "where images are made" choice. Add a backend here and every
@@ -88,7 +99,7 @@ class Settings:
     autostart: bool = True  # start ComfyUI when needed
     idle_timeout_minutes: int = 20  # 0 = keep running until GIMP exits
     startup_timeout: int = 240  # seconds to wait for the server
-    request_timeout: int = 0  # 0 = estimate per request
+    request_timeout: int = 0  # 0 = estimate per request; never below 0 (time_limit_problem)
     extra_server_args: str = ""  # appended to the ComfyUI command
     cpu_comfy_dir: str = ""  # the ComfyUI folder Download ComfyUI added --cpu for (no NVIDIA card)
     # Folders of other ComfyUI installs (Krita AI Diffusion's server, ...) whose models are used
@@ -335,6 +346,12 @@ class Settings:
         if self._saved_cloud_key_matches():
             return self.cloud_api_key
         return self.gemini_credentials.get() if self._gemini_default_address() else ""
+
+    @property
+    def cloud_key_saved(self) -> bool:
+        """A key is saved in the settings for exactly the service and address now set (not one
+        that only comes from the environment)."""
+        return self._saved_cloud_key_matches()
 
     @property
     def cloud_key_usable(self) -> bool:

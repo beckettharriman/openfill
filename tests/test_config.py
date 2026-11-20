@@ -320,6 +320,29 @@ class StaleCpuFlagTests(unittest.TestCase):
             self.assertFalse(same.drop_stale_cpu_flag(setup))
 
 
+class TimeLimitAndKeySourceTests(unittest.TestCase):
+    def test_a_time_limit_below_zero_is_a_problem_and_0_means_auto(self):
+        from openfill.config import time_limit_problem
+
+        for ok in (0, 1, 600, "90"):
+            self.assertEqual(time_limit_problem(ok), "", ok)
+        for bad in (-1, "-30"):
+            problem = time_limit_problem(bad)
+            self.assertIn("0 or more seconds", problem)
+            self.assertNotIn("\u2014", problem)
+        self.assertEqual(time_limit_problem("soon"), "")  # not a number: the caller says so
+
+    def test_a_key_from_the_environment_is_usable_but_not_saved(self):
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "AIzaSyEnvOnly0000111122223333", "GOOGLE_API_KEY": ""}):
+            s = Settings(backend="cloud")
+            s.set_cloud("gemini", "", "", "")
+            self.assertTrue(s.cloud_key_usable)
+            self.assertFalse(s.cloud_key_saved)
+            self.assertEqual(s.gemini_env_var, "GEMINI_API_KEY")
+            s.set_cloud("gemini", "", "", "AIzaSyPasted00001111222233334444")
+            self.assertTrue(s.cloud_key_saved)
+
+
 class GeminiSettingsAndAppTests(unittest.TestCase):
     def test_settings_persists_gemini_key_and_app_wires_gemini_backend(self):
         from types import SimpleNamespace

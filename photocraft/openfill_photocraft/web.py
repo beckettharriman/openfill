@@ -129,7 +129,7 @@ class Api:
         out = {k: getattr(s, k) for k in EDITABLE}
         out["shared_models"] = shared_models.display(s.shared_models)  # one line for the text field
         # the key itself never leaves the settings file: only whether one is saved, and for what
-        out["cloud_key_saved"] = s.cloud_key_usable
+        out["cloud_key_saved"] = s.cloud_key_saved  # one from the environment is cloud_key_env, not "Saved."
         out["cloud_key_elsewhere"] = bool(s.cloud_api_key) and not s.cloud_key_usable
         out["cloud_key_for"] = s.cloud_key_for
         out["cloud_key_env"] = s.gemini_env_var
@@ -183,6 +183,12 @@ class Api:
             for key, allowed in CHOICES.items():
                 if key in body and str(body[key]) not in allowed():
                     raise ValueError(f"'{body[key]}' is not a choice for {key}.")
+            if "request_timeout" in body:
+                from openfill.config import time_limit_problem
+
+                problem = time_limit_problem(body["request_timeout"])
+                if problem:
+                    raise ValueError(problem)
             was_cloud = app.uses_cloud
             shared = str(body["shared_models"]) if "shared_models" in body else None
             # checked on a copy first: a refused save changes nothing

@@ -3413,12 +3413,56 @@ console.log(JSON.stringify(out));
         self.app.settings.save(self.config)
         with mock.patch.dict(os.environ, {"GEMINI_API_KEY": env_key, "GOOGLE_API_KEY": ""}):
             out2 = api.post("/api/settings", {"backend": "cloud", "cloud_provider": "gemini"})
-            self.assertTrue(out2["cloud_key_saved"])
+            self.assertFalse(out2["cloud_key_saved"])  # the page says "Using GEMINI_API_KEY", not "Saved."
             self.assertEqual(out2["cloud_key_env"], "GEMINI_API_KEY")
+            self.assertTrue(api.state()["cloud"]["key"])  # still usable
             dumped2 = (
                 json.dumps(out2) + json.dumps(api.settings()) + json.dumps(api.state()) + self.config.read_text("utf-8")
             )
             self.assertNotIn(env_key, dumped2)
+
+    def test_page_says_an_environment_key_is_used_not_saved(self):
+        page = (ROOT / "photocraft" / "openfill_photocraft" / "static" / "index.html").read_text("utf-8")
+        line = next(x for x in page.splitlines() if "ck.placeholder=" in x)
+        # "Saved." only for a key saved for this service; an environment key gets its own words
+        self.assertLess(line.index("cm.key_saved?"), line.index("Saved."))
+        self.assertIn("from the environment", line)
+
+    def test_a_time_limit_below_zero_is_refused(self):
+        api, _warmed = self.api()
+        before = self.config.read_text("utf-8") if self.config.exists() else ""
+        for bad in (-1, "-30"):
+            with self.assertRaises(ValueError) as caught:
+                api.post("/api/settings", {"request_timeout": bad})
+            self.assertIn("0 or more seconds", str(caught.exception))
+            self.assertNotIn("\u2014", str(caught.exception))
+        self.assertEqual(self.app.settings.request_timeout, 0)
+        self.assertEqual(self.config.read_text("utf-8") if self.config.exists() else "", before)
+        self.assertEqual(api.post("/api/settings", {"request_timeout": 0})["request_timeout"], 0)  # 0 = auto
+        self.assertEqual(api.post("/api/settings", {"request_timeout": 120})["request_timeout"], 120)
+
+    def test_tk_settings_refuse_a_time_limit_below_zero(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft.panels import SETTINGS, GearView
+
+        def entry(value):
+            return SimpleNamespace(get=lambda: value)
+
+        gear = GearView.__new__(GearView)
+        gear.generation = SimpleNamespace(fields={})
+        for limit, ok in (("-5", False), ("0", True), ("90", True)):
+            gear.engine = SimpleNamespace(
+                autostart=entry(True), idle=entry("20"), timeout=entry(limit), extra=entry("")
+            )
+            engine_keys = ("autostart", "idle_timeout_minutes", "request_timeout", "extra_server_args")
+            gear.generation.fields = {key: entry("1") for key, _label, _kind in SETTINGS if key not in engine_keys}
+            if ok:
+                self.assertEqual(gear.values()["request_timeout"], int(limit))
+            else:
+                with self.assertRaises(ValueError) as caught:
+                    gear.values()
+                self.assertIn("0 or more seconds", str(caught.exception))
 
     def test_engine_view_gemini_ui_rules(self):
         try:

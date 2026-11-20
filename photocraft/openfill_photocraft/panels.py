@@ -128,6 +128,11 @@ class GearView(tk.Frame):
                 out[key] = kind(raw[key]) if kind is not bool else bool(raw[key])
             except ValueError as err:
                 raise ValueError(f"{label}: {raw[key]!r} is not a number.") from err
+        from openfill.config import time_limit_problem
+
+        problem = time_limit_problem(out["request_timeout"])
+        if problem:
+            raise ValueError(problem)
         return out
 
     def save(self) -> None:
