@@ -352,6 +352,37 @@ def mask_rgb(mask: bytes, width: int, height: int) -> bytes:
     return encode(width, height, bytes(255 if v >= 128 else 0 for v in mask), 1)
 
 
+def mask_overlay(image: Rgba, mask: bytes) -> bytes:
+    """``image`` as PNG bytes with selected pixels visibly highlighted in magenta (#FF0080)."""
+    w, h = image.width, image.height
+    if len(mask) != w * h:
+        raise PngError(f"mask has {len(mask)} bytes, expected {w * h}")
+    out = bytearray(image.data)
+    box = mask_box(mask, w, h)
+    if box is None:
+        return encode(w, h, bytes(out), 4)
+    dist = _inside_distance(mask, w, h, box, 3)
+    x0, y0, x1, y1 = box
+    bw = x1 - x0
+    mr, mg, mb = 255, 0, 128
+    for y in range(y0, y1):
+        drow = (y - y0) * bw - x0
+        base = y * w * 4
+        for x in range(x0, x1):
+            d = dist[drow + x]
+            if not d:
+                continue
+            i = base + x * 4
+            if d <= 2:
+                out[i], out[i + 1], out[i + 2], out[i + 3] = mr, mg, mb, 255
+            else:
+                out[i] = (out[i] * 55 + mr * 45 + 50) // 100
+                out[i + 1] = (out[i + 1] * 55 + mg * 45 + 50) // 100
+                out[i + 2] = (out[i + 2] * 55 + mb * 45 + 50) // 100
+                out[i + 3] = 255
+    return encode(w, h, bytes(out), 4)
+
+
 def edit_mask_png(mask: bytes, width: int, height: int) -> bytes:
     """The OpenAI images/edits mask: transparent where the image may change, opaque elsewhere."""
     alpha = bytes(0 if v >= 128 else 255 for v in mask)

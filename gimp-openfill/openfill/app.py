@@ -38,6 +38,7 @@ from .backend import (
 from .backends.a1111 import A1111Backend
 from .backends.cloud import CloudBackend
 from .backends.comfy import ComfyBackend
+from .backends.gemini import GeminiBackend
 from .comfy_api import ComfyApiError, ComfyClient, unsupported_gpu_line
 from .config import Paths, Settings, comfy_layout, comfy_problem
 from .geometry import Rect
@@ -362,6 +363,17 @@ class App:
 
     def cloud_backend(self) -> CloudBackend:
         s = self.settings
+        if s.cloud_provider == "gemini":
+            return GeminiBackend(
+                s.effective_gemini_key(),
+                s.cloud_model,
+                s.cloud_url,
+                s.cloud_mask_mode,
+                float(s.request_timeout or 0),
+                self.log,
+                decode=getattr(self.io, "decode_image", None),
+                key_problem=s.cloud_key_problem(),
+            )
         return CloudBackend(
             s.cloud_provider,
             s.cloud_api_key if s.cloud_key_usable else "",  # never sent to a service it was not entered for
@@ -886,8 +898,10 @@ class App:
 
     def reload_settings(self) -> None:
         """Re-read config.json (the setup task changes comfy_dir in another process)."""
+        creds = self.settings.gemini_credentials
         fresh = Settings.load(self.paths.config, backup=False)
         self.settings.__dict__.update(fresh.__dict__)
+        self.settings.gemini_credentials = creds
 
     def use_comfy_dir(self, path: str) -> None:
         """Make ``path`` the ComfyUI folder; raises ``BackendError`` when it holds no ComfyUI."""

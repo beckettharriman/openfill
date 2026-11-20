@@ -419,3 +419,33 @@ class FluxHintTests(unittest.TestCase):
         self.assertLessEqual(len(ut.FLUX_PROMPT_HINT), 100)
         self.assertIn("FLUX", ut.FLUX_PROMPT_HINT)
         self.assertNotIn("—", ut.FLUX_PROMPT_HINT)
+
+
+class GeminiUiTextTests(unittest.TestCase):
+    def test_gemini_hints_and_placeholders(self):
+        from openfill.backends.cloud import key_scope
+
+        self.assertNotIn(("gemini", "Google Gemini"), ut.CLOUD_PROVIDERS)
+        self.assertIn(("gemini", "Google Gemini"), ut.PHOTOCRAFT_CLOUD_PROVIDERS)
+        self.assertEqual(ut.CLOUD_MASK_MODES, (("second_image", "Second image"), ("overlay", "Overlay")))
+
+        hint = ut.cloud_key_hint("gemini")
+        self.assertIn("settings file", hint.lower())
+        self.assertIn("GEMINI_API_KEY", hint)
+        self.assertIn("settings file", ut.cloud_key_hint("openrouter"))
+
+        self.assertEqual(ut.cloud_key_placeholder("", "gemini", "", False), ut.CLOUD_KEY_GEMINI_EMPTY)
+        self.assertEqual(
+            ut.cloud_key_placeholder(key_scope("gemini", ""), "gemini", "", True),
+            ut.CLOUD_KEY_SAVED,
+        )
+        self.assertEqual(ut.cloud_key_placeholder("openrouter|x", "gemini", "", True), ut.CLOUD_KEY_OTHER)
+        self.assertIn("GEMINI_API_KEY", ut.cloud_key_placeholder("", "gemini", "", False, env_var="GEMINI_API_KEY"))
+        self.assertIn("GOOGLE_API_KEY", ut.cloud_key_placeholder("", "gemini", "", False, env_var="GOOGLE_API_KEY"))
+        # a pasted key is saved in config.json, like the other services: never called "session only"
+        self.assertIn("saved", ut.cloud_key_placeholder("", "gemini", "", False, env_var="GEMINI_API_KEY"))
+        self.assertNotIn("session", ut.cloud_key_placeholder("", "gemini", "", False, env_var="GEMINI_API_KEY"))
+        self.assertEqual(
+            ut.cloud_key_placeholder("", "gemini", "", False, env_var="GEMINI_API_KEY", session_key=True),
+            ut.CLOUD_KEY_SESSION,
+        )

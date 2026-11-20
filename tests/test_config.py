@@ -318,3 +318,69 @@ class StaleCpuFlagTests(unittest.TestCase):
             self.assertTrue(mine.drop_stale_cpu_flag(setup))  # settings from before cpu_comfy_dir existed
             same = Settings(comfy_dir=str(setup), extra_server_args="--cpu")
             self.assertFalse(same.drop_stale_cpu_flag(setup))
+
+
+class GeminiSettingsAndAppTests(unittest.TestCase):
+    def test_settings_persists_gemini_key_and_app_wires_gemini_backend(self):
+        from types import SimpleNamespace
+
+        from openfill.app import App
+        from openfill.backends.cloud import key_scope
+        from openfill.backends.gemini import GeminiBackend
+
+        gemini_key = "AIzaSyTestFakeKey1234567890abcdef"
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            paths = Paths.for_profile(Path(tmp)).ensure()
+            with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}):
+                Settings(backend="cloud", comfy_dir="").save(paths.config)
+                editor_io = SimpleNamespace(profile_dir=lambda: Path(tmp), message=lambda _m: None, decode_image=None)
+                app = App(interactive=False, io=editor_io, runner_cls=object)
+                try:
+                    app.settings.set_cloud("gemini", "", "gemini-3.1-flash-image", gemini_key, mask_mode="overlay")
+                    app.settings.save(app.paths.config)
+
+                    data = json.loads(app.paths.config.read_text(encoding="utf-8"))
+                    self.assertEqual(data["cloud_provider"], "gemini")
+                    self.assertEqual(data["cloud_mask_mode"], "overlay")
+                    self.assertEqual(data["cloud_api_key"], gemini_key)
+                    self.assertEqual(data["cloud_key_for"], key_scope("gemini", ""))
+                    self.assertTrue(app.settings.cloud_key_usable)
+                    self.assertEqual(app.settings.cloud_key_problem(), "")
+
+                    backend = app.cloud_backend()
+                    self.assertIsInstance(backend, GeminiBackend)
+                    self.assertEqual(backend._headers()["x-goog-api-key"], gemini_key)
+                    self.assertEqual(backend.mask_mode, "overlay")
+
+                    app.reload_settings()
+                    self.assertTrue(app.settings.cloud_key_usable)
+                    self.assertEqual(app.cloud_backend()._headers()["x-goog-api-key"], gemini_key)
+
+                    # Switching to a custom Gemini URL does not reuse the key bound to default URL
+                    app.settings.set_cloud("gemini", "https://proxy.example.com/v1beta", "", "")
+                    self.assertFalse(app.settings.cloud_key_usable)
+                    self.assertIn("another service or address", app.settings.cloud_key_problem())
+                finally:
+                    for handler in list(app.log.handlers):
+                        handler.close()
+                        app.log.removeHandler(handler)
+
+    def test_a_key_from_the_environment_goes_only_to_googles_own_address(self):
+        env_key = "AIzaSyEnvOnlyFakeKey00001111222233"
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": env_key}):
+            s = Settings(backend="cloud")
+            s.set_cloud("gemini", "", "", "")
+            self.assertEqual(s.effective_gemini_key(), env_key)
+            self.assertEqual(s.gemini_env_var, "GOOGLE_API_KEY")
+            s.set_cloud("gemini", "https://generativelanguage.googleapis.com/v1beta", "", "")
+            self.assertEqual(s.effective_gemini_key(), env_key)
+            for other in ("https://proxy.example.com/v1beta", "http://127.0.0.1:4000/v1beta"):
+                s.set_cloud("gemini", other, "", "")
+                self.assertEqual(s.effective_gemini_key(), "", other)
+                self.assertFalse(s.cloud_key_usable)
+                self.assertEqual(s.gemini_env_var, "")
+                self.assertIn("only sent to Google's own address", s.cloud_key_problem())
+                self.assertNotIn(env_key, s.cloud_key_problem())
+            # a key pasted for that address is used there
+            s.set_cloud("gemini", "https://proxy.example.com/v1beta", "", "AIzaSyPastedForProxy0000111122")
+            self.assertEqual(s.effective_gemini_key(), "AIzaSyPastedForProxy0000111122")

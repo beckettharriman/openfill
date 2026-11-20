@@ -17,6 +17,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .backends.gemini import GeminiCredentials
+
 if TYPE_CHECKING:
     from .backend import ModelSpec
 
@@ -147,14 +149,19 @@ class Settings:
     hub_search: bool = True  # Models tab: also list current models from Hugging Face and Civitai (read-only API calls)
     hub_civitai: bool = True  # include Civitai in that search (Hugging Face only when False)
     # Cloud service (backend "cloud", see backends/cloud.py and docs/cloud.md). Only used when picked.
-    cloud_provider: str = "openrouter"  # "openrouter" or "openai" (any OpenAI-compatible images API)
+    cloud_provider: str = "openrouter"  # "openrouter", "openai" (OpenAI-compatible), or "gemini"
     cloud_url: str = ""  # API address; "" = the provider's own (https://openrouter.ai/api/v1)
     cloud_model: str = ""  # "" = the provider's default (OpenRouter: google/gemini-2.5-flash-image)
     cloud_api: str = "images"  # OpenRouter only: "images" (/images) or "chat" (/chat/completions)
+    cloud_mask_mode: str = "second_image"  # Gemini only: "second_image" or "overlay"
     cloud_api_key: str = field(default="", repr=False)  # secret, stored only in this file
     # The service and address (scheme, host, port) the key was entered for (backends.cloud.key_scope).
     # The key is only ever sent where this still matches: changing either needs the key again.
     cloud_key_for: str = ""
+    # Not persisted: reads GEMINI_API_KEY / GOOGLE_API_KEY (used only for Google's own Gemini address).
+    gemini_credentials: GeminiCredentials = field(
+        default_factory=GeminiCredentials, repr=False, compare=False, metadata={"persist": False}
+    )
     # Not persisted: why the last :meth:`load` fell back to defaults (None when it did not).
     load_problem: str | None = field(default=None, repr=False, compare=False, metadata={"persist": False})
     # Not persisted: a damaged settings file that could not be moved aside; :meth:`save` refuses to overwrite it.
@@ -291,25 +298,65 @@ class Settings:
         """The cloud service is the backend: pictures leave this computer."""
         return self.backend == "cloud"
 
-    def set_cloud(self, provider: str, url: str, model: str, key: str = "") -> None:
+    def set_cloud(self, provider: str, url: str, model: str, key: str = "", mask_mode: str | None = None) -> None:
         """Apply the cloud fields of a settings screen. A new ``key`` is bound to this service
         and address; an empty one leaves the saved key as it is, bound where it was entered."""
         from .backends.cloud import key_scope
 
         self.cloud_provider, self.cloud_url, self.cloud_model = provider, url.strip(), model.strip()
-        if key.strip():
-            self.cloud_api_key = key.strip()
+        if mask_mode in ("second_image", "overlay"):
+            self.cloud_mask_mode = mask_mode
+        cleaned = key.strip()
+        if cleaned:
+            self.cloud_api_key = cleaned
             self.cloud_key_for = key_scope(provider, url)
 
-    @property
-    def cloud_key_usable(self) -> bool:
-        """A key is saved for exactly the service and address now set."""
+    def _saved_cloud_key_matches(self) -> bool:
         from .backends.cloud import key_scope
 
         return bool(self.cloud_api_key) and self.cloud_key_for == key_scope(self.cloud_provider, self.cloud_url)
 
+    def _gemini_default_address(self) -> bool:
+        """The address set is Google's own Gemini API (the only place an environment key goes)."""
+        from .backends.cloud import key_scope
+
+        return key_scope("gemini", self.cloud_url) == key_scope("gemini", "")
+
+    @property
+    def gemini_env_var(self) -> str:
+        """GEMINI_API_KEY or GOOGLE_API_KEY when that variable is set and would be used here, else ""."""
+        return self.gemini_credentials.env_var_name() if self._gemini_default_address() else ""
+
+    def effective_gemini_key(self) -> str:
+        """Gemini API key: saved for this Gemini endpoint first, else GEMINI_API_KEY / GOOGLE_API_KEY,
+        but those only for Google's own address: a key from the environment was not entered for
+        any other address (a proxy, a LiteLLM, ...), so it is never sent there."""
+        if self._saved_cloud_key_matches():
+            return self.cloud_api_key
+        return self.gemini_credentials.get() if self._gemini_default_address() else ""
+
+    @property
+    def cloud_key_usable(self) -> bool:
+        """A key is available for exactly the service and address now set."""
+        if self.cloud_provider == "gemini":
+            return bool(self.effective_gemini_key())
+        return self._saved_cloud_key_matches()
+
     def cloud_key_problem(self) -> str:
-        """Why the saved key is not used ("" when it is, or when none is saved)."""
+        """Why the key is not usable ("" when it is, or when none is saved for non-Gemini)."""
+        if self.cloud_provider == "gemini":
+            if self.cloud_key_usable:
+                return ""
+            if self.gemini_credentials.env_var_name() and not self._gemini_default_address():
+                from .backends.cloud import destination
+
+                return (
+                    f"{self.gemini_credentials.env_var_name()} is only sent to Google's own address, not to "
+                    f"{destination(self.cloud_provider, self.cloud_url)}. Paste the API key for this address in "
+                    "the cloud settings, then try again."
+                )
+            if not self.cloud_api_key:
+                return self.gemini_credentials.problem()
         if not self.cloud_api_key or self.cloud_key_usable:
             return ""
         from .backends.cloud import destination

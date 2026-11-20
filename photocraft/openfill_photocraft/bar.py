@@ -718,7 +718,12 @@ class Bar:
         tallest of Engine and Generation, and at least the Create tools."""
         if not getattr(self, "_gear_h", 0):
             self.root.update_idletasks()
-            sections = max(self.gear.engine.winfo_reqheight(), self.gear.generation.winfo_reqheight())
+            extra = max(
+                0,
+                self.gear.engine.cloud.winfo_reqheight() - self.gear.engine.local.winfo_reqheight(),
+                self.gear.engine.remote.winfo_reqheight() - self.gear.engine.local.winfo_reqheight(),
+            )
+            sections = max(self.gear.engine.winfo_reqheight() + extra + 48, self.gear.generation.winfo_reqheight())
             settings = HEAD_H + GEAR_BAR_H + sections + 16 + FOOTER_H
             self._gear_h = max(settings, CREATE_TOTAL)
         return self._gear_h

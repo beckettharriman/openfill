@@ -34,7 +34,7 @@ Results always go on new layers, in one undo step, so your existing layers are n
 
 Generation runs in ComfyUI on your machine, listening on `127.0.0.1` only. The network comes into it only when you search for models or press Download (a model, or ComfyUI itself). Every file is checked against its size and SHA-256. No accounts, no telemetry, nothing that phones home. Details in [docs/security.md](docs/security.md).
 
-If you'd rather not run it locally (no suitable graphics card, say), there's an optional cloud setting: OpenRouter or any OpenAI-compatible image service, with your own API key. It's off unless you pick it, and while it's on, every screen says your image is sent to that service. See [docs/cloud.md](docs/cloud.md).
+If you'd rather not run it locally (no suitable graphics card, say), there's an optional cloud setting: OpenRouter, any OpenAI-compatible image service, or Google Gemini (PhotoCraft), with your own API key. It's off unless you pick it, and while it's on, every screen says your image is sent to that service. See [docs/cloud.md](docs/cloud.md).
 
 Got a gaming PC and edit on a laptop? **Remote GPU** runs ComfyUI on the PC and OpenFill on the laptop, over Tailscale or SSH, with a pairing code. Your picture goes only to that PC. See [docs/remote-gpu.md](docs/remote-gpu.md).
 

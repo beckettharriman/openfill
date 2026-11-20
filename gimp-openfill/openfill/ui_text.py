@@ -509,19 +509,41 @@ CLOUD_KEY_EMPTY = "Paste your API key"
 CLOUD_KEY_OTHER = "Paste the key for this service. The saved key is for another one."
 CLOUD_VARIATIONS = "Up to 4 variations per run, each billed by the service."
 CLOUD_KEY_HINT = "Kept only in OpenFill's settings file on this computer, readable by you alone."
+CLOUD_KEY_ENV = "Using {var} from the environment. A key pasted here is saved and used instead."
+CLOUD_KEY_SESSION = "Set for this session only. Paste a new key to replace it."
+CLOUD_KEY_GEMINI_EMPTY = "Paste your API key, or set GEMINI_API_KEY"
+CLOUD_KEY_GEMINI_HINT = "Saved in OpenFill's settings file on this computer, or read from GEMINI_API_KEY."
 CLOUD_COST = "Each picture is billed to your account with the service."
 CLOUD_SETUP_BUTTON = "Use a cloud service instead..."
 CLOUD_SETUP_LINE = "No suitable graphics card? A paid cloud service can do the work. Your images are then sent to it."
 CLOUD_PROVIDERS = (("openrouter", "OpenRouter"), ("openai", "OpenAI-compatible (OpenAI, LiteLLM, ...)"))
+PHOTOCRAFT_CLOUD_PROVIDERS = (
+    ("openrouter", "OpenRouter"),
+    ("openai", "OpenAI-compatible"),
+    ("gemini", "Google Gemini"),
+)
+CLOUD_MASK_MODES = (("second_image", "Second image"), ("overlay", "Overlay"))
 
 
-def cloud_key_placeholder(key_for: str, provider: str, url: str, has_key: bool) -> str:
-    """The key field's grey text: saved for exactly this service and address, saved for
-    another (it will not be sent here), or none."""
+def cloud_key_hint(provider: str) -> str:
+    """Explanation under the cloud API key field."""
+    return CLOUD_KEY_GEMINI_HINT if provider == "gemini" else CLOUD_KEY_HINT
+
+
+def cloud_key_placeholder(
+    key_for: str, provider: str, url: str, has_key: bool, *, env_var: str = "", session_key: bool = False
+) -> str:
+    """The key field's grey text: saved/in-memory/env for this service, saved for another, or none."""
     from .backends.cloud import key_scope
 
     if has_key and key_for == key_scope(provider, url):
         return CLOUD_KEY_SAVED
+    if provider == "gemini":
+        if session_key:
+            return CLOUD_KEY_SESSION
+        if env_var:
+            return CLOUD_KEY_ENV.format(var=env_var)
+        return CLOUD_KEY_OTHER if has_key else CLOUD_KEY_GEMINI_EMPTY
     return CLOUD_KEY_OTHER if has_key else CLOUD_KEY_EMPTY
 
 

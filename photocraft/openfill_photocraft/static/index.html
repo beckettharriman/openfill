@@ -179,10 +179,12 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="field"><span class="label">Where images are made</span><select id="s-backend" aria-label="Where images are made"><option value="comfyui">This computer</option><option value="remote">Remote GPU</option><option value="cloud">Cloud service (paid, sends your image online)</option></select></div>
       <div class="stack" id="cloud-fields" style="gap:12px" hidden>
         <div class="small">Optional. Runs Fill, Remove, Expand and Create on a paid online service instead of this computer. Nothing is sent until you press Generate, and nothing is ever sent while This computer is picked.</div>
-        <div class="field"><span class="label">Service</span><select id="s-cloud_provider" aria-label="Cloud service"><option value="openrouter">OpenRouter</option><option value="openai">OpenAI-compatible (OpenAI, LiteLLM, ...)</option></select></div>
-        <div class="field"><span class="label">API key</span><input id="cloud-key" type="password" autocomplete="off" aria-label="API key"><span class="small">Kept only in OpenFill's settings file on this computer, readable by you alone.</span></div>
+        <div class="field"><span class="label">Service</span><select id="s-cloud_provider" aria-label="Cloud service"><option value="openrouter">OpenRouter</option><option value="openai">OpenAI-compatible (OpenAI, LiteLLM, ...)</option><option value="gemini">Google Gemini</option></select></div>
+        <div class="field"><span class="label">API key</span><input id="cloud-key" type="password" autocomplete="off" aria-label="API key"><span class="small" id="cloud-key-hint">Kept only in OpenFill's settings file on this computer, readable by you alone.</span></div>
         <div class="field"><span class="label">Model</span><input id="s-cloud_model" type="text" aria-label="Cloud model"></div>
         <div class="field"><span class="label">Address</span><input id="s-cloud_url" type="text" aria-label="Cloud address"><span class="small">Empty model or address: the service's own. For LiteLLM, its /v1 address.</span></div>
+        <div class="field" id="gemini-mask-field" hidden><span class="label">Mask method</span><select id="s-cloud_mask_mode" aria-label="Mask method"><option value="second_image">Second image</option><option value="overlay">Overlay</option></select></div>
+        <div class="field"><span class="label">Time limit</span><input id="s-request_timeout" type="number" min="0" aria-label="Time limit"><span class="small">seconds, 0 = automatic. Also used for jobs on this computer.</span></div>
         <div class="note" id="cloud-note" style="color:#e8a33c"></div>
         <div class="small">Each picture is billed to your account with the service.</div>
       </div>
@@ -237,7 +239,7 @@ const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0
 const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create",bgremove:"Remove background"};
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
-let cloud=null, loaded={}, mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
+let cloud=null, loaded={}, cloudMeta={}, mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
 
 function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
 $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
@@ -388,20 +390,29 @@ async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return
 $("save-token").onclick=async()=>{try{await post("/api/models/token",{token:$("token").value});$("token").value="";mnote("Hugging Face key saved.","ok")}catch(e){mnote(e.message,"bad")}};
 
 async function loadSettings(){const s=await get("/api/settings");for(const[k,v]of Object.entries(s)){const el=$("s-"+k);if(!el)continue;if(el.type==="checkbox")el.checked=!!v;else el.value=String(v)}
-  $("cloud-key").value="";$("cloud-key").placeholder=s.cloud_key_saved?"Saved. Paste a new key to replace it.":(s.cloud_key_elsewhere?"Paste the key for this service. The saved key is for another one.":"Paste your API key");
+  $("cloud-key").value="";
+  cloudMeta={key_saved:!!s.cloud_key_saved,key_elsewhere:!!s.cloud_key_elsewhere,key_env:s.cloud_key_env||"",key_session:!!s.cloud_key_session};
   loaded={backend:s.backend,cloud_provider:s.cloud_provider,cloud_url:s.cloud_url,cloud_model:s.cloud_model};cloudFields()}
 // The cloud fields show only while the cloud is picked; the note says where pictures go.
 function cloudFields(){const on=$("s-backend").value==="cloud";$("cloud-fields").hidden=!on;const rf=$("remote-fields");if(rf)rf.hidden=$("s-backend").value!=="remote";
   const p=$("s-cloud_provider").value,u=$("s-cloud_url").value.trim();
-  $("s-cloud_model").placeholder=p==="openrouter"?"google/gemini-2.5-flash-image":"the model name your service uses";
-  $("s-cloud_url").placeholder=p==="openrouter"?"https://openrouter.ai/api/v1":"https://api.openai.com/v1";
+  $("s-cloud_model").placeholder=p==="gemini"?"gemini-3.1-flash-image":(p==="openrouter"?"google/gemini-2.5-flash-image":"the model name your service uses");
+  $("s-cloud_url").placeholder=p==="gemini"?"https://generativelanguage.googleapis.com/v1beta":(p==="openrouter"?"https://openrouter.ai/api/v1":"https://api.openai.com/v1");
+  const gmask=$("gemini-mask-field");if(gmask)gmask.hidden=p!=="gemini";
+  const kh=$("cloud-key-hint");if(kh)kh.textContent=p==="gemini"?"Saved in OpenFill's settings file on this computer, or read from GEMINI_API_KEY.":"Kept only in OpenFill's settings file on this computer, readable by you alone.";
+  const ck=$("cloud-key");if(ck){const cm=typeof cloudMeta!=="undefined"?cloudMeta:{};
+    ck.placeholder=cm.key_saved?"Saved. Paste a new key to replace it.":(p==="gemini"?(cm.key_session?"Set for this session only. Paste a new key to replace it.":(cm.key_env?`Using ${cm.key_env} from the environment. A key pasted here is saved and used instead.`:(cm.key_elsewhere?"Paste the key for this service. The saved key is for another one.":"Paste your API key, or set GEMINI_API_KEY"))):(cm.key_elsewhere?"Paste the key for this service. The saved key is for another one.":"Paste your API key"));}
   // the same rule as the panel and GIMP: "OpenRouter" only for openrouter.ai itself or its subdomains,
+  // "Google Gemini" for generativelanguage.googleapis.com or its subdomains,
   // otherwise the host and port, never a user name or password written into the address
   let where="an address that is not valid";
   try{const a=new URL(u||$("s-cloud_url").placeholder),h=a.hostname.toLowerCase();
-    where=p==="openrouter"&&(h==="openrouter.ai"||h.endsWith(".openrouter.ai"))?"OpenRouter":a.host.toLowerCase()}catch(e){}
+    if(p==="openrouter"&&(h==="openrouter.ai"||h.endsWith(".openrouter.ai")))where="OpenRouter";
+    else if(p==="gemini"&&(h==="generativelanguage.googleapis.com"||h.endsWith(".generativelanguage.googleapis.com")))where="Google Gemini";
+    else where=a.host.toLowerCase()}catch(e){}
   $("cloud-note").textContent=`Cloud: your image is sent to ${where}.`}
 ["s-backend","s-cloud_provider","s-cloud_url"].forEach(id=>$(id).addEventListener("input",cloudFields));
+$("s-cloud_provider").addEventListener("change",()=>{if($("s-cloud_provider").value==="gemini"){const b=$("vars").querySelector("button");if(b)segPick($("vars"),b);variations=1}});
 function settingsNote(t,kind){const n=section==="generation"?$("gen-out"):$("check-out");n.hidden=!t;n.textContent=t;n.className="note "+(kind||"dim")}
 $("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.type==="checkbox"?el.checked:(el.type==="number"?+el.value:el.value)});
   // what was not changed in this form is not sent: a page opened earlier never writes back an old

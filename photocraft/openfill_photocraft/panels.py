@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 SETTINGS = (
     ("autostart", "Start the AI engine with PhotoCraft", bool),
     ("idle_timeout_minutes", "Stop after idle", int),
+    ("request_timeout", "Time limit", int),
     ("steps", "Steps", int),
     ("cfg", "Prompt strictness (CFG)", float),
     ("grow_percent", "Repaint margin (%)", float),
@@ -85,6 +86,8 @@ class GearView(tk.Frame):
         if section == "models":
             self.models.update_view(self.bar.refresher.get())  # built already: this only updates it
         self.bar._layout_footer()
+        if hasattr(self.bar, "scroller"):
+            self.bar.scroller.yview_moveto(0)
 
     def update_view(self, facts: dict[str, Any]) -> None:
         """Keep the models list current, shown or not, so opening it shows it at once."""
@@ -101,6 +104,7 @@ class GearView(tk.Frame):
         self.engine.folder.set(settings.comfy_dir or "")
         self.engine.autostart.set(bool(settings.autostart))
         self.engine.idle.set(str(settings.idle_timeout_minutes))
+        self.engine.timeout.set(str(settings.request_timeout))
         self.engine.extra.set(str(settings.extra_server_args or ""))
         from openfill import shared_models
 
@@ -114,6 +118,7 @@ class GearView(tk.Frame):
         raw: dict[str, Any] = {
             "autostart": self.engine.autostart.get(),
             "idle_timeout_minutes": self.engine.idle.get(),
+            "request_timeout": self.engine.timeout.get(),
             "extra_server_args": self.engine.extra.get(),
         }
         raw.update({key: entry.get() for key, entry in self.generation.fields.items()})
@@ -139,11 +144,18 @@ class GearView(tk.Frame):
         if backend == self.engine.loaded_backend:
             # not switched here: keep what is set now (the browser page may have changed it since)
             backend = app.settings.backend
-        for key in ("cloud_provider", "cloud_url", "cloud_model"):  # the same for the cloud fields
+        for key in ("cloud_provider", "cloud_url", "cloud_model", "cloud_mask_mode"):  # the same for cloud
             if cloud[key] == self.engine.loaded_cloud.get(key):
                 cloud[key] = getattr(app.settings, key)
+        prev_provider = app.settings.cloud_provider
         trial = replace(app.settings)
-        trial.set_cloud(cloud["cloud_provider"], cloud["cloud_url"], cloud["cloud_model"], cloud["cloud_api_key"])
+        trial.set_cloud(
+            cloud["cloud_provider"],
+            cloud["cloud_url"],
+            cloud["cloud_model"],
+            cloud["cloud_api_key"],
+            cloud.get("cloud_mask_mode"),
+        )
         if backend == "cloud" and not trial.cloud_key_usable:
             self.say(trial.cloud_key_problem() or "Paste your API key for the cloud service first.", BAD)
             return
@@ -167,7 +179,11 @@ class GearView(tk.Frame):
                 setattr(app.settings, key, value)
             # a new key is bound to this service and address; an empty field never moves the saved one
             app.settings.set_cloud(
-                cloud["cloud_provider"], cloud["cloud_url"], cloud["cloud_model"], cloud["cloud_api_key"]
+                cloud["cloud_provider"],
+                cloud["cloud_url"],
+                cloud["cloud_model"],
+                cloud["cloud_api_key"],
+                cloud.get("cloud_mask_mode"),
             )
             was_cloud, app.settings.backend = app.settings.uses_cloud, backend
             self._apply_remote(app.settings)
@@ -180,6 +196,13 @@ class GearView(tk.Frame):
             self.say(photocraft_text(str(err)), BAD)
             return
         self.engine.load_backend(app.settings)  # clears the key field: the key is saved, never shown
+        if (
+            app.settings.uses_cloud
+            and app.settings.cloud_provider == "gemini"
+            and prev_provider != "gemini"
+            and hasattr(self.bar, "pick_variations")
+        ):
+            self.bar.pick_variations(1)
         self.bar.service.engine = ""
         if (was_cloud and not app.settings.uses_cloud) or app.settings.uses_remote:
             self.bar.service.warm_up()  # a Remote GPU: connects, so the bar says at once if it answers
@@ -457,27 +480,39 @@ class EngineView(tk.Frame):
         box, self.provider = field(
             parent,
             "Service",
-            lambda b: ui.Seg(
-                b, (("openrouter", "OpenRouter"), ("openai", "OpenAI-compatible")), self._cloud_changed, CW, 13
-            ),
+            lambda b: ui.Seg(b, ui_text.PHOTOCRAFT_CLOUD_PROVIDERS, self._cloud_changed, CW, 12, fit=True),
         )
         box.pack(fill="x", pady=(12, 0))
         box, self.key = field(parent, "API key", lambda b: ui.Field(b, CW, ui_text.CLOUD_KEY_EMPTY, secret=True))
         box.pack(fill="x", pady=(12, 0))
-        ui.small(parent, ui_text.CLOUD_KEY_HINT).pack(fill="x", pady=(6, 0))
+        self.key_hint = ui.small(parent, ui_text.CLOUD_KEY_HINT)
+        self.key_hint.pack(fill="x", pady=(6, 0))
         box, self.model = field(parent, "Model", lambda b: ui.Field(b, CW))
         box.pack(fill="x", pady=(12, 0))
         box, self.url = field(parent, "Address", lambda b: ui.Field(b, CW))
         box.pack(fill="x", pady=(12, 0))
-        ui.small(parent, "Empty model or address: the service's own. For LiteLLM, its /v1 address.").pack(
-            fill="x", pady=(6, 0)
+        self._url_hint = ui.small(parent, "Empty model or address: the service's own. For LiteLLM, its /v1 address.")
+        self._url_hint.pack(fill="x", pady=(6, 0))
+        self.mask_box, self.mask_mode = field(
+            parent, "Mask method", lambda b: ui.Seg(b, ui_text.CLOUD_MASK_MODES, None, CW, 12)
         )
+
+        def timeout_row(box):
+            row = ui.frame(box)
+            self.timeout = ui.Field(row, 88)
+            self.timeout.pack(side="left")
+            ui.small(row, "seconds, 0 = auto (local jobs too)", wrap=0).pack(side="left", padx=(8, 0))
+            return row
+
+        box, _ = field(parent, "Time limit", timeout_row)
+        box.pack(fill="x", pady=(12, 0))
         self.note = ui.small(parent, "", fg=WARN)
         self.note.pack(fill="x", pady=(12, 0))
         ui.small(parent, ui_text.CLOUD_COST).pack(fill="x", pady=(6, 0))
         self.url.entry.bind("<KeyRelease>", lambda _e: self._cloud_changed(), add="+")
 
     def _cloud_changed(self, _key: object = None) -> None:
+        from openfill import ui_text
         from openfill.backends.cloud import cloud_note, provider
 
         info = provider(self.provider.get())
@@ -488,14 +523,24 @@ class EngineView(tk.Frame):
             entry.placeholder = text
             if not entry.get():  # only an empty field is redrawn: typing is never disturbed
                 entry.set("")
-        from openfill import ui_text
-
         url = self.url.get().strip()
+        self.key_hint.configure(text=ui_text.cloud_key_hint(info.id))
         self.key.placeholder = ui_text.cloud_key_placeholder(
-            getattr(self, "_key_for", ""), info.id, url, getattr(self, "_has_key", False)
+            getattr(self, "_key_for", ""),
+            info.id,
+            url,
+            getattr(self, "_has_key", False),
+            env_var=getattr(self, "_gemini_env", ""),
+            session_key=getattr(self, "_gemini_session", False),
         )
         if not self.key.get():
             self.key.set("")
+        if info.id == "gemini":
+            self.mask_box.pack(fill="x", pady=(12, 0), after=self._url_hint)
+            if _key == "gemini" and hasattr(self.bar, "pick_variations"):
+                self.bar.pick_variations(1)
+        else:
+            self.mask_box.pack_forget()
         self.note.configure(text=cloud_note(info.id, url))
 
     def _backend_picked(self, key: str) -> None:
@@ -509,6 +554,8 @@ class EngineView(tk.Frame):
             if frame is not shown:
                 frame.pack_forget()
         shown.pack(fill="x", after=self.backend.master)  # under the switch, above the tools
+        if hasattr(self.bar, "scroller"):
+            self.bar.scroller.yview_moveto(0)
 
     def _build_remote(self, parent: tk.Misc) -> None:
         """Remote GPU: ComfyUI on another computer of yours (docs/remote-gpu.md)."""
@@ -527,11 +574,16 @@ class EngineView(tk.Frame):
     def load_backend(self, settings) -> None:
         backend = settings.backend if settings.backend in ("comfyui", "remote", "cloud") else "comfyui"
         self.provider.set(
-            settings.cloud_provider if settings.cloud_provider in ("openrouter", "openai") else "openrouter"
+            settings.cloud_provider if settings.cloud_provider in ("openrouter", "openai", "gemini") else "openrouter"
         )
         self.model.set(settings.cloud_model or "")
         self.url.set(settings.cloud_url or "")
+        mask_mode = getattr(settings, "cloud_mask_mode", "second_image")
+        self.mask_mode.set(mask_mode if mask_mode in ("second_image", "overlay") else "second_image")
         self._has_key, self._key_for = bool(settings.cloud_api_key), settings.cloud_key_for
+        creds = getattr(settings, "gemini_credentials", None)
+        self._gemini_env = getattr(settings, "gemini_env_var", "")
+        self._gemini_session = bool(creds.has_session_key) if creds is not None else False
         self.key.set("")  # the saved key is never put on screen
         self._cloud_changed()
         self.loaded_backend = backend
@@ -544,6 +596,7 @@ class EngineView(tk.Frame):
             "cloud_provider": self.provider.get(),
             "cloud_model": self.model.get().strip(),
             "cloud_url": self.url.get().strip(),
+            "cloud_mask_mode": self.mask_mode.get(),
             "cloud_api_key": self.key.get().strip(),
         }
 

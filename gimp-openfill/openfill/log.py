@@ -17,7 +17,9 @@ _FORMAT = "%(asctime)s %(levelname)-5s [%(process)d %(name)s] %(message)s"
 _SECRET_PATTERNS = (
     re.compile(r"\bhf_[A-Za-z0-9]{16,}\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"\bAIza[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"(?i)(\"?x-goog-api-key\"?\s*[:=]\s*\"?)[^\s\",}]+"),
     re.compile(r"(?i)(\"?(?:hf_token|cloud_api_key|api[_-]?key)\"?\s*[:=]\s*\"?)[^\s\",}]+"),
 )
 

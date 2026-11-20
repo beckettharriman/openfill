@@ -19,6 +19,7 @@ Fixed:
 
 New:
 - When the engine takes longer than 90 seconds to start, the status line says "Still starting (slow, see Logs)", and a job's progress says why that can happen. A model folder on an unplugged or sleeping drive is named when it doesn't answer.
+- Added Google Gemini as a third optional cloud service under Engine (`gemini-3.1-flash-image` default). Saves pasted API keys in `config.json` like the other cloud providers (while never returning them from `/api/settings`) or falls back to `GEMINI_API_KEY` / `GOOGLE_API_KEY` from the environment. Includes selectable Mask method (`Second image` or `Overlay`), editable Time limit (`request_timeout`), Variations defaulting to `1`, seam tone correction, and Engine/Generation scroll fixes. See [docs/cloud.md](../docs/cloud.md).
 
 ## [0.2.6] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
 

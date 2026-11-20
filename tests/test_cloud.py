@@ -1418,5 +1418,313 @@ class PixbufTests(unittest.TestCase):
                 pixbuf.decode(data)
 
 
+GEMINI_KEY = "AIzaSyFakeTestKey0123456789abcdefghijkl"
+
+
+def gemini_response(images, *, thought_images=(), text="", finish_reason="STOP", snake=False):
+    parts = []
+    img_key = "inline_data" if snake else "inlineData"
+    mime_key = "mime_type" if snake else "mimeType"
+    for data in thought_images:
+        parts.append({"thought": True, img_key: {mime_key: "image/png", "data": b64(data)}})
+    if text:
+        parts.append({"text": text})
+    for data in images:
+        parts.append({img_key: {mime_key: "image/png", "data": b64(data)}})
+    return {"candidates": [{"content": {"role": "model", "parts": parts}, "finishReason": finish_reason}]}
+
+
+class GeminiBackendTests(CloudTestCase):
+    def gemini(self, **kw):
+        from openfill.backends.gemini import GeminiBackend
+
+        kw.setdefault("api_key", GEMINI_KEY)
+        kw.setdefault("model", "gemini-3.1-flash-image")
+        kw.setdefault("retry_base_delay", 0.01)
+        return GeminiBackend(url=self.fake.url + "/v1beta", logger=self.logger, **kw)
+
+    def assertNoGeminiKey(self, *texts):
+        for text in texts:
+            self.assertNotIn(GEMINI_KEY, str(text))
+            self.assertNotIn(GEMINI_KEY[8:32], str(text))
+
+    def tearDown(self):
+        self.assertNoGeminiKey(*self.logs.lines)
+        super().tearDown()
+
+    def test_second_image_request_and_last_non_thought_image(self):
+        draft = solid_png(30, 20, (10, 10, 10, 255))
+        earlier = solid_png(30, 20, (20, 20, 20, 255))
+        final = solid_png(60, 40, (255, 0, 0, 255))
+        self.fake.json_route(
+            "/v1beta/models/gemini-3.1-flash-image:generateContent",
+            gemini_response([earlier, final], thought_images=[draft], text="Edited image"),
+        )
+        request, _rgba, mask = inpaint_request(prompt="a red ball")
+        result = self.gemini(mask_mode="second_image").inpaint(request)
+        self.assertEqual(len(self.fake.requests), 1)
+        sent = self.fake.requests[0]
+        self.assertEqual(sent["path"], "/v1beta/models/gemini-3.1-flash-image:generateContent")
+        headers = {k.lower(): v for k, v in sent["headers"].items()}
+        self.assertEqual(headers["x-goog-api-key"], GEMINI_KEY)
+        self.assertNotIn("authorization", headers)
+        body = json.loads(sent["body"])
+        self.assertEqual(body["generationConfig"]["responseModalities"], ["TEXT", "IMAGE"])
+        self.assertEqual(body["generationConfig"]["imageConfig"]["aspectRatio"], "3:2")
+        parts = body["contents"][0]["parts"]
+        self.assertEqual(len(parts), 3)  # crop, bw mask, instruction
+        self.assertEqual(parts[0]["inlineData"]["mimeType"], "image/png")
+        self.assertEqual(parts[1]["inlineData"]["mimeType"], "image/png")
+        self.assertIn("a red ball", parts[2]["text"])
+        self.assertIn("Edit ONLY that marked area", parts[2]["text"])
+        out = imaging.decode_png(result.images[0])
+        self.assertEqual((out.width, out.height), (300, 200))
+        # Outside selection is untouched (transparent layer)
+        outside = sum(1 for i in range(300 * 200) if mask[i] < 128 and out.data[i * 4 + 3])
+        self.assertEqual(outside, 0)
+        centre = (100 * 300 + 160) * 4
+        self.assertEqual(out.data[centre : centre + 4], b"\xff\x00\x00\xff")
+
+    def test_overlay_mask_sends_single_marked_image_and_preserves_outside(self):
+        self.fake.json_route(
+            "/v1beta/models/gemini-3.1-flash-image:generateContent",
+            gemini_response([solid_png(60, 40, (0, 255, 0, 255))], snake=True),
+        )
+        request, rgba, mask = inpaint_request(prompt="")
+        result = self.gemini(mask_mode="overlay").inpaint(request)
+        body = json.loads(self.fake.requests[0]["body"])
+        parts = body["contents"][0]["parts"]
+        self.assertEqual(len(parts), 2)  # single image + instruction
+        sent_img = imaging.decode_png(base64.b64decode(parts[0]["inlineData"]["data"]))
+        self.assertEqual((sent_img.width, sent_img.height), (300, 200))
+        # Outside the selection, the sent overlay crop matches the original pixels exactly
+        self.assertEqual(sent_img.data[:4], rgba[:4])
+        # Inside the selection edge, bright magenta highlight (255, 0, 128, 255) is drawn
+        edge = (50 * 300 + 100) * 4
+        self.assertEqual(sent_img.data[edge : edge + 4], b"\xff\x00\x80\xff")
+        # Empty prompt instructs seamless continuation
+        self.assertIn("continues the surroundings seamlessly", parts[1]["text"])
+        self.assertIn("no magenta tint", parts[1]["text"])
+        out = imaging.decode_png(result.images[0])
+        outside = sum(1 for i in range(300 * 200) if mask[i] < 128 and out.data[i * 4 + 3])
+        self.assertEqual(outside, 0)
+
+    def test_remove_expand_create_and_variations(self):
+        route = "/v1beta/models/gemini-3.1-flash-image:generateContent"
+        calls = []
+
+        def handler(_h, body):
+            calls.append(json.loads(body))
+            if len(calls) == 4:
+                return 500, {}, b'{"error": {"code": 500, "message": "oops"}}'
+            return 200, {}, json.dumps(gemini_response([solid_png(48, 32, (1, 2, 3, 255))])).encode()
+
+        self.fake.routes[route] = handler
+        rem_req, _rgba, _mask = inpaint_request(mode="remove", prompt="", batch=1)
+        self.gemini().inpaint(rem_req)
+        self.assertIn("Do not add any new object", calls[0]["contents"][0]["parts"][-1]["text"])
+
+        exp_req, _rgba, _mask = inpaint_request(mode="expand", prompt="", box=(0, 0, 60, 200), batch=1)
+        self.gemini().outpaint(exp_req)
+        self.assertIn("new, empty canvas", calls[1]["contents"][0]["parts"][-1]["text"])
+
+        t2i = Txt2ImgRequest(1024, 256, "a narrow bridge", "", ModelSpec(arch="cloud"), Sampling(batch=2))
+        res = self.gemini(max_retries=0).txt2img(t2i)
+        # Variation 1 (call 3) succeeded; variation 2 (call 4) failed with 500 -> keeps variation 1.
+        self.assertEqual(len(res.images), 1)
+        self.assertEqual(calls[-1]["generationConfig"]["imageConfig"]["aspectRatio"], "4:1")
+
+    def test_safety_blocks_raise_cloud_refused_without_retry(self):
+        route = "/v1beta/models/gemini-3.1-flash-image:generateContent"
+        self.fake.json_route(route, {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}})
+        req, _rgba, _mask = inpaint_request()
+        with self.assertRaises(CloudRefused) as cm:
+            self.gemini().inpaint(req)
+        self.assertIn("PROHIBITED_CONTENT", str(cm.exception))
+        self.assertEqual(len(self.fake.requests), 1)
+
+        self.fake.requests.clear()
+        self.fake.json_route(
+            route,
+            {"candidates": [{"content": {"parts": [{"text": "Cannot draw this."}]}, "finishReason": "IMAGE_SAFETY"}]},
+        )
+        with self.assertRaises(CloudRefused) as cm:
+            self.gemini().inpaint(req)
+        self.assertIn("IMAGE_SAFETY", str(cm.exception))
+        self.assertEqual(len(self.fake.requests), 1)
+
+    def test_retry_on_429_and_5xx_and_no_retry_cases(self):
+        route = "/v1beta/models/gemini-3.1-flash-image:generateContent"
+        req, _rgba, _mask = inpaint_request()
+        # Transient 429 then 503 then 200 -> succeeds on 3rd attempt
+        attempts = [
+            (
+                429,
+                {"Retry-After": "0.01"},
+                {"error": {"code": 429, "message": "slow down", "status": "RESOURCE_EXHAUSTED"}},
+            ),
+            (503, {}, {"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}}),
+            (200, {}, gemini_response([solid_png(30, 20, (5, 6, 7, 255))])),
+        ]
+
+        def flaky(_h, _b):
+            code, hdrs, payload = attempts.pop(0)
+            return code, {"Content-Type": "application/json", **hdrs}, json.dumps(payload).encode()
+
+        self.fake.routes[route] = flaky
+        res = self.gemini(max_retries=2, retry_base_delay=0.01).inpaint(req)
+        self.assertEqual(len(res.images), 1)
+        self.assertEqual(len(self.fake.requests), 3)
+
+        # No-retry cases: 400 API_KEY_INVALID, 400 generic, 401, 403, 404, 429 zero quota, 504 timeout
+        no_retry = [
+            (
+                400,
+                {
+                    "error": {
+                        "code": 400,
+                        "message": f"API key not valid {GEMINI_KEY}",
+                        "details": [{"reason": "API_KEY_INVALID"}],
+                    }
+                },
+                CloudAuthError,
+            ),
+            (400, {"error": {"code": 400, "message": "Invalid argument"}}, CloudRefused),
+            (401, {"error": {"code": 401, "message": "Unauthorized"}}, CloudAuthError),
+            (403, {"error": {"code": 403, "message": "Forbidden"}}, CloudRefused),
+            (404, {"error": {"code": 404, "message": "Not found"}}, CloudRefused),
+            (
+                429,
+                {"error": {"code": 429, "message": "Quota exceeded for quota metric 'Requests', limit: 0"}},
+                CloudCreditsError,
+            ),
+            (504, {"error": {"code": 504, "message": "Deadline exceeded"}}, CloudTimeout),
+        ]
+        for code, payload, exc_cls in no_retry:
+            with self.subTest(code=code, exc=exc_cls.__name__):
+                self.fake.requests.clear()
+                self.fake.json_route(route, payload, code)
+                with self.assertRaises(exc_cls) as caught:
+                    self.gemini(max_retries=2, retry_base_delay=0.01).inpaint(req)
+                self.assertEqual(len(self.fake.requests), 1)
+                self.assertNoGeminiKey(str(caught.exception))
+
+    def test_cancel_stops_retry_backoff_immediately(self):
+        route = "/v1beta/models/gemini-3.1-flash-image:generateContent"
+        self.fake.json_route(route, {"error": {"code": 429, "message": "rate limit"}}, 429)
+        req, _rgba, _mask = inpaint_request()
+        started = time.monotonic()
+        with self.assertRaises(GenerationCancelled):
+            self.gemini(max_retries=3, retry_base_delay=5.0).inpaint(
+                req, cancel=lambda: time.monotonic() - started > 0.2
+            )
+        self.assertLess(time.monotonic() - started, 2.0)
+        self.assertEqual(len(self.fake.requests), 1)
+
+    def test_health_and_redaction(self):
+        self.fake.json_route("/v1beta/models/gemini-3.1-flash-image", {"name": "models/gemini-3.1-flash-image"})
+        health = self.gemini().health()
+        self.assertTrue(health.ok, health.detail)
+        self.assertEqual(self.fake.requests[0]["method"], "GET")
+        headers = {k.lower(): v for k, v in self.fake.requests[0]["headers"].items()}
+        self.assertEqual(headers["x-goog-api-key"], GEMINI_KEY)
+        self.assertNoGeminiKey(repr(self.gemini()), redact(f"x-goog-api-key: {GEMINI_KEY}"), redact(GEMINI_KEY))
+
+    def test_network_down_fails_without_retry(self):
+        from openfill.backends.gemini import GeminiBackend
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        backend = GeminiBackend(
+            api_key=GEMINI_KEY,
+            url=f"http://127.0.0.1:{port}/v1beta",
+            logger=self.logger,
+            max_retries=2,
+            retry_base_delay=0.01,
+        )
+        req, _rgba, _mask = inpaint_request()
+        with self.assertRaises(CloudUnreachable) as caught:
+            backend.inpaint(req)
+        self.assertIn("Could not reach", str(caught.exception))
+        self.assertNoGeminiKey(str(caught.exception))
+
+    def test_seam_correction_matches_shifted_background_tone(self):
+        from openfill import imaging
+
+        w, h = 160, 120
+        box = (40, 30, 120, 90)
+        orig_rows = bytearray()
+        shifted_rows = bytearray()
+        mask = bytearray(w * h)
+        for y in range(h):
+            for x in range(w):
+                r, g, b = 110 + x // 4, 150 + y // 4, 210 - (x + y) // 16
+                orig_rows += bytes((r, g, b, 255))
+                shifted_rows += bytes((min(255, r + 32), min(255, g + 18), max(0, b - 24), 255))
+                if box[0] <= x < box[2] and box[1] <= y < box[3]:
+                    mask[y * w + x] = 255
+        pad = imaging.pad_plan(w, h, self.gemini()._ratios())
+        sent_shifted = imaging.pad_edges(imaging.Rgba(w, h, bytes(shifted_rows)), pad).png()
+        self.fake.json_route("/v1beta/models/gemini-3.1-flash-image:generateContent", gemini_response([sent_shifted]))
+        req = InpaintRequest(
+            image_png=png.encode(w, h, bytes(orig_rows), 4),
+            mask_png=png.encode(w, h, bytes(mask), 1),
+            width=w,
+            height=h,
+            work_width=w,
+            work_height=h,
+            prompt="clouds",
+            negative="",
+            model=ModelSpec(checkpoint="m", arch="cloud", template="cloud"),
+            sampling=Sampling(batch=1),
+            mode="fill",
+            feather=12,
+        )
+        res = self.gemini().inpaint(req)
+        out = imaging.decode_png(res.images[0])
+        centre = (60 * w + 80) * 4
+        for c in range(3):
+            self.assertLessEqual(abs(out.data[centre + c] - orig_rows[centre + c]), 4)
+        self.assertEqual(out.data[centre + 3], 255)
+        self.assertEqual(out.data[3], 0)
+
+
+class GeminiCredentialsTests(unittest.TestCase):
+    def test_env_precedence_and_session_key_isolation(self):
+        from openfill.backends.gemini import GeminiCredentials
+
+        creds = GeminiCredentials(environ={"GEMINI_API_KEY": "AIzaEnv1", "GOOGLE_API_KEY": "AIzaEnv2"})
+        self.assertEqual(creds.env_var_name(), "GEMINI_API_KEY")
+        self.assertEqual(creds.get(), "AIzaEnv1")
+        self.assertTrue(creds.usable)
+
+        fallback = GeminiCredentials(environ={"GOOGLE_API_KEY": "AIzaEnv2"})
+        self.assertEqual(fallback.env_var_name(), "GOOGLE_API_KEY")
+        self.assertEqual(fallback.get(), "AIzaEnv2")
+
+        empty = GeminiCredentials(environ={})
+        self.assertFalse(empty.usable)
+        self.assertIn("GEMINI_API_KEY", empty.problem())
+        staged = empty.with_session_key("AIzaSessionKey123456789012")
+        self.assertFalse(empty.usable)
+        self.assertTrue(staged.usable)
+        self.assertEqual(staged.get(), "AIzaSessionKey123456789012")
+        self.assertNotIn("AIzaSessionKey", repr(staged))
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class GeminiKeyWordingTests(unittest.TestCase):
+    def test_messages_never_promise_a_session_only_key(self):
+        from openfill.backends.gemini import GeminiBackend, GeminiCredentials
+
+        no_key = GeminiCredentials(environ={}).problem()
+        self.assertIn("Paste your key in the cloud settings", no_key)
+        self.assertNotIn("session", no_key)
+        backend = GeminiBackend("AIzaSyFakeKey000011112222333344", url="http://127.0.0.1:9/v1beta")
+        err = backend._http_error(401, "{}", {})
+        self.assertNotIn("session", str(err))
+        self.assertIn("cloud settings", str(err))
