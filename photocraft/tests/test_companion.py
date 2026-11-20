@@ -2211,6 +2211,7 @@ class DpiTests(unittest.TestCase):
         self.dpi = dpi
         dpi._state = None
         self.addCleanup(setattr, dpi, "_state", None)
+        self.scale_set = bool(os.environ.get("OPENFILL_UI_SCALE"))  # the suite run at another scale
         env = mock.patch.dict(os.environ)
         env.start()
         self.addCleanup(env.stop)
@@ -2347,7 +2348,7 @@ class DpiTests(unittest.TestCase):
             from openfill_photocraft import ui
         except ImportError:
             self.skipTest("no tkinter")
-        if sys.platform != "win32":
+        if sys.platform != "win32" and not self.scale_set:
             self.assertEqual(ui.SCALE, 1.0)  # Linux and macOS: nothing changes
             self.assertEqual((ui.W, ui.PAD, ui.CW), (400, 16, 368))
         with mock.patch.object(ui, "SCALE", 1.0):
@@ -3866,12 +3867,20 @@ class PopdownTests(unittest.TestCase):
     def setUpClass(cls):
         import tkinter as tk
 
+        from openfill_photocraft import ui
+
+        ui._cache.clear()
+        ui.FONTS = None  # fonts and images left by an earlier test's Tk, now destroyed
         cls.root = tk.Tk()  # one for the class: the drawn images are cached per Tk
         cls.root.geometry("400x200+100+400")
 
     @classmethod
     def tearDownClass(cls):
+        from openfill_photocraft import ui
+
         cls.root.destroy()
+        ui._cache.clear()
+        ui.FONTS = None
 
     def setUp(self):
         from openfill_photocraft import ui
