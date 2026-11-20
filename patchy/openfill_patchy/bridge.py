@@ -420,14 +420,16 @@ class PatchyBridge:
                 canvas = Image.alpha_composite(canvas, full)
         return canvas
 
-    def export_region(self, image: PatchyImage, rect: Rect, transparent_outside: bool = False) -> tuple[bytes, bytes]:
+    def export_region(
+        self, image: PatchyImage, rect: Rect, transparent_outside: bool = False, keep_alpha: bool = False
+    ) -> tuple[bytes, bytes]:
         """(opaque RGBA PNG, raw RGBA) of ``rect``; outside the canvas is transparent before
         flattening over the mean colour, as GIMP does for an expand."""
         full = self.visible(image)
         if self.on_region:  # where this round's preview frames belong, in the job's first canvas
             self.on_region((rect.x - image.shift[0], rect.y - image.shift[1], rect.width, rect.height))
         crop = full.crop((rect.x, rect.y, rect.x + rect.width, rect.y + rect.height))
-        flat = flatten_over_mean(crop.tobytes())
+        flat = crop.tobytes() if keep_alpha else flatten_over_mean(crop.tobytes())
         return png.encode(rect.width, rect.height, flat, 4), flat
 
     def export_region_png(self, image: PatchyImage, rect: Rect, transparent_outside: bool = False) -> bytes:

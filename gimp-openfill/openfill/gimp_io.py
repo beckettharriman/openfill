@@ -75,7 +75,9 @@ def _visible_without_channels(image: Gimp.Image) -> Gimp.Layer | None:
         dup.delete()
 
 
-def export_region(image: Gimp.Image, rect: Rect, transparent_outside: bool = False) -> tuple[bytes, bytes]:
+def export_region(
+    image: Gimp.Image, rect: Rect, transparent_outside: bool = False, keep_alpha: bool = False
+) -> tuple[bytes, bytes]:
     """Composite of all visible layers inside ``rect``: (opaque RGBA PNG, its
     raw RGBA pixels).
 
@@ -83,7 +85,8 @@ def export_region(image: Gimp.Image, rect: Rect, transparent_outside: bool = Fal
     pixels are transparent (used by expand before the canvas grows),
     otherwise the edge pixels are repeated. Visible channels are not part of
     the composite. Transparent pixels are flattened over the mean visible
-    colour: models read RGB only and would see them as black.
+    colour: models read RGB only and would see them as black. With ``keep_alpha``
+    the pixels are returned as they are (the PNG then carries the alpha).
     """
     layer = _visible_without_channels(image)
     if layer is None:
@@ -96,7 +99,7 @@ def export_region(image: Gimp.Image, rect: Rect, transparent_outside: bool = Fal
     expected = rect.width * rect.height * 4
     if len(pixels) != expected:
         raise GimpIoError(f"read {len(pixels)} bytes, expected {expected}")
-    flat = flatten_over_mean(pixels)
+    flat = pixels if keep_alpha else flatten_over_mean(pixels)
     return png.encode(rect.width, rect.height, flat, 4), flat
 
 

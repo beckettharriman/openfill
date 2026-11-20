@@ -897,8 +897,11 @@ def build_bgremove(
     filename_prefix: str = "openfill/bgremove",
 ) -> dict:
     """Remove Background with BiRefNet (ComfyUI's own nodes, v0.39 and newer): the whole image
-    goes in, a PNG with the background made transparent comes out. The mask file and the seed
-    are not used (the model is deterministic and needs no selection)."""
+    goes in, a PNG with the background made transparent comes out. The model reads the image
+    file (flattened over its mean colour); the mask file is the image as it is (RGBA). Its alpha
+    is multiplied in, so the cutout is never more opaque than the original, and its colours are
+    the cutout's, so see-through pixels keep their own colour. The seed is not used (the model
+    is deterministic)."""
     if not caps.bg_removal:
         raise ValueError("Remove Background needs ComfyUI 0.39 or newer (the RemoveBackground node)")
     if not req.model.bg_removal_model:
@@ -907,9 +910,27 @@ def build_bgremove(
     g.add("load_image", "LoadImage", image=image_ref)
     g.add("bg_model", "LoadBackgroundRemovalModel", bg_removal_name=req.model.bg_removal_model)
     g.add("foreground", "RemoveBackground", bg_removal_model=g.out("bg_model"), image=g.out("load_image", 0))
-    # JoinImageWithAlpha reads its mask as transparency, so the foreground mask is inverted first
-    g.add("transparency", "InvertMask", mask=g.out("foreground"))
-    g.add("cutout", "JoinImageWithAlpha", image=g.out("load_image", 0), alpha=g.out("transparency"))
+    g.add("original", "LoadImage", image=mask_ref)
+    # LoadImage's mask is the file's transparency (1 - alpha); inverted, it is the image's opacity
+    g.add("alpha", "InvertMask", mask=g.out("original", 1))
+    g.add(
+        "opacity",
+        "MaskComposite",
+        destination=g.out("foreground"),
+        source=g.out("alpha"),
+        x=0,
+        y=0,
+        operation="multiply",
+    )
+    # SaveImage cuts 255 x opacity down to a whole number, so a subject the model is 99.9 % sure
+    # of came back at 254 (a little see-through). Half a level more makes that a rounding.
+    g.add("half_level", "SolidMask", value=0.5 / 255, width=min(req.width, 16384), height=min(req.height, 16384))
+    g.add(
+        "rounded", "MaskComposite", destination=g.out("opacity"), source=g.out("half_level"), x=0, y=0, operation="add"
+    )
+    # JoinImageWithAlpha reads its mask as transparency, so the opacity is inverted first
+    g.add("transparency", "InvertMask", mask=g.out("rounded"))
+    g.add("cutout", "JoinImageWithAlpha", image=g.out("original", 0), alpha=g.out("transparency"))
     g.add(OUTPUT_NODE, "SaveImage", images=g.out("cutout"), filename_prefix=filename_prefix)
     return g.to_dict()
 
