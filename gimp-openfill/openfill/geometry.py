@@ -914,13 +914,29 @@ def expand_detail_tiles(plan: ExpandPlan, profile: ModelProfile, grow: int = 0) 
     return _with_done(rects, [(r.width, r.height) for r in rects], TILE_OVERLAP)
 
 
-def plan_native_removal(selection: Rect, image: Rect) -> FillPlan:
-    """LaMa at the image's own pixels: the classic removal context
-    (``REMOVAL_MODEL_PADDING``) at scale 1, never resized. OpenFill's node pads it to
-    a multiple of 8 and, when one pass does not fit the graphics memory, works it in
-    large overlapping windows at 1:1 (comfy_nodes/plan.py)."""
+# Longest side of the hole, in working pixels, that LaMa (big-lama) still fills with the
+# surrounding pattern. big-lama learned on 256 px crops: on a brick wall a 300 x 400 px hole
+# at 1:1 came back as a flat grey patch with a fine grid and no mortar lines, while the same
+# hole at about 200 px continued the bricks. A larger selection is worked at a smaller
+# scale so its hole is this size, and the fill is scaled back up.
+NATIVE_LAMA_MAX_HOLE = 256
+
+
+def plan_native_removal(selection: Rect, image: Rect, max_hole: int = NATIVE_LAMA_MAX_HOLE) -> FillPlan:
+    """LaMa at the image's own pixels where it can: the classic removal context
+    (``REMOVAL_MODEL_PADDING``) at scale 1 while the selection's longer side is at most
+    ``max_hole``; a larger selection is worked at the scale that makes it ``max_hole``
+    (``NATIVE_LAMA_MAX_HOLE``). OpenFill's node pads the working image to a multiple of 8
+    and, when one pass does not fit the graphics memory, works it in large overlapping
+    windows (comfy_nodes/plan.py)."""
     ctx = context_rect(selection, image, INPAINT_MODEL, padding_ratio=REMOVAL_MODEL_PADDING)
-    return FillPlan(ctx, WorkingSize(ctx.width, ctx.height, 1.0))
+    longer = max(selection.width, selection.height)
+    if max_hole <= 0 or longer <= max_hole:
+        return FillPlan(ctx, WorkingSize(ctx.width, ctx.height, 1.0))
+    scale = max_hole / longer
+    width = round_to_multiple(round(ctx.width * scale), INPAINT_MODEL.multiple)
+    height = round_to_multiple(round(ctx.height * scale), INPAINT_MODEL.multiple)
+    return FillPlan(ctx, WorkingSize(width, height, width / ctx.width))
 
 
 # Tiled removal (MAT): the LaMa/MAT node pads its input to a square and resizes it to

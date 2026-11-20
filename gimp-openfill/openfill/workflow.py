@@ -282,11 +282,12 @@ def _single_pass(g: Graph, req: InpaintRequest, caps: Capabilities, model, posit
     return out
 
 
-def _full_mask(g: Graph, req: InpaintRequest) -> list:
-    """The selection mask at context resolution, grown and blurred like the
-    model mask of the single pass (needs comfyui-inpaint-nodes)."""
+def _full_mask(g: Graph, req: InpaintRequest, grow: int | None = None) -> list:
+    """The selection mask at context resolution, grown (``grow``, default the request's
+    ``full_grow``) and blurred like the model mask of the single pass (needs
+    comfyui-inpaint-nodes)."""
     g.add("fmask_raw", "ImageToMask", image=g.out("load_mask", 0), channel="red")
-    grow = max(0, int(getattr(req, "full_grow", 0)))
+    grow = max(0, int(getattr(req, "full_grow", 0) if grow is None else grow))
     blur = 0 if _hard_model_mask(req) else max(0, min(int(getattr(req, "full_blur", 0)), grow))
     g.add("fmask_grow", "INPAINT_ExpandMask", mask=g.out("fmask_raw"), grow=grow, blur=blur, blur_type="gaussian")
     g.add("fmask", "INPAINT_StabilizeMask", mask=g.out("fmask_grow"), epsilon=0.01)
@@ -845,7 +846,21 @@ def build_removal(
         )
         out = g.out("remove")
         if req.needs_scaling:
+            # A large hole is worked smaller (geometry.NATIVE_LAMA_MAX_HOLE); the fill is
+            # scaled back and pasted into the hole only, so the pixels around it stay sharp.
             out = _scale_image(g, "out_scale", out, req.width, req.height)
+            grow = int(getattr(req, "full_grow", 0)) or round(req.grow * req.width / max(1, req.work_width))
+            g.add(
+                "paste",
+                "ImageCompositeMasked",
+                destination=g.out("load_image", 0),
+                source=out,
+                x=0,
+                y=0,
+                resize_source=False,
+                mask=_full_mask(g, req, grow),
+            )
+            out = g.out("paste")
         g.add(OUTPUT_NODE, "SaveImage", images=out, filename_prefix=filename_prefix)
         return g.to_dict()
     if _tiles(req):

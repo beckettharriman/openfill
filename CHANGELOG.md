@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Remove object with LaMa keeps the pattern around a large selection. On a brick wall, a selection of about 200 x 300 px or more came back as a flat grey patch with a fine grid and no mortar lines, because LaMa ran at the image's own size and it only learned to fill holes about this big. A selection longer than 256 px is now cleared at the size where its longer side is 256 px, scaled back up and pasted into the selection only, so everything around it stays sharp. Smaller selections still run at full size.
 - Fixed in OpenFill for PhotoCraft 0.2.6: on Windows the installer said PhotoCraft is not installed when PhotoCraft 0.17 or newer was installed just for you.
 
 ## [2.0.0-beta.7] - 2026-11-08

@@ -139,7 +139,9 @@ class NativeGraphTests(unittest.TestCase):
         )
 
     def test_lama_runs_at_full_size_through_openfills_node(self):
-        plan = g.plan_native_removal(g.Rect(570, 1080, 3150, 1800), g.Rect(0, 0, 4344, 3258))
+        # a selection LaMa can fill at 1:1 (its longer side at most NATIVE_LAMA_MAX_HOLE)
+        side = g.NATIVE_LAMA_MAX_HOLE
+        plan = g.plan_native_removal(g.Rect(1700, 1960, side - 40, side), g.Rect(0, 0, 4344, 3258))
         self.assertEqual(plan.work.scale, 1.0)
         self.assertEqual((plan.work.width, plan.work.height), (plan.context.width, plan.context.height))
         graph = w.build_fill(self._req(LAMA, plan), "i", "m", 3, w.Capabilities(True, native_lama=True))
@@ -149,6 +151,61 @@ class NativeGraphTests(unittest.TestCase):
         self.assertNotIn("ImageScale", classes)  # never resized
         self.assertEqual(graph["mask_grow"]["inputs"]["blur"], 0)  # hard, grown mask as before
         self.assertEqual(graph[w.OUTPUT_NODE]["inputs"]["images"], ["remove", 0])
+
+    def test_a_large_hole_is_worked_at_the_size_lama_fills_patterns_at(self):
+        # On a brick wall a 300 x 400 px hole at 1:1 came back as a flat grey patch with a
+        # fine grid; the hole is now worked at NATIVE_LAMA_MAX_HOLE px on its longer side.
+        sel, image = g.Rect(426, 358, 211, 307), g.Rect(0, 0, 1024, 1024)
+        plan = g.plan_native_removal(sel, image)
+        ctx = plan.context
+        self.assertEqual(ctx, g.context_rect(sel, image, g.INPAINT_MODEL, padding_ratio=g.REMOVAL_MODEL_PADDING))
+        self.assertLess(plan.work.scale, 1.0)
+        self.assertAlmostEqual(307 * plan.work.scale, g.NATIVE_LAMA_MAX_HOLE, delta=4)
+        self.assertEqual((plan.work.width % 8, plan.work.height % 8), (0, 0))
+        self.assertEqual(plan.tiles, ())
+        # the whole car: about the same scale it was given, not an eighth of it
+        car = g.plan_native_removal(g.Rect(570, 1080, 3150, 1800), g.Rect(0, 0, 4344, 3258))
+        self.assertAlmostEqual(3150 * car.work.scale, g.NATIVE_LAMA_MAX_HOLE, delta=12)
+        # turned off: 1:1 as before
+        self.assertEqual(g.plan_native_removal(sel, image, max_hole=0).work.scale, 1.0)
+
+    def test_a_scaled_hole_is_pasted_back_into_the_full_size_crop(self):
+        plan = g.plan_native_removal(g.Rect(426, 358, 211, 307), g.Rect(0, 0, 1024, 1024))
+        mp = g.mask_params(g.Rect(426, 358, 211, 307), plan.work.scale)
+        req = w.PlannedInpaintRequest(
+            image_png=b"",
+            mask_png=b"",
+            width=plan.context.width,
+            height=plan.context.height,
+            work_width=plan.work.width,
+            work_height=plan.work.height,
+            prompt="",
+            negative="",
+            model=LAMA,
+            sampling=Sampling(steps=1, batch=1, seed=5),
+            grow=mp.grow_work,
+            full_grow=mp.grow_image,
+        )
+        graph = w.build_fill(req, "i", "m", 3, w.Capabilities(True, native_lama=True))
+        self.assertEqual(graph["image_scale"]["inputs"]["width"], plan.work.width)
+        self.assertEqual(graph["remove"]["inputs"]["image"], ["image_scale", 0])
+        self.assertEqual(graph["mask_grow"]["inputs"]["grow"], mp.grow_work)
+        back = graph["out_scale"]["inputs"]
+        self.assertEqual((back["width"], back["height"]), (plan.context.width, plan.context.height))
+        paste = graph["paste"]["inputs"]
+        self.assertEqual(graph["paste"]["class_type"], "ImageCompositeMasked")
+        self.assertEqual(paste["destination"], ["load_image", 0])  # the original, full size
+        self.assertEqual(paste["source"], ["out_scale", 0])
+        self.assertEqual(paste["mask"], ["fmask", 0])
+        self.assertEqual(graph["fmask_grow"]["inputs"]["grow"], mp.grow_image)  # the hole at full size
+        self.assertEqual(graph["fmask_grow"]["inputs"]["blur"], 0)
+        self.assertEqual(graph[w.OUTPUT_NODE]["inputs"]["images"], ["paste", 0])
+        # a plain request (no full_grow): the model grow scaled back up
+        plain = w.InpaintRequest(**{f: getattr(req, f) for f in w.InpaintRequest.__dataclass_fields__})
+        graph = w.build_fill(plain, "i", "m", 3, w.Capabilities(True, native_lama=True))
+        self.assertEqual(
+            graph["fmask_grow"]["inputs"]["grow"], round(mp.grow_work * plan.context.width / plan.work.width)
+        )
 
     def test_without_the_node_lama_uses_comfyui_inpaint_nodes(self):
         plan = g.plan_native_removal(g.Rect(1700, 1960, 620, 680), g.Rect(0, 0, 4344, 3258))
