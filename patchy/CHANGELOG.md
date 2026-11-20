@@ -5,6 +5,11 @@ All notable changes to OpenFill for Patchy are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Upscale tab, from the same panel as PhotoCraft: a bigger copy of the whole image, 2x or 4x, as a new document. Needs Real-ESRGAN from Models.
+- FLUX.2 [klein] 4B for Fill and Expand, and your own ComfyUI workflow (Generation > Advanced) as one more Fill model, as in PhotoCraft.
+
 ## [0.1.0] - 2026-11-08
 
 - Remove Background (Cutout tab): cuts the subject out into a new layer with BiRefNet, by Pedro (PedroArthurr) ([#11](https://github.com/beckettharriman/openfill/pull/11)), from the same panel as PhotoCraft. Needs ComfyUI 0.39 or newer and BiRefNet from Models.

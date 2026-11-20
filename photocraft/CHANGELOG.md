@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version numbers below (0.2.x) are OpenFill for PhotoCraft's own, not PhotoCraft's.
 Each entry from now on says which PhotoCraft versions it works with.
 
+## [Unreleased]
+
+Added:
+- Upscale tab: a bigger copy of the whole image, 2x or 4x, opens as a new document. The original isn't changed. Needs Real-ESRGAN (64 MB) from the model manager. SeedVR2 3B is there too for slower upscales that restore detail.
+- FLUX.2 [klein] 4B for Fill and Expand, used only when you pick it. The 9B model is listed as untested and non-commercial.
+- Generation > Advanced: use your own ComfyUI workflow (saved with Export (API)) as one more model for Fill.
+
 ## [0.2.6] - 2026-11-08 · works with PhotoCraft 0.12 to 0.20
 
 Fixed (update recommended on Windows):

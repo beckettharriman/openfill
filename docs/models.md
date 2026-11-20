@@ -4,14 +4,17 @@
 
 OpenFill doesn't ship a model. These are the models in its verified list. Each
 has its own license, and the model manager links to it. **Check the license
-before you use a result commercially: MAT and everything that runs on FLUX.1
-Fill are non-commercial.**
+before you use a result commercially: MAT, everything that runs on FLUX.1
+Fill, and FLUX.2 [klein] 9B are non-commercial.**
 
 | Model | Download | Graphics memory | For | License |
 |---|---|---|---|---|
 | LaMa | 0.2 GB | 2 GB | Remove (default) | Apache-2.0 |
 | MAT Places512 | 0.1 GB | 2 GB | Remove | **CC BY-NC 4.0, non-commercial** |
 | BiRefNet | 0.4 GB | 2 GB | Remove Background (PhotoCraft panel, Cutout) | MIT |
+| Real-ESRGAN x4plus | 64 MB | 2 GB | Upscale 2x and 4x | BSD-3-Clause |
+| SeedVR2 3B int8 | 3.7 GB | 8 GB | Upscale (slow, restores detail) | Apache-2.0 |
+| SeedVR2 7B int8 (untested) | 8.2 GB | 12 GB | Upscale | Apache-2.0 |
 | RORem (SDXL eraser) | 6.5 GB | 8 GB | Remove | Apache-2.0 |
 | FLUX.1 Fill object removal LoRA | 0.3 GB, runs on FLUX.1 Fill | 8 GB | Remove | MIT for the LoRA, but FLUX.1 Fill is **non-commercial** |
 | DreamShaper 8 Inpainting | 2.0 GB | 4 GB | Fill, Expand, Create | CreativeML OpenRAIL-M |
@@ -25,6 +28,8 @@ Fill are non-commercial.**
 | FLUX.1 Fill dev, GGUF Q6 | 12.9 GB | 12 GB | Fill, Expand | **FLUX.1 [dev] Non-Commercial License** |
 | FLUX.1 Fill dev (full) | 27.3 GB | 16 GB | Fill, Expand | **FLUX.1 [dev] Non-Commercial License** |
 | Qwen Image Edit 2511, GGUF Q4 | 21.3 GB | 12 GB | Fill, Expand | Apache-2.0 |
+| FLUX.2 [klein] 4B fp8 | 11.6 GB | 8 GB | Fill, Expand | Apache-2.0 |
+| FLUX.2 [klein] 9B fp8 (untested) | 17.2 GB | 12 GB | Fill, Expand | **FLUX Non-Commercial License** |
 
 Sizes are in GiB, as the model manager shows them. Any model can also be
 picked for Remove. Your own SD 1.5 inpainting, SDXL and FLUX.1 Fill files in
@@ -94,7 +99,9 @@ template in `workflow.py`. Only models of these families are offered.
 | Stable Diffusion XL (`sdxl`) | `sdxl_fooocus` | Fill, Expand, Text to Image; any regular SDXL 1.0 checkpoint plus the Fooocus inpaint patch | verified list; Hugging Face fine-tunes of `stabilityai/stable-diffusion-xl-base-1.0`; most downloaded Civitai SDXL 1.0 checkpoints. Turbo, Lightning, LCM, Hyper and DMD distillations and SDXL inpainting models are excluded (they need other sampler settings or break the patch) |
 | FLUX.1 Fill (`flux-fill`) | `flux_fill` | Fill, Expand; best quality, 8 GB and up | verified list; Hugging Face search "FLUX.1-Fill" and quantizations/fine-tunes of `black-forest-labs/FLUX.1-Fill-dev`, GGUF or single-file safetensors |
 | Qwen-Image-Edit (`qwen-edit`) | `qwen_edit` | Fill, Expand, instruction edits; 12 GB and up, or slower with offloading | verified list; Hugging Face search "Qwen-Image-Edit" (GGUF or safetensors) |
+| FLUX.2 [klein] (`flux2-klein`) | `flux2_edit` | Fill, Expand; 4 steps, used only when picked | verified list only |
 | Object removal (`removal`) | `inpaint_model` | Remove object, no prompt | verified list only (LaMa, MAT) |
+| Upscale (`upscale`) | `upscale_model`, `seedvr2` | Upscale the whole image 2x or 4x into a new image | verified list only (Real-ESRGAN, SeedVR2) |
 
 A FLUX or Qwen candidate from the hubs is only the diffusion model file. The
 text encoders, the VAE and the custom node pack it needs are taken verbatim
@@ -270,6 +277,16 @@ of the companion files that live candidates reuse.
 | `birefnet` | Background removal | 424 MB | 2 GB | MIT | no | https://huggingface.co/ZhengPeng7/BiRefNet |
 | `rorem-sdxl` | Object removal (SDXL eraser) | 6.5 GB | 8 GB | Apache-2.0 | no | https://huggingface.co/LetsThink/RORem |
 | `flux1-fill-object-removal-lora` | Object removal (LoRA on FLUX.1 Fill) | 0.3 GB | 8 GB | MIT for the LoRA; FLUX.1 [dev] Non-Commercial for FLUX.1 Fill | no | https://huggingface.co/lrzjason/ObjectRemovalFluxFill |
+| `flux2-klein-4b-fp8` | FLUX.2 [klein] | 11.6 GB | 8 GB | Apache-2.0 | no | https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8 |
+| `flux2-klein-9b-fp8` | FLUX.2 [klein] (untested) | 17.2 GB | 12 GB | FLUX Non-Commercial | yes | https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8 |
+| `realesrgan-x4plus` | Upscale | 64 MB | 2 GB | BSD-3-Clause | no | https://github.com/xinntao/Real-ESRGAN |
+| `seedvr2-3b-int8` | Upscale | 3.7 GB | 8 GB | Apache-2.0 | no | https://huggingface.co/ByteDance-Seed/SeedVR2-3B |
+| `seedvr2-7b-int8` | Upscale (untested) | 8.2 GB | 12 GB | Apache-2.0 | no | https://huggingface.co/ByteDance-Seed/SeedVR2-7B |
+
+The entries marked untested are in the list because they use the same graph as
+a tested sibling, but I could not run them myself: FLUX.2 [klein] 9B is gated
+and 18 GB, SeedVR2 7B needs more than my 8 GB card. Their files are pinned and
+checksummed like the rest.
 
 (Sizes in GiB as the Models tab shows them.) Each entry records id, display
 name (messages use only the part before the packaging details in
@@ -378,6 +395,93 @@ quality upgrade.
 If a request fails with an out-of-memory message, use a smaller selection,
 fewer variations, or an SD 1.5 model. `--lowvram` can be added through
 "Extra ComfyUI options" (Settings > General > Connection and troubleshooting).
+
+## Upscale
+
+Upscale makes a copy of the whole visible image 2x or 4x bigger and opens it
+as a new image. The original isn't changed. In GIMP it's
+`Filters > OpenFill > Upscale...`; in the PhotoCraft panel and Patchy, the
+Upscale tab. It runs on ComfyUI only (not on a cloud service).
+
+- **Real-ESRGAN x4plus** (default, 64 MB, BSD-3-Clause) runs through ComfyUI's
+  own `UpscaleModelLoader` and `ImageUpscaleWithModel` nodes. That node works in
+  512 px tiles and halves the tile when the graphics memory runs out, so any
+  image size fits an 8 GB card. It is a 4x model: a 2x upscale is made at 4x and
+  resized down with lanczos. No custom node pack is needed.
+- **SeedVR2 3B int8** (3.7 GB, Apache-2.0) is a one-step diffusion upscaler that
+  restores detail instead of only sharpening. It runs on ComfyUI's own SeedVR2
+  nodes (ComfyUI 0.39 and newer), the same graph as ComfyUI's SeedVR2 image
+  upscale template, with tiled VAE encode and decode. It is much slower than
+  Real-ESRGAN and its result is kept to 16.8 megapixels.
+- **SeedVR2 7B int8** (8.2 GB) is listed as untested: it needs 12 GB or more.
+
+The result is limited to 100 megapixels and 16384 pixels per side; for a
+bigger image, OpenFill says to use 2x instead.
+
+### SeedVR2: why no custom node
+
+Issue #18 asked for SeedVR2 through numz's ComfyUI-SeedVR2_VideoUpscaler node
+pack. Since 0.39, ComfyUI has its own SeedVR2 nodes and Comfy-Org publishes the
+models for them (`Comfy-Org/SeedVR2`, including `seedvr2_3b_int8_convrot` and
+`seedvr2_7b_int8_convrot`). OpenFill uses those, so there is no extra node pack
+to install into your ComfyUI and nothing downloads models on its own at run
+time. The int8 files use ComfyUI's own int8 format; I tested them on an RTX
+4070 Laptop GPU only.
+
+## Newer models asked for in #18
+
+| Asked for | What exists | In OpenFill |
+|---|---|---|
+| flux-2-klein-9b-fp8 | `black-forest-labs/FLUX.2-klein-9b-fp8` (9.4 GB, gated, FLUX Non-Commercial License), with Comfy-Org's Qwen3 8B text encoder | Listed as `flux2-klein-9b-fp8`, untested, non-commercial. Same graph as the 4B model, which I tested. |
+| (FLUX.2 [klein] 4B) | `black-forest-labs/FLUX.2-klein-4b-fp8` (4.1 GB, Apache-2.0) | `flux2-klein-4b-fp8`, tested. |
+| flux3_image_klein_base_int8 | `black-forest-labs/flux-3-image-klein-comfy`, file `flux3-image-klein-base-int8-convrot.safetensors` (5.8 GB, gated, FLUX Kommunity License), released 2026-10-13 | Left out for now. ComfyUI 0.40 (the newest I have) has no local FLUX.3 support, so I could not run it. "base" is the undistilled model for fine-tuning, much slower than the distilled one. |
+| qwen_image_2.1_int8 | `Comfy-Org/Qwen-Image-2.1`, file `qwen_image_2.1_int8_convrot.safetensors` (7.3 GB), Qwen Research License (**non-commercial**) | Left out for now. Its edit graph uses new nodes (`TextEncodeQwenImage21`, `QwenImage21Cache`) and a 9.4 GB Qwen3-VL 8B text encoder, about 17 GB in all, too much to test on 8 GB. |
+| seedvr2_7b_int8 | `Comfy-Org/SeedVR2`, `seedvr2_7b_int8_convrot.safetensors` | Listed as `seedvr2-7b-int8`, untested (12 GB and up). SeedVR2 3B int8 is tested. |
+
+FLUX.3 [klein] and Qwen-Image 2.1 can still be used today through a custom
+workflow (below), if your ComfyUI is new enough to run them.
+
+## Custom ComfyUI workflow (Advanced)
+
+Any workflow you can run in ComfyUI can be one more model for Fill:
+
+1. In ComfyUI, build an inpaint workflow that starts from a **Load Image** node
+   and ends in a **Save Image** node, and save it with
+   `Workflow > Export (API)`. The normal save format doesn't work; OpenFill
+   says so if you pick it.
+2. In the PhotoCraft panel: gear > Generation > Advanced. In GIMP:
+   `Generative Fill Settings` > Advanced generation. Type the file's path and save.
+3. Fill now offers "Custom workflow (file name)" in its model list.
+
+OpenFill sends the workflow:
+
+- the picture: the selection's surroundings, with the selection as its alpha.
+  So a Load Image node's MASK output is the selection, as when you paint a mask
+  in ComfyUI;
+- the mask, when the workflow has a separate node for it (a Load Image Mask, or
+  a second Load Image named "mask" or turned into a mask);
+- the prompt, in the text node that feeds a sampler's positive input, and the
+  negative prompt in the one that feeds the negative input;
+- a seed, in every `seed` and `noise_seed` field.
+
+Both pictures are resized to OpenFill's working size (about 1024 px) inside the
+workflow, and the image of its Save Image node is resized back and put on the
+selection like any other fill. OpenFill saves the result with its own node, so
+the workflow's own Save Image and Preview Image nodes are left out.
+
+When it finds the wrong node, name them in **Workflow inputs**, for example
+`image=10, mask=11, prompt=6.text, negative=7.text, seed=3.seed, output=9`.
+`mask=alpha` puts the selection only in the picture's alpha; `prompt=none` (or
+`negative=none`, `seed=none`) leaves that input as it is in the workflow. The
+settings show what OpenFill found.
+
+The file is only read as JSON and checked: node ids, class names and values
+must be plain JSON, and every link must point at a node of the workflow.
+Nothing in it runs on your computer; it goes to your own ComfyUI, like
+OpenFill's own graphs. It runs with the Local backend only: the Remote GPU's
+server runs only OpenFill's own graphs, and a cloud service doesn't run ComfyUI
+workflows. Custom node packs the workflow needs must already be in your
+ComfyUI; OpenFill doesn't install them.
 
 ## Adding other models by hand
 
