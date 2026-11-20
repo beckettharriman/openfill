@@ -28,6 +28,7 @@ class Capabilities:
     inpaint_nodes: bool = False
     native_lama: bool = False  # OpenFill's own node pack (OpenFillLamaNative) is loaded
     bg_removal: bool = False  # ComfyUI's own BiRefNet nodes (RemoveBackground) are on the server
+    seedvr2: bool = False  # ComfyUI's own SeedVR2 nodes (ComfyUI 0.39 and newer)
 
 
 class Graph:
@@ -800,6 +801,167 @@ def build_qwen_edit(
     return _finish(g, req, g.out("decode"), mask, caps, filename_prefix)
 
 
+def _flux2_loaders(g: Graph, spec: ModelSpec) -> tuple[list, list, list]:
+    """UNet / Qwen3 text encoder / FLUX.2 VAE loaders for FLUX.2 [klein], GGUF or safetensors."""
+    if _is_gguf(spec.unet):
+        g.add("unet", "UnetLoaderGGUF", unet_name=spec.unet)
+    else:
+        g.add("unet", "UNETLoader", unet_name=spec.unet, weight_dtype="default")
+    if _is_gguf(spec.clip1):
+        g.add("clip", "CLIPLoaderGGUF", clip_name=spec.clip1, type="flux2")
+    else:
+        g.add("clip", "CLIPLoader", clip_name=spec.clip1, type="flux2")
+    g.add("vae", "VAELoader", vae_name=spec.vae)
+    return g.out("unet"), g.out("clip"), g.out("vae")
+
+
+def build_flux2_edit(
+    req: InpaintRequest,
+    image_ref: str,
+    mask_ref: str,
+    seed: int,
+    caps: Capabilities,
+    filename_prefix: str = "openfill/flux2",
+) -> dict:
+    """FLUX.2 [klein]: the context goes in as a reference image (ReferenceLatent, as in
+    ComfyUI's own Klein edit graph) and new pixels are sampled only under the mask (a
+    latent noise mask on the encoded context). Distilled Klein samples in 4 steps at
+    guidance 1.0; ComfyUI's Flux2Scheduler sets the shift for the working size."""
+    g = Graph()
+    model, clip, vae = _flux2_loaders(g, req.model)
+    positive, negative = _prompts(g, clip, req.prompt, req.negative)
+    image, mask = _load_inputs(g, req, image_ref, mask_ref, caps)
+    g.add("encode", "VAEEncode", pixels=image, vae=vae)
+    g.add("pos_ref", "ReferenceLatent", conditioning=positive, latent=g.out("encode"))
+    g.add("neg_ref", "ReferenceLatent", conditioning=negative, latent=g.out("encode"))
+    g.add("noise_mask", "SetLatentNoiseMask", samples=g.out("encode"), mask=mask)
+    latent = g.out("noise_mask")
+    batch = max(1, int(req.sampling.batch))
+    if batch > 1:
+        g.add("batch", "RepeatLatentBatch", samples=latent, amount=batch)
+        latent = g.out("batch")
+    g.add(
+        "guider",
+        "CFGGuider",
+        model=model,
+        positive=g.out("pos_ref"),
+        negative=g.out("neg_ref"),
+        cfg=float(req.sampling.cfg),
+    )
+    g.add("sampler_select", "KSamplerSelect", sampler_name="euler")
+    g.add(
+        "scheduler",
+        "Flux2Scheduler",
+        steps=int(req.sampling.steps),
+        width=int(req.work_width),
+        height=int(req.work_height),
+    )
+    sigmas = g.out("scheduler")
+    denoise = float(req.sampling.denoise)
+    if 0.0 < denoise < 1.0:
+        g.add("sigmas_split", "SplitSigmasDenoise", sigmas=sigmas, denoise=denoise)
+        sigmas = g.out("sigmas_split", 1)
+    g.add("noise", "RandomNoise", noise_seed=int(seed))
+    g.add(
+        "sampler",
+        "SamplerCustomAdvanced",
+        noise=g.out("noise"),
+        guider=g.out("guider"),
+        sampler=g.out("sampler_select"),
+        sigmas=sigmas,
+        latent_image=latent,
+    )
+    g.add("decode", "VAEDecode", samples=g.out("sampler"), vae=vae)
+    return _finish(g, req, g.out("decode"), mask, caps, filename_prefix)
+
+
+# Upscale. Real-ESRGAN class models run through ComfyUI's own upscale nodes:
+# ImageUpscaleWithModel works in 512 px tiles and halves the tile when the graphics memory
+# runs out, so any image fits a small card. The result is then resized to exactly the size
+# asked for (a 4x model doing a 2x upscale is resized down with lanczos).
+SEEDVR2_TILE = 512  # VAE tile and overlap (px) of the SeedVR2 graph: ComfyUI's own template values
+SEEDVR2_TILE_OVERLAP = 128
+SEEDVR2_COLOR_FIX = "lab"  # SeedVR2PostProcessing: colour transfer from the resized original
+
+
+def build_upscale(
+    req: InpaintRequest,
+    image_ref: str,
+    mask_ref: str,
+    seed: int,
+    caps: Capabilities,
+    filename_prefix: str = "openfill/upscale",
+) -> dict:
+    """Upscale the whole image (``req.width`` x ``req.height``) to ``req.work_width`` x
+    ``req.work_height`` with an upscale model. The mask file and the seed are not used."""
+    if not req.model.upscale_model:
+        raise ValueError("Upscale needs an upscale model (Real-ESRGAN)")
+    g = Graph()
+    g.add("load_image", "LoadImage", image=image_ref)
+    g.add("upscale_model", "UpscaleModelLoader", model_name=req.model.upscale_model)
+    g.add("upscale", "ImageUpscaleWithModel", upscale_model=g.out("upscale_model"), image=g.out("load_image", 0))
+    out = _scale_image(g, "out_scale", g.out("upscale"), req.work_width, req.work_height)
+    g.add(OUTPUT_NODE, "SaveImage", images=out, filename_prefix=filename_prefix)
+    return g.to_dict()
+
+
+def build_seedvr2(
+    req: InpaintRequest,
+    image_ref: str,
+    mask_ref: str,
+    seed: int,
+    caps: Capabilities,
+    filename_prefix: str = "openfill/seedvr2",
+) -> dict:
+    """Upscale with SeedVR2 (ComfyUI's own nodes, 0.39 and newer), as in ComfyUI's SeedVR2
+    image upscale template: the image is resized to the new size, then SeedVR2 restores
+    detail in one step, with tiled VAE encode and decode so a large image fits the
+    graphics memory."""
+    if not caps.seedvr2:
+        raise ValueError("SeedVR2 needs ComfyUI 0.39 or newer (its SeedVR2 nodes)")
+    spec = req.model
+    if not (spec.unet and spec.vae):
+        raise ValueError("SeedVR2 needs its model and its VAE")
+    g = Graph()
+    g.add("load_image", "LoadImage", image=image_ref)
+    resized = _scale_image(g, "resize", g.out("load_image", 0), req.work_width, req.work_height)
+    g.add("unet", "UNETLoader", unet_name=spec.unet, weight_dtype="default")
+    g.add("vae", "VAELoader", vae_name=spec.vae)
+    g.add("prepare", "SeedVR2Preprocess", resized_images=resized)
+    tiles = {
+        "tile_size": SEEDVR2_TILE,
+        "overlap": SEEDVR2_TILE_OVERLAP,
+        "temporal_size": 4096,
+        "temporal_overlap": 8,
+    }
+    g.add("encode", "VAEEncodeTiled", pixels=g.out("prepare"), vae=g.out("vae"), **tiles)
+    g.add("condition", "SeedVR2Conditioning", model=g.out("unet"), vae_conditioning=g.out("encode"))
+    g.add(
+        "sampler",
+        "KSampler",
+        model=g.out("unet"),
+        positive=g.out("condition", 0),
+        negative=g.out("condition", 1),
+        latent_image=g.out("encode"),
+        seed=int(seed),
+        steps=1,
+        cfg=1.0,
+        sampler_name="euler",
+        scheduler="simple",
+        denoise=1.0,
+    )
+    g.add("decode", "VAEDecodeTiled", samples=g.out("sampler"), vae=g.out("vae"), **tiles)
+    g.add(
+        "finish",
+        "SeedVR2PostProcessing",
+        images=g.out("decode"),
+        original_resized_images=resized,
+        color_correction_method=SEEDVR2_COLOR_FIX,
+    )
+    g.add(OUTPUT_NODE, "SaveImage", images=g.out("finish"), filename_prefix=filename_prefix)
+    return g.to_dict()
+
+
 # The prompts erase-trained models run with (positive, negative). RORem's authors found
 # content-free quality words help; the FLUX Fill removal LoRA needs no prompt.
 ERASER_PROMPTS = {
@@ -1011,15 +1173,46 @@ def _removal_refine(
     return dest
 
 
+def build_custom(
+    req: InpaintRequest,
+    image_ref: str,
+    mask_ref: str,
+    seed: int,
+    caps: Capabilities,
+    filename_prefix: str = "openfill/custom",
+) -> dict:
+    """The user's own ComfyUI workflow (``custom_workflow``) with this request's inputs."""
+    from . import custom_workflow
+
+    wf = req.model.custom
+    if not isinstance(wf, custom_workflow.CustomWorkflow):
+        raise ValueError("no custom workflow is loaded")
+    return custom_workflow.build(
+        wf,
+        image_ref,
+        mask_ref,
+        req.prompt,
+        req.negative,
+        seed,
+        (req.width, req.height),
+        (req.work_width, req.work_height),
+        filename_prefix,
+    )
+
+
 BUILDERS = {
     "sd15_inpaint": build_inpaint,
     "sdxl_fooocus": build_inpaint,
     "flux_fill": build_flux_fill,
+    "flux2_edit": build_flux2_edit,
     "qwen_edit": build_qwen_edit,
     "inpaint_model": build_removal,
     "sdxl_eraser": build_inpaint,
     "flux_eraser": build_inpaint,
     "bgremove": build_bgremove,
+    "upscale_model": build_upscale,
+    "seedvr2": build_seedvr2,
+    "custom_workflow": build_custom,
 }
 
 
@@ -1047,7 +1240,9 @@ def build_txt2img(req: Txt2ImgRequest, seed: int, filename_prefix: str = "openfi
     g = Graph()
     if req.model.effective_template == "flux_fill":
         raise ValueError("FLUX.1 Fill is an inpainting model; use it for Generative Fill or Expand")
-    if req.model.effective_template in ("qwen_edit", "inpaint_model"):
+    if req.model.effective_template in ("qwen_edit", "inpaint_model", "flux2_edit", "custom_workflow"):
+        raise ValueError("the active model does not support text to image")
+    if req.model.upscaler or req.model.background_removal:
         raise ValueError("the active model does not support text to image")
     model, clip, vae = _checkpoint(g, req.model.checkpoint)
     positive, negative = _prompts(g, clip, req.prompt, req.negative)
@@ -1077,11 +1272,19 @@ def build_txt2img(req: Txt2ImgRequest, seed: int, filename_prefix: str = "openfi
     return g.to_dict()
 
 
+STEP_NODES = ("KSampler", "KSamplerAdvanced", "Flux2Scheduler", "BasicScheduler")
+
+
 def total_steps(graph: dict) -> int:
     """Sum of sampler steps in a graph (for progress estimation)."""
-    return sum(
-        int(n["inputs"].get("steps", 0)) for n in graph.values() if n["class_type"] in ("KSampler", "KSamplerAdvanced")
-    )
+    total = 0
+    for node in graph.values():
+        if node.get("class_type") in STEP_NODES:
+            try:
+                total += int((node.get("inputs") or {}).get("steps", 0))
+            except (TypeError, ValueError):
+                continue  # a step count from a link (a custom workflow): not known here
+    return total
 
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -1151,6 +1354,7 @@ def describe_node_errors(node_errors: dict, graph: dict) -> str:
 # checks that every Graph.add in this file names one of them: add new types here.
 NODE_CLASSES = frozenset(
     {
+        "CFGGuider",
         "CFGNorm",
         "CLIPLoader",
         "CLIPLoaderGGUF",
@@ -1161,6 +1365,7 @@ NODE_CLASSES = frozenset(
         "DualCLIPLoader",
         "DualCLIPLoaderGGUF",
         "EmptyLatentImage",
+        "Flux2Scheduler",
         "FluxGuidance",
         "GrowMask",
         "INPAINT_ApplyFooocusInpaint",
@@ -1179,10 +1384,12 @@ NODE_CLASSES = frozenset(
         "ImageFromBatch",
         "ImageScale",
         "ImageToMask",
+        "ImageUpscaleWithModel",
         "InpaintModelConditioning",
         "InvertMask",
         "JoinImageWithAlpha",
         "KSampler",
+        "KSamplerSelect",
         "LoadBackgroundRemovalModel",
         "LoadImage",
         "LoraLoaderModelOnly",
@@ -1190,17 +1397,27 @@ NODE_CLASSES = frozenset(
         "MaskToImage",
         "ModelSamplingAuraFlow",
         NATIVE_LAMA_NODE,
+        "RandomNoise",
+        "ReferenceLatent",
         "RemoveBackground",
         "RepeatImageBatch",
         "RepeatLatentBatch",
+        "SamplerCustomAdvanced",
         "SaveImage",
+        "SeedVR2Conditioning",
+        "SeedVR2PostProcessing",
+        "SeedVR2Preprocess",
         "SetLatentNoiseMask",
         "SolidMask",
+        "SplitSigmasDenoise",
         "TextEncodeQwenImageEditPlus",
         "UNETLoader",
         "UnetLoaderGGUF",
+        "UpscaleModelLoader",
         "VAEDecode",
+        "VAEDecodeTiled",
         "VAEEncode",
+        "VAEEncodeTiled",
         "VAELoader",
     }
 )

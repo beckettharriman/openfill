@@ -52,9 +52,25 @@ FIT_LABELS = {
 # Graphics memory a model family needs at the least, even with offloading
 # (ComfyUI keeps the active blocks and the latent on the card). Qwen Edit Q4
 # offloaded on an 8 GB card took 664 s for one job, so it needs more than 8 GB.
-OFFLOAD_FLOOR_GB = {"sd15": 2.0, "sdxl": 4.0, "flux": 6.0, "qwen_image": 10.0, "inpaint_model": 1.0}
+OFFLOAD_FLOOR_GB = {
+    "sd15": 2.0,
+    "sdxl": 4.0,
+    "flux": 6.0,
+    "flux2": 6.0,
+    "qwen_image": 10.0,
+    "inpaint_model": 1.0,
+    "upscale": 1.0,
+}
 # Working memory on top of the weights (activations, VAE decode, CUDA context).
-OVERHEAD_GB = {"sd15": 1.5, "sdxl": 1.5, "flux": 2.0, "qwen_image": 2.5, "inpaint_model": 0.5}
+OVERHEAD_GB = {
+    "sd15": 1.5,
+    "sdxl": 1.5,
+    "flux": 2.0,
+    "flux2": 2.0,
+    "qwen_image": 2.5,
+    "inpaint_model": 0.5,
+    "upscale": 1.0,
+}
 # Spare free disk space required after a download.
 DISK_MARGIN = 1 * GB
 

@@ -37,19 +37,25 @@ from typing import Any
 from .backend import ModelSpec
 from .downloads import safe_relative_path, validate_node_spec
 
-TIERS = ("fast", "quality", "edit", "removal")
-CAPABILITIES = ("fill", "expand", "txt2img", "remove", "edit", "patch", "bgremove")
+TIERS = ("fast", "quality", "edit", "removal", "upscale")
+CAPABILITIES = ("fill", "expand", "txt2img", "remove", "edit", "patch", "bgremove", "upscale")
 SOURCE_TYPES = ("first-party", "community-quantization")
 TEMPLATES = (
     "sd15_inpaint",
     "sdxl_fooocus",
     "flux_fill",
+    "flux2_edit",
     "qwen_edit",
     "inpaint_model",
     "sdxl_eraser",
     "flux_eraser",
     "bgremove",
+    "upscale_model",
+    "seedvr2",
 )
+# Upscale models: the whole image, bigger (Real-ESRGAN through ComfyUI's own upscale nodes,
+# SeedVR2 through ComfyUI's own SeedVR2 nodes).
+UPSCALE_TEMPLATES = ("upscale_model", "seedvr2")
 # Erase-trained diffusion models: they run Remove object with their own prompt and
 # settings (RORem on SDXL inpainting; an object-removal LoRA on FLUX.1 Fill).
 ERASER_TEMPLATES = ("sdxl_eraser", "flux_eraser")
@@ -57,9 +63,11 @@ ARCHS = {
     "sd15": "sd15",
     "sdxl": "sdxl",
     "flux": "flux",
+    "flux2": "flux2",
     "qwen_image": "qwen_image",
     "inpaint_model": "inpaint_model",
     "bg_removal": "bg_removal",
+    "upscale": "upscale",
 }
 SOURCES = ("bundled", "huggingface", "civitai")
 
@@ -68,18 +76,23 @@ FAMILIES: dict[str, str] = {
     "sd15-inpaint": "Stable Diffusion 1.5 inpainting",
     "sdxl": "Stable Diffusion XL",
     "flux-fill": "FLUX.1 Fill",
+    "flux2-klein": "FLUX.2 [klein]",
     "qwen-edit": "Qwen-Image-Edit",
     "removal": "Object removal",
+    "upscale": "Upscale",
 }
 FAMILY_OF_TEMPLATE = {
     "sd15_inpaint": "sd15-inpaint",
     "sdxl_fooocus": "sdxl",
     "flux_fill": "flux-fill",
+    "flux2_edit": "flux2-klein",
     "qwen_edit": "qwen-edit",
     "inpaint_model": "removal",
     "sdxl_eraser": "removal",
     "flux_eraser": "removal",
     "bgremove": "removal",
+    "upscale_model": "upscale",
+    "seedvr2": "upscale",
 }
 TEMPLATE_ARCH = {"sd15_inpaint": "sd15", "sdxl_fooocus": "sdxl", "flux_fill": "flux", "qwen_edit": "qwen_image"}
 # Operations of the plug-in and the capabilities that can serve them.
@@ -90,6 +103,7 @@ OPERATION_CAPABILITIES = {
     "edit": ("edit",),
     "remove": ("remove", "fill"),  # Remove object falls back to a prompt-led fill without LaMa/MAT
     "bgremove": ("bgremove",),  # Remove Background: BiRefNet only, there is no fallback
+    "upscale": ("upscale",),  # Upscale: Real-ESRGAN or SeedVR2
 }
 NO_MODEL_MESSAGE = "No AI model is installed yet. Download the two starting models below to begin."
 HUB_SELECTED_FILENAME = "hub-selected.json"
@@ -833,12 +847,13 @@ EXPAND_PREFERENCE: dict[str, tuple[str, ...]] = {
 # first, then the fills that were acceptable most often on the judged cases.
 AUTO_ACTIVE_ORDER = ("realvisxl-v5", "dreamshaper-8-inpainting", "sd15-inpainting", "juggernaut-xl-v9", "sdxl-base")
 # Families that are only used when picked by hand: FLUX Fill is slow on 8 GB
-# (about 4x RealVisXL for the same results), Qwen Edit needs more than 8 GB.
-OPT_IN_ARCHS = ("flux", "qwen_image")
+# (about 4x RealVisXL for the same results), Qwen Edit needs more than 8 GB, and
+# FLUX.2 [klein] is new and was not part of the judged benchmark behind the defaults.
+OPT_IN_ARCHS = ("flux", "flux2", "qwen_image")
 # First run: the small starting set, then the quality upgrade.
 STARTER_SET = ("lama-big", "dreamshaper-8-inpainting")
 QUALITY_UPGRADE = "realvisxl-v5"
-OPT_IN_FAMILIES = ("flux-fill", "qwen-edit")
+OPT_IN_FAMILIES = ("flux-fill", "flux2-klein", "qwen-edit")
 FIRST_RUN_HINT = (
     "Start with LaMa (object removal, 0.2 GB) and DreamShaper 8 Inpainting (fill and expand, 2 GB). "
     "For better prompted fills add RealVisXL V5 (6.5 GB) later."
@@ -846,7 +861,7 @@ FIRST_RUN_HINT = (
 
 
 def is_opt_in(entry: ModelEntry) -> bool:
-    """True for models the plug-in never picks on its own (FLUX, Qwen)."""
+    """True for models the plug-in never picks on its own (FLUX, FLUX.2 [klein], Qwen)."""
     return entry.arch in OPT_IN_ARCHS
 
 
@@ -856,7 +871,9 @@ def tier_label(entry: ModelEntry) -> str:
         return "Removal"
     if entry.arch == "flux":
         return "Quality (slow)"
-    return {"fast": "Fast", "quality": "Quality", "edit": "Edit", "removal": "Removal"}.get(entry.tier, "")
+    return {"fast": "Fast", "quality": "Quality", "edit": "Edit", "removal": "Removal", "upscale": "Upscale"}.get(
+        entry.tier, ""
+    )
 
 
 def pick_preferred(installed: Iterable[ModelEntry], preference: Iterable[str]) -> ModelEntry | None:
@@ -969,6 +986,7 @@ def model_spec_for(entry: ModelEntry, catalog: Iterable[ModelEntry] = (), models
     spec.inpaint_model = names.get("inpaint_model", "")
     spec.lora = names.get("lora", "")
     spec.bg_removal_model = names.get("bg_removal_model", "")
+    spec.upscale_model = names.get("upscale_model", "")
     if entry.template == "flux_eraser":
         # The LoRA runs on the FLUX.1 Fill entry it requires: its UNet, text encoders and VAE.
         catalog = list(catalog)
@@ -1184,6 +1202,8 @@ def model_role(row: dict[str, Any]) -> str:
         return "quality upgrade"
     if row.get("family") == "flux-fill":
         return "Quality (slow), used only when picked"
+    if row.get("family") == "flux2-klein":
+        return "used only when picked"
     return ""
 
 
@@ -1195,6 +1215,7 @@ JOB_WORDS = {
     "remove": "remove",
     "edit": "edit",
     "bgremove": "remove background",
+    "upscale": "upscale",
 }
 
 

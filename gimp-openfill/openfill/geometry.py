@@ -73,6 +73,7 @@ class ModelProfile:
 SD15 = ModelProfile("sd15", min_side=512, max_side=768, min_context=192)
 SDXL = ModelProfile("sdxl", min_side=768, max_side=1024, min_context=256)
 FLUX = ModelProfile("flux", min_side=768, max_side=1024, min_context=256, multiple=16)
+FLUX2 = ModelProfile("flux2", min_side=768, max_side=1024, min_context=256, multiple=16)
 QWEN = ModelProfile("qwen_image", min_side=768, max_side=1024, min_context=256, multiple=16)
 # LaMa/MAT work best on native-resolution pixels: a 512 px context at 1:1,
 # no upscaling (texture scale would not match the surroundings otherwise).
@@ -83,13 +84,17 @@ QWEN = ModelProfile("qwen_image", min_side=768, max_side=1024, min_context=256, 
 INPAINT_MODEL = ModelProfile("inpaint_model", min_side=256, max_side=512, min_context=512)
 # Cloud models: the service picks its own resolution; this only sizes the context.
 CLOUD = ModelProfile("cloud", min_side=512, max_side=1024, min_context=256)
+# A custom ComfyUI workflow: the model is unknown, so SDXL-like sizes (1024 px, multiples of 16).
+CUSTOM = ModelProfile("custom", min_side=768, max_side=1024, min_context=256, multiple=16)
 PROFILES = {
     "sd15": SD15,
     "sdxl": SDXL,
     "flux": FLUX,
+    "flux2": FLUX2,
     "qwen_image": QWEN,
     "inpaint_model": INPAINT_MODEL,
     "cloud": CLOUD,
+    "custom": CUSTOM,
 }
 
 
