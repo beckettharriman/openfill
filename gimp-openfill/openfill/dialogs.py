@@ -27,6 +27,7 @@ from . import ui_text  # noqa: E402
 
 OK = Gtk.ResponseType.OK
 CANCEL = Gtk.ResponseType.CANCEL
+CUSTOM_WORKFLOW_ID = "custom-workflow"  # openfill.app.CUSTOM_WORKFLOW_ID: the Advanced custom workflow
 
 # GIMP's theme draws "suggested-action" like any other button, so the one
 # obvious button of each window gets its own colour.
@@ -775,7 +776,17 @@ class GenerationDialog(Gtk.Dialog):
         self.variations.set_tooltip_text(ui_text.TIP_VARIATIONS)
         grid.attach(_right(ui_text.LABEL_VARIATIONS), 2, 1, 1, 1)
         grid.attach(self.variations, 3, 1, 1, 1)
+        self.model_combo.connect("changed", lambda *_: self._sync_custom_variations())
+        self._sync_custom_variations()
         return grid
+
+    def _sync_custom_variations(self) -> None:
+        """A custom workflow makes one result per run: Variations is 1 and greyed out for it."""
+        custom = self.model_combo.get_active_id() == CUSTOM_WORKFLOW_ID
+        if custom:
+            self.variations.set_value(1)
+        self.variations.set_sensitive(not custom)
+        self.variations.set_tooltip_text(ui_text.CUSTOM_WORKFLOW_ONE if custom else ui_text.TIP_VARIATIONS)
 
     def _expand_section(self, thumbnail: object | None) -> Gtk.Widget:
         """Canvas editor, ratio presets, anchor grid and the four pixel boxes."""

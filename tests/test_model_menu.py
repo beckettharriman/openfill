@@ -177,3 +177,28 @@ class GimpModelPickerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(os.environ.get("OPENFILL_TK_TESTS"), "opens GTK windows: set OPENFILL_TK_TESTS=1 (under Xvfb)")
+class GimpCustomWorkflowVariationsTests(unittest.TestCase):
+    """The GIMP Fill dialog: Variations is 1 and greyed out while the custom workflow is picked."""
+
+    def test_variations_off_for_the_custom_workflow(self):
+        try:
+            import gi
+
+            gi.require_version("Gtk", "3.0")
+            from openfill import dialogs, ui_text
+        except (ImportError, ValueError):
+            self.skipTest("no GTK 3")
+        options = [("active", "DreamShaper 8 (active model)"), ("custom-workflow", "Custom workflow (mine)")]
+        dialog = dialogs.GenerationDialog("fill", {"prompt": "", "model": "active", "variations": 3}, [], options)
+        self.addCleanup(dialog.destroy)
+        self.assertTrue(dialog.variations.get_sensitive())
+        self.assertEqual(int(dialog.variations.get_value()), 3)
+        dialog.model_combo.set_active_id("custom-workflow")
+        self.assertFalse(dialog.variations.get_sensitive())
+        self.assertEqual(int(dialog.variations.get_value()), 1)
+        self.assertEqual(dialog.variations.get_tooltip_text(), ui_text.CUSTOM_WORKFLOW_ONE)
+        dialog.model_combo.set_active_id("active")
+        self.assertTrue(dialog.variations.get_sensitive())

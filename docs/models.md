@@ -461,7 +461,8 @@ Any workflow you can run in ComfyUI can be one more model for Fill:
    says so if you pick it.
 2. In the PhotoCraft panel: gear > Generation > Advanced. In GIMP:
    `Generative Fill Settings` > Advanced generation. Type the file's path and save.
-3. Fill now offers "Custom workflow (file name)" in its model list.
+3. Fill now offers "Custom workflow (file name)" in its model list. It makes
+   one result per run, so Variations is off while it is picked.
 
 OpenFill sends the workflow:
 

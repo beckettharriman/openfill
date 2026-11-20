@@ -305,6 +305,15 @@ class AppTests(unittest.TestCase):
                 self.app(custom_workflow=path, custom_workflow_inputs="image=99").custom_workflow_spec()
         self.assertEqual(self.app().custom_workflow_name(), "")
 
+    def test_one_result_per_run(self):
+        # The custom workflow makes what its own graph makes, so Variations is 1 for it.
+        from openfill.backend import ModelSpec
+
+        app = self.app()
+        custom = ModelSpec(arch="custom", template="custom_workflow")
+        self.assertEqual(app.sampling(custom, 4, 7).batch, 1)
+        self.assertEqual(app.sampling(ModelSpec("sd15.ckpt", template="sd15_inpaint"), 4, 7).batch, 4)
+
     def test_settings_are_saved(self):
         from openfill.config import Settings
 

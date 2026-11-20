@@ -717,3 +717,7 @@ def unsupported_gpu_message(detail: str) -> str:
         "older cards, ComfyUI_windows_portable_nvidia_cu126.7z on the ComfyUI releases page. Unpack it and "
         f"choose its folder in Filters > OpenFill > Generative Fill Settings. (PyTorch said: {detail})"
     )
+
+
+# A custom ComfyUI workflow (Advanced) makes what its own graph makes: one result per run.
+CUSTOM_WORKFLOW_ONE = "A custom workflow makes one result per run, so Variations is off for it."

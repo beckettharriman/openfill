@@ -3677,6 +3677,34 @@ console.log(JSON.stringify(out));
         view._show_advanced()
         self.assertEqual(calls, ["hidden", "refit"])
 
+    def test_the_custom_workflow_turns_variations_off_in_the_panel_and_page(self):
+        from types import SimpleNamespace
+
+        from openfill_photocraft import bar as barmod
+
+        from openfill import ui_text
+
+        self.assertEqual(barmod.CUSTOM_ONE, ui_text.CUSTOM_WORKFLOW_ONE)
+        laid_out = []
+        bar = barmod.Bar.__new__(barmod.Bar)
+        bar._shown, bar.view = {}, ""
+        bar._layout_main = lambda: laid_out.append(dict(bar._shown))
+        bar.tab = SimpleNamespace(get=lambda: "fill")
+        bar._model_ids = {"DreamShaper 8": "dreamshaper-8", "Custom workflow (mine)": barmod.CUSTOM_WORKFLOW_ID}
+        choice = {"label": "DreamShaper 8"}
+        bar.model_choice = SimpleNamespace(get=lambda: choice["label"], set=lambda v: choice.update(label=v))
+        bar._sync_custom()
+        self.assertEqual(laid_out, [])  # nothing changed
+        choice["label"] = "Custom workflow (mine)"
+        bar._sync_custom()
+        self.assertTrue(bar._shown["custom"])  # the Variations row goes, the hint line comes
+        self.assertEqual(len(laid_out), 1)
+        bar.tab = SimpleNamespace(get=lambda: "remove")
+        self.assertFalse(bar._custom_picked())
+        page = (ROOT / "photocraft" / "openfill_photocraft" / "static" / "index.html").read_text("utf-8")
+        self.assertIn(ui_text.CUSTOM_WORKFLOW_ONE, page)
+        self.assertIn('if(model==="custom-workflow")b.variations=1', page)
+
     def test_engine_view_gemini_ui_rules(self):
         try:
             import tkinter as tk

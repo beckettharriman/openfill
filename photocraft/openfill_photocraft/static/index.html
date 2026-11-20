@@ -144,6 +144,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="row"><label>Result as</label><div class="seg s12" id="targets"><button data-target="image" class="on">New image</button><button data-target="layer">Layer in this image</button></div></div>
     </div>
     <div class="stack">
+      <div class="small" id="custom-one" hidden>A custom workflow makes one result per run, so Variations is off for it.</div>
       <div class="row" id="vars-row"><label>Variations</label><div class="seg s12" id="vars"><button class="on">1</button><button>2</button><button>3</button><button>4</button><button>5</button></div></div>
       <div class="row"><label>Model</label><div class="select"><select id="model" aria-label="Model"></select><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9a9ba2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></div>
       <div class="row" id="model-tools" hidden><label></label><input id="model-search" type="text" placeholder="Search models" aria-label="Search models"><label class="small chk" id="show-hidden-box" hidden><input type="checkbox" id="show-hidden"> <span id="show-hidden-text">Show hidden</span></label></div>
@@ -265,7 +266,7 @@ $("gear").onclick=()=>gear?showTools():showGear(section);
 $("back").onclick=()=>showTools();
 function setMode(m){mode=m;note=null;segPick($("modes"),$("modes").querySelector(`[data-mode="${m}"]`));
   $("remove-text").hidden=m!=="remove";$("bg-text").hidden=m!=="bgremove";$("expand-box").hidden=m!=="expand";$("create-box").hidden=m!=="txt2img";$("prompt").hidden=m==="remove"||WHOLE.includes(m);$("upscale-box").hidden=m!=="upscale";$("vars-row").hidden=WHOLE.includes(m);
-  $("advanced").hidden=m!=="fill";$("prompt").placeholder=PH[m]||"";$("go").textContent=GO[m];fillSelect();context();if(m==="expand")presets()}
+  $("advanced").hidden=m!=="fill";$("prompt").placeholder=PH[m]||"";$("go").textContent=GO[m];fillSelect();syncVars();context();if(m==="expand")presets()}
 function showTools(){gear=false;$("tools").hidden=false;$("gearview").hidden=true;$("head-tools").hidden=false;$("head-view").hidden=true;$("gear").classList.remove("on")}
 function showGear(s){gear=true;$("tools").hidden=true;$("gearview").hidden=false;$("head-tools").hidden=true;$("head-view").hidden=false;$("gear").classList.add("on");showSection(s||"models")}
 function showSection(s){section=s;segPick($("sections"),$("sections").querySelector(`[data-sec="${s}"]`));
@@ -274,7 +275,9 @@ function showSection(s){section=s;segPick($("sections"),$("sections").querySelec
 
 $("prompt").onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();$("go").click()}};
 $("strength").oninput=()=>$("str-v").textContent=(+$("strength").value).toFixed(2);
-$("model").onchange=async()=>{const v=$("model").value;
+// the custom workflow (Advanced) makes one result per run: no Variations for it
+function syncVars(){const custom=mode==="fill"&&$("model").value==="custom-workflow";$("vars-row").hidden=WHOLE.includes(mode)||custom;$("custom-one").hidden=!custom}
+$("model").onchange=async()=>{const v=$("model").value;syncVars();
   if(v==="__manage"){fillSelect();showGear("models");return}
   if(mode==="remove"){removal=v;return}
   if(WHOLE.includes(mode)||v==="custom-workflow")return;
@@ -285,7 +288,7 @@ async function start(kind,body){try{await post("/api/"+kind,body);lastSeq=-1;say
 $("go").onclick=()=>{if(busy)return;const prompt=$("prompt").value.trim(),model=$("model").value||"active";
   if(mode==="fill"||mode==="remove"){if(!sel){say(NO_SEL,"bad");return}
     const b={prompt:mode==="remove"?"":prompt,negative:mode==="fill"?$("neg").value:"",variations,strength:mode==="fill"?+$("strength").value:1,seed:mode==="fill"?seedOf():-1,remove:mode==="remove"};
-    if(mode==="remove"){b.removal=model;b.model="active";if(["default",...PROMPT_FREE].includes(model))b.variations=1}else b.model=model;
+    if(mode==="remove"){b.removal=model;b.model="active";if(["default",...PROMPT_FREE].includes(model))b.variations=1}else{b.model=model;if(model==="custom-workflow")b.variations=1}
     start("fill",b)}
   else if(mode==="bgremove"){if(!doc){say("Open an image in PhotoCraft first.","bad");return}start("bgremove",{})}
   else if(mode==="upscale"){if(!doc){say("Open an image in PhotoCraft first.","bad");return}start("upscale",{factor,upscale_model:model==="active"?"default":model})}
@@ -346,7 +349,7 @@ function fillSelect(){const s=$("model");let opts;
   tool.forEach(o=>add(s,o));
   if(own.length&&tool.length){const g=document.createElement("optgroup");g.label="Your model files";own.forEach(o=>add(g,o));s.appendChild(g)}else own.forEach(o=>add(s,o));
   s.appendChild(document.createElement("hr"));const m=document.createElement("option");m.value="__manage";m.textContent="Manage models...";s.appendChild(m);
-  s.value=want||"";$("go").disabled=busy||!opts.length}
+  s.value=want||"";$("go").disabled=busy||!opts.length;syncVars()}
 $("model-search").oninput=()=>fillSelect();
 $("model-search").onkeydown=e=>{if(e.key!=="Enter")return;e.preventDefault();
   const first=[...$("model").options].find(o=>o.value&&o.value!=="__manage"&&matches(o.textContent,$("model-search").value.trim()));

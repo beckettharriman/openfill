@@ -718,7 +718,9 @@ class App:
         elif model.arch == "flux2":
             # FLUX.2 [klein] is step-distilled: 4 steps without guidance (Black Forest Labs' settings).
             cfg, sampler, scheduler, steps = 1.0, "euler", "simple", FLUX2_KLEIN_STEPS
-        batch = 1 if model.prompt_free else max(1, min(8, int(variations)))
+        # a custom workflow makes what its own graph makes: one result per run
+        one = model.prompt_free or model.effective_template == "custom_workflow"
+        batch = 1 if one else max(1, min(8, int(variations)))
         return Sampling(
             steps=steps,
             cfg=cfg,

@@ -74,6 +74,7 @@ NO_MODELS = "No models installed"
 NO_BG_MODEL = "Download BiRefNet in Models"
 NO_UPSCALE_MODEL = "Download Real-ESRGAN in Models"
 CUSTOM_WORKFLOW_ID = "custom-workflow"  # openfill.app.CUSTOM_WORKFLOW_ID
+CUSTOM_ONE = "A custom workflow makes one result per run, so Variations is off for it."  # ui_text.CUSTOM_WORKFLOW_ONE
 # The status line once the AI engine has stopped (crashed or was closed) after it was ready.
 STOPPED = "Stopped: Generate restarts it"
 SLOW_START = "Still starting (slow, see Logs)"
@@ -519,6 +520,7 @@ class Bar:
         # Shown under the context whenever the cloud is the backend: what leaves this computer.
         self.cloud_line = ui.small(m, "", fg=WARN)
         self.remove_line = ui.small(m, "Erases what you selected and fills in the background around it.")
+        self.custom_line = ui.small(m, CUSTOM_ONE)
         self.bg_line = ui.small(
             m, "Cuts the subject out of the whole image and adds it as a new layer with a transparent background."
         )
@@ -1140,8 +1142,8 @@ class Bar:
         """Pack the tool view's parts for the current mode (12 px apart)."""
         key = self.tab.get()
         var_row, model_row = self.var_seg.master.master, self.model_box.master.master
-        if key in WHOLE_IMAGE:
-            var_row.pack_forget()  # one cutout or one bigger image per run: nothing to choose
+        if key in WHOLE_IMAGE or self._shown.get("custom"):
+            var_row.pack_forget()  # one cutout, one bigger image or one custom result per run
         elif not var_row.winfo_manager():
             var_row.pack(fill="x", before=model_row)
         parts: list[tk.Misc] = [self.modes, self.context_row]
@@ -1160,6 +1162,8 @@ class Bar:
             parts.append(self.prompt)
         if key == "txt2img":
             parts.append(self.create_rows)
+        if self._shown.get("custom"):
+            parts.append(self.custom_line)
         parts.append(self.options)
         if self._shown.get("setup"):
             parts.append(self.setup)
@@ -1257,10 +1261,22 @@ class Bar:
     def _model(self) -> str:
         return self._model_ids.get(self.model_choice.get(), "active")
 
+    def _custom_picked(self) -> bool:
+        """The custom workflow (Advanced) is the Fill model picked: it makes one result per run."""
+        return self.tab.get() == "fill" and self._model_ids.get(self.model_choice.get()) == CUSTOM_WORKFLOW_ID
+
+    def _sync_custom(self) -> None:
+        custom = self._custom_picked()
+        if bool(self._shown.get("custom")) != custom:
+            self._shown["custom"] = custom
+            if not self.view:
+                self._layout_main()
+
     def _model_picked(self, label: str) -> None:
         """The Model select: the model picked becomes the active one (Remove keeps its own
         choice; a removal model picked in Fill is used for that run only)."""
         self.model_choice.set(label)
+        self._sync_custom()
         if self.tab.get() == "remove":
             self.prefs["removal"] = label
             return
@@ -1313,6 +1329,8 @@ class Bar:
                     body.update(removal=removal)
                     if removal in (*PROMPT_FREE, "default"):
                         body.update(variations=1)  # same input, same result: one is enough
+                elif body["model"] == CUSTOM_WORKFLOW_ID:
+                    body.update(variations=1)  # the custom workflow makes one result per run
                 self.service.start("fill", body)
             elif kind == "bgremove":
                 if not self.watcher.snapshot().get("document"):
@@ -1464,6 +1482,7 @@ class Bar:
         else:
             shown = current
         self.model_box.set(shown)
+        self._sync_custom()
         busy = self.service.busy()
         self.go.set(disabled=busy or (bool(facts) and not names))
 
