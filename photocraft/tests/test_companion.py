@@ -3753,6 +3753,30 @@ class ModelMenuTests(unittest.TestCase):
         select.hide("MAT Places512", False)
         self.assertEqual(select.hidden, set())
 
+    def test_the_list_scales_with_the_panel(self):
+        # The Model list came from #14 and the scaling from #17: its sizes go through px() too.
+        try:
+            import tkinter  # noqa: F401
+        except ImportError:
+            self.skipTest("no tkinter")
+        code = (
+            "import json, sys; sys.path[:0] = sys.argv[1:3]\n"
+            "from openfill_photocraft import ui\n"
+            "P = ui.Popdown\n"
+            "print(json.dumps([ui.SCALE, P.ROW, P.HEAD, P.HIDE_W, P.BAR_W, P.INSET, P.MAX_ROWS]))\n"
+        )
+        env = {**os.environ, "OPENFILL_UI_SCALE": "1.5"}
+        env.pop("OPENFILL_DPI", None)
+        out = subprocess.run(
+            [sys.executable, "-c", code, str(ROOT / "photocraft"), str(ROOT / "gimp-openfill")],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+            env=env,
+        ).stdout
+        self.assertEqual(json.loads(out.strip().splitlines()[-1]), [1.5, 42, 36, 69, 15, 7, 14])
+
     def test_mac_menu_has_the_rows_and_a_hide_submenu(self):
         from openfill_photocraft import ui
 
@@ -3920,6 +3944,16 @@ class PopdownTests(unittest.TestCase):
         self.root.update()
         self.assertIn("MAT Places512", [r.label for r in pop.rows])
         self.assertEqual(self.picked, [])  # hiding and showing never picks
+
+    def test_sizes_and_place_follow_the_display_scale(self):
+        ui, pop, select = self.ui, self.pop, self.select
+        self.assertEqual((pop.ROW, pop.HEAD, pop.HIDE_W, pop.BAR_W), (ui.px(28), ui.px(24), ui.px(46), ui.px(10)))
+        self.assertEqual(pop.list_y, 1 + ui.px(4) + ui.px(32) + ui.px(5))  # the search field above the list
+        self.assertEqual(pop.field.winfo_reqheight(), ui.px(32))
+        self.assertEqual(pop.w, select.w + 2)
+        if pop.below:
+            self.assertEqual(pop.winfo_rooty(), select.winfo_rooty() + select.h + ui.px(2))
+        self.assertEqual(pop.foot_tops[0], pop.list_y + pop.list_h + ui.px(7))
 
     def test_a_click_picks_and_down_return_picks_the_next(self):
         pop = self.pop
