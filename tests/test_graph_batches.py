@@ -27,11 +27,18 @@ _NO_TENSOR = {
     "INPAINT_LoadInpaintModel",
     "LoadBackgroundRemovalModel",
     "UNETLoader",
+    "UpscaleModelLoader",
+    # sampling parts of SamplerCustomAdvanced (issue #18's FLUX.2 [klein] and custom workflows)
+    "CFGGuider",
+    "Flux2Scheduler",
+    "KSamplerSelect",
+    "RandomNoise",
+    "SplitSigmasDenoise",
     "UnetLoaderGGUF",
     "VAELoader",
 }
 _PASS_MODEL = {n: "model" for n in ("DifferentialDiffusion", "CFGNorm", "ModelSamplingAuraFlow", "LoraLoaderModelOnly")}
-_PASS_COND = {"FluxGuidance": "conditioning"}
+_PASS_COND = {"FluxGuidance": "conditioning", "ReferenceLatent": "conditioning"}
 # Same batch out as in: (input name).
 _SAME = {
     "CropMask": "mask",
@@ -41,12 +48,16 @@ _SAME = {
     "ImageBlur": "image",
     "ImageCrop": "image",
     "ImageScale": "image",
+    "ImageUpscaleWithModel": "image",
     "ImageToMask": "image",
     "InvertMask": "mask",
     "MaskToImage": "mask",
     "RemoveBackground": "image",
+    "SeedVR2Preprocess": "resized_images",
     "VAEDecode": "samples",
+    "VAEDecodeTiled": "samples",
     "VAEEncode": "pixels",
+    "VAEEncodeTiled": "pixels",
 }
 
 
@@ -87,7 +98,7 @@ def graph_batches(graph: dict) -> tuple[dict, list[str]]:
             out = {0: link(node_id, _SAME[cls])}
         elif cls == "LoadImage":
             out = {0: 1, 1: 1}
-        elif cls == "SolidMask":
+        elif cls == "LoadImageMask" or cls == "SolidMask":
             out = {0: 1}
         elif cls == "EmptyLatentImage":
             out = {0: int(inputs["batch_size"])}
@@ -146,7 +157,21 @@ def graph_batches(graph: dict) -> tuple[dict, list[str]]:
             for name in ("model", "positive", "negative"):
                 fits(node_id, name, link(node_id, name), latent)
             out = {0: latent}
-        elif cls == "SaveImage":
+        elif cls == "SamplerCustomAdvanced":
+            latent = link(node_id, "latent_image")
+            out = {0: latent, 1: latent}
+        elif cls == "SeedVR2Conditioning":
+            cond = link(node_id, "vae_conditioning")
+            out = {0: cond, 1: cond}
+        elif cls == "SeedVR2PostProcessing":
+            images = link(node_id, "images")
+            fits(node_id, "original_resized_images", link(node_id, "original_resized_images"), images)
+            out = {0: images}
+        elif cls == "VAEEncodeForInpaint":
+            pixels = link(node_id, "pixels")
+            fits(node_id, "mask", link(node_id, "mask"), pixels)
+            out = {0: pixels}
+        elif cls in ("SaveImage", "PreviewImage"):
             out = {}
         else:
             raise BatchError(f"{node_id}: no batch rule for {cls}; add one to this test")
@@ -182,13 +207,23 @@ FLUX_ERASER = ModelSpec(
 )
 LAMA = ModelSpec(arch="inpaint_model", inpaint_model="big-lama.pt")
 BIREFNET = ModelSpec(arch="bg_removal", template="bgremove", bg_removal_model="birefnet.safetensors")
+KLEIN = ModelSpec(arch="flux2", template="flux2_edit", unet="klein.sft", clip1="qwen3.sft", vae="flux2-vae.sft")
+ESRGAN = ModelSpec(arch="upscale", template="upscale_model", upscale_model="RealESRGAN_x4plus.safetensors")
+SEEDVR2 = ModelSpec(arch="upscale", template="seedvr2", unet="seedvr2_3b.sft", vae="seedvr2_vae.sft")
 
 # Plans: the issue's photo (1848 x 4000, 1612 x 1853 selection), a roof strip, a
 # refine-only fill and a layout pass.
 ISSUE_SEL, ISSUE_IMG = g.Rect(191, 325, 1612, 1853), g.Rect(0, 0, 1848, 4000)
 STRIP_SEL, STRIP_IMG = g.Rect(160, 51, 1620, 89), g.Rect(0, 0, 2000, 1273)
 SMALL_SEL, SMALL_IMG = g.Rect(730, 1267, 557, 490), g.Rect(0, 0, 1920, 2880)
-PROFILE = {"sd15": g.SD15, "sdxl": g.SDXL, "flux": g.FLUX, "qwen_image": g.QWEN, "inpaint_model": g.INPAINT_MODEL}
+PROFILE = {
+    "sd15": g.SD15,
+    "sdxl": g.SDXL,
+    "flux": g.FLUX,
+    "flux2": g.FLUX2,
+    "qwen_image": g.QWEN,
+    "inpaint_model": g.INPAINT_MODEL,
+}
 
 
 def _request(plan, model, batch, **extra) -> w.PlannedInpaintRequest:
@@ -238,6 +273,7 @@ GENERATIVE = {
     "flux": FLUX,
     "flux-safetensors": FLUX_SAFE,
     "qwen": QWEN,
+    "flux2-klein": KLEIN,
     "rorem": RORem,
     "flux-eraser": FLUX_ERASER,
 }
@@ -319,7 +355,7 @@ class FillGraphBatchTests(unittest.TestCase):
 
     def test_untiled_fill_and_remove_with_a_generation_model(self):
         plan = g.plan_fill(SMALL_SEL, SMALL_IMG, g.SDXL, "sdxl", True, 0.5)
-        for model in (SD15, FOOOCUS, FLUX, QWEN):
+        for model in (SD15, FOOOCUS, FLUX, QWEN, KLEIN):
             for batch in (1, 4):
                 with self.subTest(f"{model.effective_template} {batch}"):
                     req = _request(plan, model, batch, tiles=(), refine_tiles=(), prompt="background")
@@ -329,7 +365,7 @@ class FillGraphBatchTests(unittest.TestCase):
         plan = g.plan_expand(2896, 2172, 0, 400, 0, 400, g.SDXL)
         tiles = g.expand_detail_tiles(plan, g.SDXL, 72)
         work = g.FillPlan(plan.context, g.WorkingSize(1000, 1024, 0.34))
-        for model in (SD15, FOOOCUS, FLUX, QWEN):
+        for model in (SD15, FOOOCUS, FLUX, QWEN, KLEIN):
             for detail in ((), tiles):
                 for batch in (1, 4):
                     with self.subTest(f"{model.effective_template} detail={bool(detail)} {batch}"):
@@ -360,6 +396,37 @@ class FillGraphBatchTests(unittest.TestCase):
         plan = g.FillPlan(g.Rect(0, 0, 800, 600), g.WorkingSize(800, 600, 1.0))
         req = _request(plan, BIREFNET, 1, prompt="", negative="")
         self._check("bgremove", req, w.Capabilities(True, bg_removal=True), 1)
+
+    def test_upscale_saves_one_image(self):
+        # Issue #18: Real-ESRGAN and SeedVR2 make one bigger image of the whole picture.
+        plan = g.FillPlan(g.Rect(0, 0, 800, 600), g.WorkingSize(1600, 1200, 2.0))
+        caps = w.Capabilities(True, seedvr2=True)
+        for name, model in (("esrgan", ESRGAN), ("seedvr2", SEEDVR2)):
+            with self.subTest(name):
+                req = _request(plan, model, 1, prompt="", negative="", tiles=(), refine_tiles=())
+                self._check(name, req, caps, 1)
+
+    def test_custom_workflows(self):
+        # Issue #18: OpenFill's resizing and saving around the user's own graph keep its batch.
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from openfill import custom_workflow as cw
+        from tests.test_custom_workflow import ALPHA_WORKFLOW, MASK_WORKFLOW
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, data in (("alpha", ALPHA_WORKFLOW), ("mask", MASK_WORKFLOW)):
+                path = Path(tmp) / f"{name}.json"
+                path.write_text(json.dumps(data), encoding="utf-8")
+                wf = cw.load(path)
+                for work in ((800, 600), (1024, 768)):
+                    with self.subTest(f"{name} {work}"):
+                        graph = cw.build(wf, "i", "m", "a dog", "", 7, (800, 600), work)
+                        _, errors = graph_batches(graph)
+                        self.assertEqual(errors, [])
+                        src = graph[cw.output_node(graph)]["inputs"]["images"]
+                        self.assertEqual(graph_batches(graph)[0][(src[0], src[1])], 1)
 
     def test_text_to_image(self):
         from openfill.backend import Txt2ImgRequest
