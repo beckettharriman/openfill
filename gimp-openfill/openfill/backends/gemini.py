@@ -171,8 +171,8 @@ class GeminiCredentials:
         if self.usable:
             return ""
         return (
-            "No Gemini API key is set. Set the GEMINI_API_KEY environment variable (and restart OpenFill), "
-            "or paste your key in the cloud settings for this session."
+            "No Gemini API key is set. Paste your key in the cloud settings, or set the GEMINI_API_KEY "
+            "environment variable and restart OpenFill."
         )
 
 
@@ -314,8 +314,8 @@ class GeminiBackend(CloudBackend):
             ""
             if api_key.strip()
             else (
-                "No Gemini API key is set. Set the GEMINI_API_KEY environment variable (and restart OpenFill), "
-                "or paste your key in the cloud settings for this session."
+                "No Gemini API key is set. Paste your key in the cloud settings, or set the GEMINI_API_KEY "
+                "environment variable and restart OpenFill."
             )
         )
         super().__init__(
@@ -365,7 +365,7 @@ class GeminiBackend(CloudBackend):
         said = f' It said: "{_short(self._clean(message))}"' if message.strip() else ""
         if _is_invalid_api_key(code, detail, details):
             return CloudAuthError(
-                f"{self.where} did not accept your API key ({code}). Check GEMINI_API_KEY or your session key, "
+                f"{self.where} did not accept your API key ({code}). Check the key in the cloud settings (or GEMINI_API_KEY), "
                 f"or make a new key at {self.provider.keys_url}."
             )
         if code == 429:

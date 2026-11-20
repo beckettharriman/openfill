@@ -501,7 +501,7 @@ class EngineView(tk.Frame):
             row = ui.frame(box)
             self.timeout = ui.Field(row, 88)
             self.timeout.pack(side="left")
-            ui.small(row, "seconds, 0 = default", wrap=0).pack(side="left", padx=(8, 0))
+            ui.small(row, "seconds, 0 = auto (local jobs too)", wrap=0).pack(side="left", padx=(8, 0))
             return row
 
         box, _ = field(parent, "Time limit", timeout_row)

@@ -442,6 +442,9 @@ class GeminiUiTextTests(unittest.TestCase):
         self.assertEqual(ut.cloud_key_placeholder("openrouter|x", "gemini", "", True), ut.CLOUD_KEY_OTHER)
         self.assertIn("GEMINI_API_KEY", ut.cloud_key_placeholder("", "gemini", "", False, env_var="GEMINI_API_KEY"))
         self.assertIn("GOOGLE_API_KEY", ut.cloud_key_placeholder("", "gemini", "", False, env_var="GOOGLE_API_KEY"))
+        # a pasted key is saved in config.json, like the other services: never called "session only"
+        self.assertIn("saved", ut.cloud_key_placeholder("", "gemini", "", False, env_var="GEMINI_API_KEY"))
+        self.assertNotIn("session", ut.cloud_key_placeholder("", "gemini", "", False, env_var="GEMINI_API_KEY"))
         self.assertEqual(
             ut.cloud_key_placeholder("", "gemini", "", False, env_var="GEMINI_API_KEY", session_key=True),
             ut.CLOUD_KEY_SESSION,

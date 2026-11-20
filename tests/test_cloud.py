@@ -1715,3 +1715,16 @@ class GeminiCredentialsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GeminiKeyWordingTests(unittest.TestCase):
+    def test_messages_never_promise_a_session_only_key(self):
+        from openfill.backends.gemini import GeminiBackend, GeminiCredentials
+
+        no_key = GeminiCredentials(environ={}).problem()
+        self.assertIn("Paste your key in the cloud settings", no_key)
+        self.assertNotIn("session", no_key)
+        backend = GeminiBackend("AIzaSyFakeKey000011112222333344", url="http://127.0.0.1:9/v1beta")
+        err = backend._http_error(401, "{}", {})
+        self.assertNotIn("session", str(err))
+        self.assertIn("cloud settings", str(err))
