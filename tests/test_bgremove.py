@@ -5,6 +5,7 @@ server capability check."""
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from openfill import catalog as cat
 from openfill import png
@@ -216,6 +217,58 @@ class InputTests(unittest.TestCase):
         rgba = bytes((10, 20, 30, 255, 40, 50, 60, 255))
         image_png, mask_png = self.pngs(rgba)
         self.assertIs(image_png, mask_png)
+
+
+class TransparentImageTests(unittest.TestCase):
+    """A fully transparent image has nothing to cut out: say so instead of adding an empty layer."""
+
+    class Io:
+        def __init__(self, alpha: int):
+            self.alpha = alpha
+
+        def is_indexed(self, image):
+            return False
+
+        def image_rect(self, image):
+            return Rect(0, 0, 2, 1)
+
+        def export_region(self, image, rect, transparent_outside=False, keep_alpha=False):
+            rgba = bytes((10, 20, 30, self.alpha)) * 2
+            return png.encode(2, 1, rgba, 4), rgba
+
+    def app(self, alpha: int):
+        import logging
+
+        from openfill.app import App
+
+        app = App.__new__(App)
+        app.io = self.Io(alpha)
+        app.log = logging.getLogger("test-bgremove")
+        entry = SimpleNamespace(id="birefnet", name="BiRefNet")
+        app.background_removal_model_available = lambda: entry
+        app.resolve_model = lambda entry_id: (entry, BIREFNET)
+        app.interactive = False
+        return app
+
+    def test_a_fully_transparent_image_is_refused_plainly(self):
+        from openfill.app import TRANSPARENT_MESSAGE, UnsupportedImage
+        from openfill.backend import describe_error
+
+        with self.assertRaisesRegex(UnsupportedImage, "fully transparent") as caught:
+            self.app(0).remove_background(object())
+        self.assertEqual(describe_error(caught.exception), TRANSPARENT_MESSAGE)  # shown as it is
+
+    def test_a_faint_image_still_runs(self):
+        class Started(Exception):
+            pass
+
+        def runner(*args, **kwargs):
+            raise Started
+
+        app = self.app(1)
+        app.runner_cls = runner  # the job starts only once the image was accepted
+        with self.assertRaises(Started):
+            app.remove_background(object())
 
 
 class OnlyComfyTests(unittest.TestCase):

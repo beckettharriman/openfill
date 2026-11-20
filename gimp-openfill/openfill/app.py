@@ -83,6 +83,7 @@ INDEXED_MESSAGE = (
     "This image uses indexed colors, which cannot hold generated pixels without destroying "
     "them. Convert it with Image > Mode > RGB (or Grayscale) and run the command again."
 )
+TRANSPARENT_MESSAGE = "The image is fully transparent, so there is nothing to cut out. Open or paste a picture first."
 NO_SELECTION_MESSAGE = (
     "Nothing is selected. Select the area to fill first (for example with the Rectangle or "
     "Free Select tool), then run Generative Fill again. To regenerate the whole image, use "
@@ -1600,7 +1601,11 @@ class App:
             )
         entry, model = self.resolve_model(entry.id)
         full = self.io.image_rect(image)
-        image_png, mask_png = background_removal_pngs(*self.io.export_region(image, full, keep_alpha=True), full)
+        rgba_png, rgba = self.io.export_region(image, full, keep_alpha=True)
+        if not rgba[3::4].strip(b"\x00"):
+            self.log.info("refused: fully transparent image")
+            raise UnsupportedImage(TRANSPARENT_MESSAGE)
+        image_png, mask_png = background_removal_pngs(rgba_png, rgba, full)
         request = InpaintRequest(
             image_png=image_png,
             mask_png=mask_png,
