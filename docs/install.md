@@ -34,6 +34,8 @@ If the selected Python has no Tk, the OpenFill panel opens in a tab in your defa
 3. Open PhotoCraft the usual way: from the app menu, or by opening an image in the file manager. OpenFill comes with it.
 4. The first time, the panel asks for what's missing. ComfyUI: choose its folder, or follow ComfyUI's [manual install](https://github.com/comfyanonymous/ComfyUI#manual-install-windows-linux) first (AMD card: [AMD on Linux](#amd-on-linux)). Models: **Open model manager**.
 
+The Flatpak PhotoCraft needs to read `/sys/fs/cgroup`, or it says every image needs 0.0 GB and refuses to open it. OpenFill starts it with that access. If you open the Flatpak another way, run `flatpak override --user --filesystem=/sys/fs/cgroup:ro ai.storyteller.photocraft` once.
+
 The installer gives PhotoCraft's menu entry to OpenFill (a copy in `~/.local/share/applications` that starts PhotoCraft through OpenFill). If you'd rather keep them apart, run `sh install.sh --separate-icon` and use "PhotoCraft with OpenFill" instead.
 
 

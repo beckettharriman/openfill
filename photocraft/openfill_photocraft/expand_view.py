@@ -295,7 +295,7 @@ class ExpandView(tk.Frame):
             image = photo(frame.resize((sw, sh), Image.BILINEAR))
             self._painted_photos.append(image)
             c.create_image(round(sx), round(sy), image=image, anchor="nw")
-        c.create_rectangle(v.fx, v.fy, v.fx + v.fw, v.fy + v.fh, outline="white", dash=(6, 4), width=1.5)
+        c.create_rectangle(v.fx, v.fy, v.fx + v.fw, v.fy + v.fh, outline="white", dash=(6, 4), width=2)
         if self.job_view is not None:
             return  # no handles while it runs
         half = ue.HANDLE_PX / 2

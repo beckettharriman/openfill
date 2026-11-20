@@ -13,6 +13,9 @@ Each entry from now on says which PhotoCraft versions it works with.
 Fixed:
 - If another ComfyUI or another program already used port 8188, OpenFill said the engine was ready while it was talking to that other ComfyUI, and its own ComfyUI then failed to start (#12). OpenFill now starts its own on the next free port. The status line says "Ready on port 8189 (8188 is taken)", and Check says why.
 - On Linux, the AMD setting for Radeon cards is no longer used when ComfyUI runs on an NVIDIA card in the same computer (#12).
+- A large Fill with SDXL (RealVisXL, Juggernaut) or SD 1.5 and more than one variation failed with "INPAINT_MaskedFill: Image and mask batch size does not match" ([#16](https://github.com/beckettharriman/openfill/issues/16)). One variation and smaller selections worked. The same went for RORem and the FLUX eraser.
+- The Tk panel failed to open with some Python 3.14 and Tk 8.6 setups ("bad screen distance "1.5""), so OpenFill fell back to the browser page.
+- The Flatpak PhotoCraft (0.21) could not open any image ("needs about 0.0 GB and 0.0 GB is free"), because it could not read the memory limits in /sys/fs/cgroup. OpenFill now starts it with read access to that folder.
 
 New:
 - When the engine takes longer than 90 seconds to start, the status line says "Still starting (slow, see Logs)", and a job's progress says why that can happen. A model folder on an unplugged or sleeping drive is named when it doesn't answer.

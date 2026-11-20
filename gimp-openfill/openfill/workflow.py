@@ -337,6 +337,17 @@ def _scale_mask(g: Graph, p: str, mask: list, width: int, height: int) -> list:
     return g.out(f"{p}_mstable")
 
 
+def _batch_mask(g: Graph, p: str, mask: list, batch: int) -> list:
+    """``mask`` repeated to ``batch`` masks (core ComfyUI has no mask repeat
+    node, so through an image). Batch 1: the mask itself."""
+    if batch <= 1:
+        return mask
+    g.add(f"{p}_bmimg", "MaskToImage", mask=mask)
+    g.add(f"{p}_bmrep", "RepeatImageBatch", image=g.out(f"{p}_bmimg"), amount=int(batch))
+    g.add(f"{p}_bmask", "ImageToMask", image=g.out(f"{p}_bmrep"), channel="red")
+    return g.out(f"{p}_bmask")
+
+
 def _tile_pass(
     g: Graph,
     p: str,
@@ -371,8 +382,12 @@ def _tile_pass(
         style = "border" if req.prefill_style == "border" else "blur"
         if style == "border":
             mode = req.prefill_mode if req.prefill_mode in ("navier-stokes", "telea", "neutral") else "navier-stokes"
-            g.add(f"{p}_prefill", "INPAINT_MaskedFill", image=image, mask=mask, fill=mode, falloff=0)
-            g.add(f"{p}_preblur", "INPAINT_MaskedBlur", image=g.out(f"{p}_prefill"), mask=mask, blur=65, falloff=0)
+            # With variations the crop holds one canvas per variation (earlier
+            # tiles differ between them), and INPAINT_MaskedFill wants one mask
+            # per image: repeat the tile mask to the batch.
+            fill_mask = _batch_mask(g, p, mask, batch)
+            g.add(f"{p}_prefill", "INPAINT_MaskedFill", image=image, mask=fill_mask, fill=mode, falloff=0)
+            g.add(f"{p}_preblur", "INPAINT_MaskedBlur", image=g.out(f"{p}_prefill"), mask=fill_mask, blur=65, falloff=0)
         else:
             g.add(f"{p}_preblur", "INPAINT_MaskedBlur", image=image, mask=mask, blur=65, falloff=9)
         image = g.out(f"{p}_preblur")
