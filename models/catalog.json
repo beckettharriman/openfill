@@ -3,6 +3,7 @@
   "notes": [
     "Every URL points at an official project page: Hugging Face repositories of the model authors (or Comfy-Org / comfyanonymous repackaging), or GitHub releases.",
     "source_type is 'first-party' when the uploader is the model author or the ComfyUI project, 'community-quantization' when a third party converted the weights (uploader named in 'uploader').",
+    "Hugging Face URLs name a commit (resolve/<40-hex commit>/), never a branch: an uploader can replace a file on main, and then its sha256 no longer matches (issue #13).",
     "sha256 values are the LFS checksums published by Hugging Face. GitHub release assets publish none; their sha256 was recorded from the release URL (big-lama.pt on 2026-10-09, size matching the release). Every file must have a sha256 so a download is verified before it is renamed into place.",
     "dest paths are relative to <ComfyUI>/models/. gated=true means the Hugging Face repository requires accepting its license and a user access token.",
     "A file marked optional is skipped when a file with the same dest already exists (for example the FLUX VAE shared by several entries)."
@@ -24,7 +25,7 @@
       "requires_nodes": [],
       "requires_models": [],
       "files": [
-        {"role": "checkpoint", "url": "https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-inpainting/resolve/main/sd-v1-5-inpainting.ckpt", "dest": "checkpoints/sd-v1-5-inpainting.ckpt", "size": 4265437280, "sha256": "c6bbc15e3224e6973459ba78de4998b80b50112b0ae5b5c67113d56b4e366b19"},
+        {"role": "checkpoint", "url": "https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-inpainting/resolve/8a4288a76071f7280aedbdb3253bdb9e9d5d84bb/sd-v1-5-inpainting.ckpt", "dest": "checkpoints/sd-v1-5-inpainting.ckpt", "size": 4265437280, "sha256": "c6bbc15e3224e6973459ba78de4998b80b50112b0ae5b5c67113d56b4e366b19"},
         {"role": "preview", "url": "https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesd_decoder.pth", "dest": "vae_approx/taesd_decoder.pth", "size": 4913399, "sha256": "02873377c3f4659cd9f9adb2f718dcb434ba4c7bba3af3ee7bb95cbdabe2d3cf", "optional": true, "license": "MIT"}
       ]
     },
@@ -46,7 +47,7 @@
       ],
       "requires_models": ["fooocus-inpaint-patch"],
       "files": [
-        {"role": "checkpoint", "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors", "dest": "checkpoints/sd_xl_base_1.0.safetensors", "size": 6938078334, "sha256": "31e35c80fc4829d14f90153f4c74cd59c90b779f6afe05a74cd6120b893f7e5b"},
+        {"role": "checkpoint", "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/462165984030d82259a11f4367a4eed129e94a7b/sd_xl_base_1.0.safetensors", "dest": "checkpoints/sd_xl_base_1.0.safetensors", "size": 6938078334, "sha256": "31e35c80fc4829d14f90153f4c74cd59c90b779f6afe05a74cd6120b893f7e5b"},
         {"role": "preview", "url": "https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesdxl_decoder.pth", "dest": "vae_approx/taesdxl_decoder.pth", "size": 4913541, "sha256": "a3956b8a7a763f251c7357aad6375dacdb6d971121c73e97a3069fc33a94fe1e", "optional": true, "license": "MIT"}
       ]
     },
@@ -68,8 +69,8 @@
       ],
       "requires_models": [],
       "files": [
-        {"role": "fooocus_head", "url": "https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/main/fooocus_inpaint_head.pth", "dest": "inpaint/fooocus_inpaint_head.pth", "size": 52602, "sha256": "32f7f838e0c6d8f13437ba8411e77a4688d77a2e34df8857e4ef4d51f6b97692"},
-        {"role": "fooocus_patch", "url": "https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/main/inpaint_v26.fooocus.patch", "dest": "inpaint/inpaint_v26.fooocus.patch", "size": 1323362033, "sha256": "f8657a025104e22d70f9c060635d8e8c2196f433871a2f68dc40abd2171f0d59"}
+        {"role": "fooocus_head", "url": "https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/74bbcc070e55219adb9b6c3b0d035b34e3697d1d/fooocus_inpaint_head.pth", "dest": "inpaint/fooocus_inpaint_head.pth", "size": 52602, "sha256": "32f7f838e0c6d8f13437ba8411e77a4688d77a2e34df8857e4ef4d51f6b97692"},
+        {"role": "fooocus_patch", "url": "https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/74bbcc070e55219adb9b6c3b0d035b34e3697d1d/inpaint_v26.fooocus.patch", "dest": "inpaint/inpaint_v26.fooocus.patch", "size": 1323362033, "sha256": "f8657a025104e22d70f9c060635d8e8c2196f433871a2f68dc40abd2171f0d59"}
       ]
     },
     {
@@ -90,7 +91,7 @@
       ],
       "requires_models": ["fooocus-inpaint-patch"],
       "files": [
-        {"role": "checkpoint", "url": "https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors", "dest": "checkpoints/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors", "size": 7105348188, "sha256": "c9e3e68f89b8e38689e1097d4be4573cf308de4e3fd044c64ca697bdb4aa8bca"},
+        {"role": "checkpoint", "url": "https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/cf419233522daa0b9ea36c3aff98fa2cab1fb0fb/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors", "dest": "checkpoints/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors", "size": 7105348188, "sha256": "c9e3e68f89b8e38689e1097d4be4573cf308de4e3fd044c64ca697bdb4aa8bca"},
         {"role": "preview", "url": "https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesdxl_decoder.pth", "dest": "vae_approx/taesdxl_decoder.pth", "size": 4913541, "sha256": "a3956b8a7a763f251c7357aad6375dacdb6d971121c73e97a3069fc33a94fe1e", "optional": true, "license": "MIT"}
       ]
     },
@@ -112,10 +113,10 @@
       ],
       "requires_models": [],
       "files": [
-        {"role": "unet", "url": "https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/main/flux1-fill-dev-Q4_0.gguf", "dest": "unet/flux1-fill-dev-Q4_0.gguf", "size": 6809920800, "sha256": "fc9c8398f7ba88d1fe670b5011330c1b08c70838828a0d8f876fe5402653321b"},
-        {"role": "clip1", "url": "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/resolve/main/t5-v1_1-xxl-encoder-Q5_K_M.gguf", "dest": "clip/t5-v1_1-xxl-encoder-Q5_K_M.gguf", "size": 3386856640, "sha256": "b51cbb10b1a7aac6dd1c3b62f0ed908bfd06e0b42d2f3577d43e061361f51dae", "license": "Apache-2.0"},
-        {"role": "clip2", "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors", "dest": "clip/clip_l.safetensors", "size": 246144152, "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd", "license": "Apache-2.0"},
-        {"role": "vae", "url": "https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/main/ae.safetensors", "dest": "vae/ae.safetensors", "size": 335304388, "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38", "gated": true, "license": "Apache-2.0", "optional": true},
+        {"role": "unet", "url": "https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/78b83f1da140a4dcd6466580516544e1f6effe3e/flux1-fill-dev-Q4_0.gguf", "dest": "unet/flux1-fill-dev-Q4_0.gguf", "size": 6809920800, "sha256": "fc9c8398f7ba88d1fe670b5011330c1b08c70838828a0d8f876fe5402653321b"},
+        {"role": "clip1", "url": "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/resolve/005a6ea51a7d0b84d677b3e633bb52a8c85a83d9/t5-v1_1-xxl-encoder-Q5_K_M.gguf", "dest": "clip/t5-v1_1-xxl-encoder-Q5_K_M.gguf", "size": 3386856640, "sha256": "b51cbb10b1a7aac6dd1c3b62f0ed908bfd06e0b42d2f3577d43e061361f51dae", "license": "Apache-2.0"},
+        {"role": "clip2", "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/clip_l.safetensors", "dest": "clip/clip_l.safetensors", "size": 246144152, "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd", "license": "Apache-2.0"},
+        {"role": "vae", "url": "https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/169573f54945f633efbe126a40a5676b4228363c/ae.safetensors", "dest": "vae/ae.safetensors", "size": 335304388, "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38", "gated": true, "license": "Apache-2.0", "optional": true},
         {"role": "preview", "url": "https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taef1_decoder.pth", "dest": "vae_approx/taef1_decoder.pth", "size": 4943336, "sha256": "beae86f2eeaf0cea884dc8ffe639fb297dac8c984441bb53420f07d767785104", "optional": true, "license": "MIT"}
       ]
     },
@@ -137,10 +138,10 @@
       ],
       "requires_models": [],
       "files": [
-        {"role": "unet", "url": "https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/main/flux1-fill-dev-Q6_K.gguf", "dest": "unet/flux1-fill-dev-Q6_K.gguf", "size": 9860932896, "sha256": "d538635d81ed5eca59fa2f5a7b68709f0b5584d936570a8695e4d1ae4d518a72"},
-        {"role": "clip1", "url": "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/resolve/main/t5-v1_1-xxl-encoder-Q5_K_M.gguf", "dest": "clip/t5-v1_1-xxl-encoder-Q5_K_M.gguf", "size": 3386856640, "sha256": "b51cbb10b1a7aac6dd1c3b62f0ed908bfd06e0b42d2f3577d43e061361f51dae", "license": "Apache-2.0"},
-        {"role": "clip2", "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors", "dest": "clip/clip_l.safetensors", "size": 246144152, "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd", "license": "Apache-2.0"},
-        {"role": "vae", "url": "https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/main/ae.safetensors", "dest": "vae/ae.safetensors", "size": 335304388, "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38", "gated": true, "license": "Apache-2.0", "optional": true},
+        {"role": "unet", "url": "https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/78b83f1da140a4dcd6466580516544e1f6effe3e/flux1-fill-dev-Q6_K.gguf", "dest": "unet/flux1-fill-dev-Q6_K.gguf", "size": 9860932896, "sha256": "d538635d81ed5eca59fa2f5a7b68709f0b5584d936570a8695e4d1ae4d518a72"},
+        {"role": "clip1", "url": "https://huggingface.co/city96/t5-v1_1-xxl-encoder-gguf/resolve/005a6ea51a7d0b84d677b3e633bb52a8c85a83d9/t5-v1_1-xxl-encoder-Q5_K_M.gguf", "dest": "clip/t5-v1_1-xxl-encoder-Q5_K_M.gguf", "size": 3386856640, "sha256": "b51cbb10b1a7aac6dd1c3b62f0ed908bfd06e0b42d2f3577d43e061361f51dae", "license": "Apache-2.0"},
+        {"role": "clip2", "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/clip_l.safetensors", "dest": "clip/clip_l.safetensors", "size": 246144152, "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd", "license": "Apache-2.0"},
+        {"role": "vae", "url": "https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/169573f54945f633efbe126a40a5676b4228363c/ae.safetensors", "dest": "vae/ae.safetensors", "size": 335304388, "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38", "gated": true, "license": "Apache-2.0", "optional": true},
         {"role": "preview", "url": "https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taef1_decoder.pth", "dest": "vae_approx/taef1_decoder.pth", "size": 4943336, "sha256": "beae86f2eeaf0cea884dc8ffe639fb297dac8c984441bb53420f07d767785104", "optional": true, "license": "MIT"}
       ]
     },
@@ -160,10 +161,10 @@
       "requires_nodes": [],
       "requires_models": [],
       "files": [
-        {"role": "unet", "url": "https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/resolve/main/flux1-fill-dev.safetensors", "dest": "diffusion_models/flux1-fill-dev.safetensors", "size": 23804922408, "sha256": "03e289f530df51d014f48e675a9ffa2141bc003259bf5f25d75b957e920a41ca", "gated": true},
-        {"role": "clip1", "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors", "dest": "clip/t5xxl_fp8_e4m3fn.safetensors", "size": 4893934904, "sha256": "7d330da4816157540d6bb7838bf63a0f02f573fc48ca4d8de34bb0cbfd514f09", "license": "Apache-2.0"},
-        {"role": "clip2", "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors", "dest": "clip/clip_l.safetensors", "size": 246144152, "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd", "license": "Apache-2.0", "optional": true},
-        {"role": "vae", "url": "https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/resolve/main/ae.safetensors", "dest": "vae/ae.safetensors", "size": 335304388, "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38", "gated": true, "optional": true},
+        {"role": "unet", "url": "https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/resolve/7326a96224b2513681b5d97281c83af967926bb6/flux1-fill-dev.safetensors", "dest": "diffusion_models/flux1-fill-dev.safetensors", "size": 23804922408, "sha256": "03e289f530df51d014f48e675a9ffa2141bc003259bf5f25d75b957e920a41ca", "gated": true},
+        {"role": "clip1", "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/t5xxl_fp8_e4m3fn.safetensors", "dest": "clip/t5xxl_fp8_e4m3fn.safetensors", "size": 4893934904, "sha256": "7d330da4816157540d6bb7838bf63a0f02f573fc48ca4d8de34bb0cbfd514f09", "license": "Apache-2.0"},
+        {"role": "clip2", "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/clip_l.safetensors", "dest": "clip/clip_l.safetensors", "size": 246144152, "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd", "license": "Apache-2.0", "optional": true},
+        {"role": "vae", "url": "https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev/resolve/7326a96224b2513681b5d97281c83af967926bb6/ae.safetensors", "dest": "vae/ae.safetensors", "size": 335304388, "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38", "gated": true, "optional": true},
         {"role": "preview", "url": "https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taef1_decoder.pth", "dest": "vae_approx/taef1_decoder.pth", "size": 4943336, "sha256": "beae86f2eeaf0cea884dc8ffe639fb297dac8c984441bb53420f07d767785104", "optional": true, "license": "MIT"}
       ]
     },
@@ -185,9 +186,9 @@
       ],
       "requires_models": [],
       "files": [
-        {"role": "unet", "url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/main/qwen-image-edit-2511-Q4_K_M.gguf", "dest": "unet/qwen-image-edit-2511-Q4_K_M.gguf", "size": 13244758624, "sha256": "8677bac90627adbbc11efab87b1870e701c4eb3689ee865a3de8ab81b705a723"},
-        {"role": "clip1", "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "dest": "text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "size": 9384670680, "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4", "license": "Apache-2.0"},
-        {"role": "vae", "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors", "dest": "vae/qwen_image_vae.safetensors", "size": 253806246, "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f", "license": "Apache-2.0"}
+        {"role": "unet", "url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/0d33d9692b4b26212297240d87b0d4719aa4fd06/qwen-image-edit-2511-Q4_K_M.gguf", "dest": "unet/qwen-image-edit-2511-Q4_K_M.gguf", "size": 13244758624, "sha256": "8677bac90627adbbc11efab87b1870e701c4eb3689ee865a3de8ab81b705a723"},
+        {"role": "clip1", "url": "https://huggingface.co/Comfy-Org/Qwen-Image/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "dest": "text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "size": 9384670680, "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4", "license": "Apache-2.0"},
+        {"role": "vae", "url": "https://huggingface.co/Comfy-Org/Qwen-Image/resolve/1f12b17be14c89b026c51a91d67c32f84bb047bc/split_files/vae/qwen_image_vae.safetensors", "dest": "vae/qwen_image_vae.safetensors", "size": 253806246, "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f", "license": "Apache-2.0"}
       ]
     },
     {
@@ -213,7 +214,7 @@
       "files": [
         {
           "role": "bg_removal_model",
-          "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+          "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/884af709e9b795d89dafbf97f29c8d6a2386f5c6/background_removal/birefnet.safetensors",
           "dest": "background_removal/birefnet.safetensors",
           "size": 444473596,
           "sha256": "9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154"
@@ -260,7 +261,7 @@
       ],
       "requires_models": [],
       "files": [
-        {"role": "inpaint_model", "url": "https://huggingface.co/Acly/MAT/resolve/main/MAT_Places512_G_fp16.safetensors", "dest": "inpaint/MAT_Places512_G_fp16.safetensors", "size": 125280278, "sha256": "309dd6ce6e04034dc4b6b15c7bd2a4844d158e03eb2a139e0eca6b366e40c0de"}
+        {"role": "inpaint_model", "url": "https://huggingface.co/Acly/MAT/resolve/f8cc47fcbff3624a12ab408ff7852ae70d63b8d9/MAT_Places512_G_fp16.safetensors", "dest": "inpaint/MAT_Places512_G_fp16.safetensors", "size": 125280278, "sha256": "309dd6ce6e04034dc4b6b15c7bd2a4844d158e03eb2a139e0eca6b366e40c0de"}
       ]
     },
     {
@@ -279,10 +280,10 @@
       "requires_nodes": [],
       "requires_models": [],
       "files": [
-        {"role": "unet", "url": "https://huggingface.co/LetsThink/RORem/resolve/main/unet/diffusion_pytorch_model.safetensors", "dest": "unet/RORem-unet.safetensors", "size": 5135178560, "sha256": "ed10552914ce17189e9544071b2b3d1cbd467834e0e5a7b79469dc32800b8b4e"},
-        {"role": "clip1", "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors", "dest": "clip/clip_l.safetensors", "size": 246144152, "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd", "license": "Apache-2.0", "optional": true},
-        {"role": "clip2", "url": "https://huggingface.co/LetsThink/RORem/resolve/main/text_encoder_2/model.safetensors", "dest": "clip/RORem-clip-g.safetensors", "size": 1389382176, "sha256": "ec310df2af79c318e24d20511b601a591ca8cd4f1fce1d8dff822a356bcdb1f4"},
-        {"role": "vae", "url": "https://huggingface.co/LetsThink/RORem/resolve/main/vae/diffusion_pytorch_model.safetensors", "dest": "vae/RORem-sdxl-vae.safetensors", "size": 167335342, "sha256": "6353737672c94b96174cb590f711eac6edf2fcce5b6e91aa9d73c5adc589ee48"},
+        {"role": "unet", "url": "https://huggingface.co/LetsThink/RORem/resolve/22d02de974c8dc92c717cd3431f8b0fe0eeecc3b/unet/diffusion_pytorch_model.safetensors", "dest": "unet/RORem-unet.safetensors", "size": 5135178560, "sha256": "ed10552914ce17189e9544071b2b3d1cbd467834e0e5a7b79469dc32800b8b4e"},
+        {"role": "clip1", "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/6af2a98e3f615bdfa612fbd85da93d1ed5f69ef5/clip_l.safetensors", "dest": "clip/clip_l.safetensors", "size": 246144152, "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd", "license": "Apache-2.0", "optional": true},
+        {"role": "clip2", "url": "https://huggingface.co/LetsThink/RORem/resolve/22d02de974c8dc92c717cd3431f8b0fe0eeecc3b/text_encoder_2/model.safetensors", "dest": "clip/RORem-clip-g.safetensors", "size": 1389382176, "sha256": "ec310df2af79c318e24d20511b601a591ca8cd4f1fce1d8dff822a356bcdb1f4"},
+        {"role": "vae", "url": "https://huggingface.co/LetsThink/RORem/resolve/22d02de974c8dc92c717cd3431f8b0fe0eeecc3b/vae/diffusion_pytorch_model.safetensors", "dest": "vae/RORem-sdxl-vae.safetensors", "size": 167335342, "sha256": "6353737672c94b96174cb590f711eac6edf2fcce5b6e91aa9d73c5adc589ee48"},
         {"role": "preview", "url": "https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesdxl_decoder.pth", "dest": "vae_approx/taesdxl_decoder.pth", "size": 4913541, "sha256": "a3956b8a7a763f251c7357aad6375dacdb6d971121c73e97a3069fc33a94fe1e", "optional": true, "license": "MIT"}
       ]
     },
@@ -304,7 +305,7 @@
       ],
       "requires_models": ["flux1-fill-dev-gguf-q4"],
       "files": [
-        {"role": "lora", "url": "https://huggingface.co/lrzjason/ObjectRemovalFluxFill/resolve/main/objectRemovalv1_r32.safetensors", "dest": "loras/objectRemovalv1_r32.safetensors", "size": 315889584, "sha256": "66e85b8d4fea938b8377ac01bdceab94c7f75dbec23f669b45418e192f3a7c16", "license": "MIT"}
+        {"role": "lora", "url": "https://huggingface.co/lrzjason/ObjectRemovalFluxFill/resolve/867f2e6adb15232efd8d07bbb289e0f9f7551791/objectRemovalv1_r32.safetensors", "dest": "loras/objectRemovalv1_r32.safetensors", "size": 315889584, "sha256": "66e85b8d4fea938b8377ac01bdceab94c7f75dbec23f669b45418e192f3a7c16", "license": "MIT"}
       ]
     },
     {
@@ -323,7 +324,7 @@
       "requires_nodes": [],
       "requires_models": [],
       "files": [
-        {"role": "checkpoint", "url": "https://huggingface.co/SG161222/Realistic_Vision_V6.0_B1_noVAE/resolve/main/Realistic_Vision_V6.0_NV_B1_inpainting_fp16.safetensors", "dest": "checkpoints/Realistic_Vision_V6.0_NV_B1_inpainting_fp16.safetensors", "size": 2136906350, "sha256": "d939cbdbce19a9d8837794acd06ef8db1ad4a2f2bcf1418432d897eac98f1afd"},
+        {"role": "checkpoint", "url": "https://huggingface.co/SG161222/Realistic_Vision_V6.0_B1_noVAE/resolve/9a857a696b9aabbf509073e0aa55ec8200b6ef7d/Realistic_Vision_V6.0_NV_B1_inpainting_fp16.safetensors", "dest": "checkpoints/Realistic_Vision_V6.0_NV_B1_inpainting_fp16.safetensors", "size": 2136906350, "sha256": "d939cbdbce19a9d8837794acd06ef8db1ad4a2f2bcf1418432d897eac98f1afd"},
         {"role": "preview", "url": "https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesd_decoder.pth", "dest": "vae_approx/taesd_decoder.pth", "size": 4913399, "sha256": "02873377c3f4659cd9f9adb2f718dcb434ba4c7bba3af3ee7bb95cbdabe2d3cf", "optional": true, "license": "MIT"}
       ]
     },
@@ -343,7 +344,7 @@
       "requires_nodes": [],
       "requires_models": [],
       "files": [
-        {"role": "checkpoint", "url": "https://huggingface.co/Lykon/DreamShaper/resolve/main/DreamShaper_8_INPAINTING.inpainting.safetensors", "dest": "checkpoints/DreamShaper_8_INPAINTING.inpainting.safetensors", "size": 2132703862, "sha256": "ac84e05d5039d7a8aea3ced335ac7c56da6d3c6816465651f928b137c3a7b24a"},
+        {"role": "checkpoint", "url": "https://huggingface.co/Lykon/DreamShaper/resolve/228d79cb20811466f5c5710aa91f05dabd0b8a14/DreamShaper_8_INPAINTING.inpainting.safetensors", "dest": "checkpoints/DreamShaper_8_INPAINTING.inpainting.safetensors", "size": 2132703862, "sha256": "ac84e05d5039d7a8aea3ced335ac7c56da6d3c6816465651f928b137c3a7b24a"},
         {"role": "preview", "url": "https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesd_decoder.pth", "dest": "vae_approx/taesd_decoder.pth", "size": 4913399, "sha256": "02873377c3f4659cd9f9adb2f718dcb434ba4c7bba3af3ee7bb95cbdabe2d3cf", "optional": true, "license": "MIT"}
       ]
     },
@@ -365,7 +366,7 @@
       ],
       "requires_models": ["fooocus-inpaint-patch"],
       "files": [
-        {"role": "checkpoint", "url": "https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/main/RealVisXL_V5.0_fp16.safetensors", "dest": "checkpoints/RealVisXL_V5.0_fp16.safetensors", "size": 6938065488, "sha256": "6a35a7855770ae9820a3c931d4964c3817b6d9e3c6f9c4dabb5b3a94e5643b80"},
+        {"role": "checkpoint", "url": "https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/ac93e0dda1f6d448cae19bbfab8c5e720a5e48bc/RealVisXL_V5.0_fp16.safetensors", "dest": "checkpoints/RealVisXL_V5.0_fp16.safetensors", "size": 6938065488, "sha256": "6a35a7855770ae9820a3c931d4964c3817b6d9e3c6f9c4dabb5b3a94e5643b80"},
         {"role": "preview", "url": "https://github.com/madebyollin/taesd/raw/d968ebf70e930b76243c773a63162ed94482361f/taesdxl_decoder.pth", "dest": "vae_approx/taesdxl_decoder.pth", "size": 4913541, "sha256": "a3956b8a7a763f251c7357aad6375dacdb6d971121c73e97a3069fc33a94fe1e", "optional": true, "license": "MIT"}
       ]
     }

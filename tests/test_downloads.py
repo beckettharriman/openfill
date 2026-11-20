@@ -179,6 +179,7 @@ class DownloadTests(unittest.TestCase):
             downloads.download_file(self.url, self.dest, len(PAYLOAD) + 1, SHA)
         self.assertEqual(ctx.exception.code, "size")
         self.assertFalse(downloads.part_path(self.dest).exists())
+        self.assert_says_our_list_is_out_of_date(str(ctx.exception))
 
     def test_hash_mismatch_deletes_file(self):
         with self.assertRaises(downloads.DownloadError) as ctx:
@@ -186,6 +187,17 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "hash")
         self.assertFalse(self.dest.exists())
         self.assertFalse(downloads.part_path(self.dest).exists())
+        self.assert_says_our_list_is_out_of_date(str(ctx.exception))
+        self.assertIn("deleted", str(ctx.exception))
+
+    def assert_says_our_list_is_out_of_date(self, message):
+        # issue #13: the user must learn that OpenFill's list is stale, not that their download broke
+        self.assertIn(self.dest.name, message)
+        self.assertIn("Your download and your connection are fine", message)
+        self.assertIn("OpenFill's file list is out of date", message)
+        self.assertIn("Update OpenFill", message)
+        self.assertIn(downloads.ISSUES_PAGE, message)
+        self.assertNotIn("\u2014", message)  # no em dash in user-facing text
 
     def test_https_to_http_redirect_is_refused(self):
         with self.assertRaises(downloads.DownloadError) as ctx:

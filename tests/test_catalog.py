@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import copy
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,6 +53,28 @@ class ShippedCatalogTests(unittest.TestCase):
                     self.assertEqual(n.commit, downloads.bundled_node_version(), n.folder)
                     continue
                 self.assertEqual(len(n.commit), 40, n.folder)
+
+    def test_hugging_face_urls_are_pinned_to_a_commit(self):
+        # resolve/main follows the branch: when an uploader replaces a file (issue #13) the
+        # stored sha256 no longer matches and every download fails. Only a 40-hex commit is fixed.
+        resolve = re.compile(r"https://huggingface\.co/[^/\s]+/[^/\s]+/resolve/([^/\s]+)/")
+        pinned = re.compile(r"[0-9a-f]{40}")
+        found = []
+        for e in self.entries:
+            for f in e.files:
+                if f.url.startswith("https://huggingface.co/"):
+                    m = resolve.match(f.url)
+                    self.assertIsNotNone(m, f"{e.id}: {f.url} is not a resolve/<revision>/ download URL")
+                    found.append((e.id, f.url, m.group(1)))
+        raw = json.loads(CATALOG.read_text(encoding="utf-8"))  # also files the parser might skip
+        for text, where in (
+            (json.dumps(raw), "catalog.json"),
+            ((REPO / "docs" / "models.md").read_text("utf-8"), "models.md"),
+        ):
+            found += [(where, m.group(0), m.group(1)) for m in resolve.finditer(text)]
+        self.assertGreater(len(found), 20)
+        bad = [f"{where}: {url}" for where, url, rev in found if not pinned.fullmatch(rev)]
+        self.assertEqual(bad, [], "Hugging Face URLs must use a commit revision, not a branch or tag")
 
     def test_gated_flags(self):
         flux = cat.by_id(self.entries, "flux1-fill-dev-gguf-q4")

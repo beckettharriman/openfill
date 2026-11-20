@@ -221,6 +221,21 @@ def _open(
     return opener(req, timeout=timeout)
 
 
+ISSUES_PAGE = "https://github.com/beckettharriman/openfill/issues"
+
+
+def changed_upstream_message(url: str, name: str, got: str, expected: str) -> str:
+    """The text for a server file that differs from the one OpenFill lists: our list is out of date,
+    not the user's download (issue #13: an uploader replaced a file on its main branch)."""
+    host = urlparse(url).hostname or url
+    return (
+        f"{name} on {host} is not the file OpenFill expects ({got}, expected {expected}). "
+        "Your download and your connection are fine: the file was changed after this version of "
+        "OpenFill was made, so OpenFill's file list is out of date. Update OpenFill, or report it at "
+        f"{ISSUES_PAGE} so the list can be fixed."
+    )
+
+
 def download_file(
     url: str,
     dest: Path,
@@ -329,7 +344,9 @@ def download_file(
                 offset = 0
                 total = int(length) if length else expected_size
             if expected_size and total and total != expected_size:
-                raise DownloadError("size", f"server reports {total} bytes, catalog expects {expected_size}")
+                raise DownloadError(
+                    "size", changed_upstream_message(url, dest.name, f"{total:,} bytes", f"{expected_size:,}")
+                )
             if total:
                 try:
                     free: int | None = shutil.disk_usage(dest.parent).free
@@ -411,8 +428,8 @@ def download_file(
                 )
             raise DownloadError(
                 "hash",
-                f"checksum mismatch for {dest.name}: got {digest[:12]}..., "
-                f"expected {expected_sha256[:12]}...; the file was deleted",
+                changed_upstream_message(url, dest.name, f"checksum {digest[:12]}", f"{expected_sha256[:12]}")
+                + " The downloaded copy was deleted.",
             )
     elif part.is_file():
         digest = _sha256_of(part, cancel)

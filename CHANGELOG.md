@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fixed: the Qwen-Image-Edit 2511 download failed its check because unsloth replaced the file on Hugging Face (#13). Every Hugging Face download in the model list now comes from a fixed commit, so a file changed upstream can no longer break a download. If a file still doesn't match, the message now says it is OpenFill's list that is out of date, not your download.
 - Fixed in OpenFill for PhotoCraft 0.2.6: on Windows the installer said PhotoCraft is not installed when PhotoCraft 0.17 or newer was installed just for you.
 
 ## [2.0.0-beta.7] - 2026-11-08

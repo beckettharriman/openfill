@@ -283,6 +283,16 @@ log in `docs/evidence/catalog-url-check.txt`). Live entries use the same
 schema plus `source` (`huggingface` or `civitai`), `family`, `downloads`,
 `updated` and `repo`.
 
+Every Hugging Face download is pinned to a commit
+(`resolve/<40-character commit>/<file>`), never to `main`. A branch follows the
+uploader: when unsloth replaced the Qwen-Image-Edit Q4_K_M file on `main`
+(2026-10-29, #13), the stored SHA-256 stopped matching and every download
+failed. A pinned commit always serves the file whose SHA-256 is stored.
+`tests/test_catalog.py` fails on any branch URL, and
+`tests/check_catalog_urls.py` compares the `X-Linked-ETag` Hugging Face sends
+(the file's SHA-256) with the catalog. To move an entry to a newer file,
+update the commit, size and SHA-256 together.
+
 No reputable repository offers a Q4_K_M quantization of FLUX.1 Fill; the
 catalog uses YarvixPA's Q4_0 (the most downloaded FLUX Fill GGUF) and lists
 the first-party safetensors as the alternative.
