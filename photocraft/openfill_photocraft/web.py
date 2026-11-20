@@ -218,7 +218,12 @@ class Api:
             return {"task": svc.setup_comfy()}
         if path == "/api/backend/check":
             health = app.check_backend()
-            return {"ok": health.ok, "detail": health.detail, "device": getattr(health, "device", "")}
+            return {
+                "ok": health.ok,
+                "detail": health.detail,
+                "device": getattr(health, "device", ""),
+                "note": app.backend_note() if health.ok else "",
+            }
         if path == "/api/backend/stop":
             return {"message": app.stop_backend()}
         if path == "/api/logs":

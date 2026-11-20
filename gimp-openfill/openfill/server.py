@@ -18,6 +18,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -25,7 +26,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .backend import BackendUnavailable, GenerationCancelled
-from .comfy_api import ComfyClient
+from .comfy_api import ComfyApiError, ComfyClient
 from .config import Paths, Settings, comfy_layout, comfy_problem, in_app_bundle, windows_path_problem
 from .supervisor import WATCHERS_DIRNAME, pid_alive, pid_is_python
 
@@ -56,6 +57,134 @@ def port_answers(host: str, port: int, timeout: float = 1.0) -> bool:
             return True
     except OSError:
         return False
+
+
+def port_bindable(host: str, port: int) -> bool:
+    """True when a server could listen on ``host:port`` now (nothing holds it)."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
+            sock.bind((host, port))
+        return True
+    except OSError:
+        return False
+
+
+def free_port(
+    host: str,
+    after: int,
+    avoid: tuple[int, ...] = (),
+    tries: int = 20,
+    answers: Callable[..., bool] = port_answers,
+    bindable: Callable[[str, int], bool] = port_bindable,
+) -> int | None:
+    """The first port after ``after`` (not in ``avoid``) that nothing answers on and that can
+    be listened on, for OpenFill's own ComfyUI when its usual port is taken; None when the
+    next ``tries`` ports are all in use."""
+    for port in range(after + 1, min(after + 1 + tries, 65536)):
+        if port in avoid:
+            continue
+        if not answers(host, port, timeout=0.3) and bindable(host, port):
+            return port
+    return None
+
+
+def with_port(url: str, port: int) -> str:
+    """``url`` with its port replaced (scheme, host and path kept)."""
+    parts = urlparse(url)
+    host = parts.hostname or "127.0.0.1"
+    if ":" in host:
+        host = f"[{host}]"
+    return parts._replace(netloc=f"{host}:{port}").geturl()
+
+
+def comfy_argv(stats: dict[str, Any]) -> list[str] | None:
+    """The command line ComfyUI was started with (``system.argv`` of /system_stats), or None
+    when this ComfyUI does not say."""
+    argv = (stats.get("system") or {}).get("argv") if isinstance(stats, dict) else None
+    if not isinstance(argv, list) or not argv:
+        return None
+    return [str(a) for a in argv]
+
+
+def _base_name(path: str) -> str:
+    return re.split(r"[\\/]", path)[-1].lower()
+
+
+def same_comfy_command(argv: list[str], command: list[str]) -> bool:
+    """True when ``argv`` (ComfyUI's ``sys.argv``: main.py and its options) is the tail of
+    ``command`` (the supervisor's ``[python, -s, main.py, options...]``)."""
+    if not argv or len(command) <= len(argv):
+        return False
+    tail = [str(a) for a in command[len(command) - len(argv) :]]
+    return _base_name(tail[0]) == _base_name(argv[0]) and tail[1:] == argv[1:]
+
+
+# A first start of ComfyUI takes 20 s to about 2 minutes; past this the progress text and
+# the companion's status line add a hint.
+SLOW_START_S = 90
+
+
+def unresponsive_folders(folders: list[str], timeout: float = 2.0) -> list[str]:
+    """The folders of ``folders`` that do not answer within ``timeout`` seconds (a sleeping,
+    unplugged or network drive behind an automount). Each is looked at in its own daemon
+    thread, so a folder that hangs never holds the caller up."""
+    done: dict[str, bool] = {}
+
+    def look(folder: str) -> None:
+        try:
+            os.stat(folder)
+        except OSError:
+            pass
+        done[folder] = True
+
+    threads = []
+    for folder in folders:
+        t = threading.Thread(target=look, args=(folder,), name="openfill-folder-check", daemon=True)
+        t.start()
+        threads.append(t)
+    deadline = time.monotonic() + timeout
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+    return [f for f in folders if not done.get(f)]
+
+
+def slow_start_hint(slow_folders: list[str] | None = None) -> str:
+    """Plain words for a ComfyUI that takes longer to start than usual (see :data:`SLOW_START_S`)."""
+    if slow_folders:
+        return (
+            f"Slower than usual: the model folder {slow_folders[0]} does not answer. A sleeping, unplugged "
+            "or network drive holds ComfyUI up. Plug it in, or take the folder out of Models from another ComfyUI."
+        )
+    return (
+        "Slower than usual. A model folder on a slow, sleeping or unplugged drive can hold ComfyUI up; "
+        "the ComfyUI log shows where it is."
+    )
+
+
+class PortTaken(BackendUnavailable):
+    """The port OpenFill started its own ComfyUI on is held by another program
+    (``comfy``: by another ComfyUI). ServerManager then moves to a free port."""
+
+    def __init__(self, host: str, port: int, comfy: bool = False) -> None:
+        self.host, self.port, self.comfy = host, port, comfy
+        if comfy:
+            text = (
+                f"Port {port} is used by another ComfyUI (not the one OpenFill started), and no free port "
+                f"was found next to it. Close that ComfyUI, or set a free port in the ComfyUI URL in "
+                "Filters > OpenFill > Generative Fill Settings."
+            )
+        else:
+            text = port_in_use_message(host, port)
+        super().__init__(text)
+
+
+def moved_port_note(old: int, new: int) -> str:
+    """The status line for OpenFill's ComfyUI on another port than the one in the settings."""
+    return (
+        f"Port {old} is used by another program, so OpenFill started its own ComfyUI on port {new}. "
+        "Your settings are unchanged."
+    )
 
 
 def _hidden_python() -> str:
@@ -106,6 +235,8 @@ class ServerManager:
         self.watch_name = ""  # the watched process's executable name, set with watch_pid
         self._remote: Any = None  # remote.RemoteLink, made when the Remote GPU is the backend
         self._remote_status: tuple[float, dict[str, Any]] = (0.0, {})
+        self._foreign = ""  # the URL of a ComfyUI in use that OpenFill did not start
+        self._told: set[str] = set()  # notes already written to the log
 
     # Remote GPU ------------------------------------------------------------
 
@@ -215,6 +346,68 @@ class ServerManager:
 
         return gone
 
+    def live_state(self) -> dict[str, Any]:
+        """The state file while the supervisor that wrote it runs; ``{}`` otherwise."""
+        state = self.read_state()
+        sup = state.get("supervisor_pid")
+        return state if _valid_pid(sup) and pid_is_python(sup) else {}
+
+    def answering_is_ours(self, url: str, state: dict[str, Any] | None = None) -> bool | None:
+        """Is the ComfyUI that answers at ``url`` the one OpenFill's supervisor started? Its
+        command line (``/system_stats``) is compared with the one the supervisor recorded.
+        True or False; None when that cannot be told (no running supervisor, a state from
+        another address, a ComfyUI that does not show its command line, no answer)."""
+        state = self.live_state() if state is None else state
+        command = state.get("command")
+        if not isinstance(command, list) or not command:
+            return None
+        if state.get("url") and _split_host_port(str(state["url"]))[1] != _split_host_port(url)[1]:
+            return None
+        try:
+            argv = comfy_argv(ComfyClient(url, timeout=3).system_stats())
+        except (ComfyApiError, OSError, ValueError):
+            return None
+        if argv is None:
+            return None
+        return same_comfy_command(argv, [str(c) for c in command])
+
+    def note(self) -> str:
+        """A plain line for the status and Check backend: OpenFill's ComfyUI runs on another
+        port than the settings say (the usual one was taken), or the ComfyUI in use is one
+        OpenFill did not start. "" when neither."""
+        if self.settings.uses_remote or self.settings.backend != "comfyui":
+            return ""
+        state = self.live_state()
+        configured = _split_host_port(self.settings.url)[1]
+        port = state.get("port")
+        if isinstance(port, int) and port != configured:
+            return moved_port_note(configured, port)
+        if self._foreign and not state:
+            text = f"Using the ComfyUI that was already running at {self._foreign} (OpenFill did not start it)."
+            if self.settings.shared_models.strip():
+                text += " It does not read your folders in Models from another ComfyUI unless it was set up with them."
+            return text
+        return ""
+
+    def short_note(self) -> str:
+        """:meth:`note` in a few words for the companion's status line ("" when none)."""
+        if self.settings.uses_remote or self.settings.backend != "comfyui":
+            return ""
+        state = self.live_state()
+        configured = _split_host_port(self.settings.url)[1]
+        port = state.get("port")
+        if isinstance(port, int) and port != configured:
+            return f"Ready on port {port} ({configured} is taken)"
+        if self._foreign and not state and self.settings.shared_models.strip():
+            return "Ready (a ComfyUI OpenFill did not start)"
+        return ""
+
+    def _tell(self, text: str) -> None:
+        """Log ``text`` once per manager."""
+        if text and text not in self._told and self.log:
+            self._told.add(text)
+            self.log.info("%s", text)
+
     def is_healthy(self, url: str | None = None) -> bool:
         """True when the selected backend answers at ``url``."""
         if self.settings.backend == "a1111":
@@ -235,6 +428,16 @@ class ServerManager:
             return url
         url = self.url()
         if self.is_healthy(url):
+            if self.settings.backend == "comfyui":
+                state = self.live_state()
+                if state and self.settings.autostart and self.answering_is_ours(url, state) is False:
+                    # OpenFill's own ComfyUI is still loading and another one took its port: it
+                    # would fail to listen there. Wait for it, which moves it to a free port.
+                    if self.log:
+                        self.log.warning("another ComfyUI answers at %s, not the one OpenFill is starting", url)
+                    return self._await_own(url, progress, cancel)
+                self._foreign = "" if state else url
+                self._tell(self.note())
             self.touch()
             return url
         if self.settings.backend == "a1111":
@@ -266,15 +469,50 @@ class ServerManager:
         self._drop_stale_cpu_flag()
         url = self.settings.url
         host, port = _split_host_port(url)
-        # Something already listening here is not a healthy ComfyUI (ensure_running checked), so launching
-        # would only make ComfyUI load for half a minute and then fail to bind the port.
+        self._foreign = ""
         if port_answers(host, port, timeout=1.0):
-            if ComfyClient(url).is_alive(timeout=10.0):  # a busy ComfyUI that was slow to answer the first check
+            # Not a healthy ComfyUI (ensure_running checked): maybe a busy one that was slow to answer.
+            if ComfyClient(url).is_alive(timeout=10.0):
+                self._foreign = "" if self.live_state() else url
+                self._tell(self.note())
                 self.touch()
                 return url
             if self.log:
                 self.log.warning("port %s on %s is taken by a program that is not ComfyUI", port, host)
-            raise BackendUnavailable(port_in_use_message(host, port))
+            new = free_port(host, port)
+            if new is None:
+                raise BackendUnavailable(port_in_use_message(host, port))
+            self._tell(moved_port_note(port, new))
+            if progress:
+                progress(
+                    0.0, f"Port {port} is used by another program. Starting OpenFill's own ComfyUI on port {new}..."
+                )
+            url, port = with_port(url, new), new
+        self._spawn_supervisor(layout, host, port)
+        return self._await_own(url, progress, cancel)
+
+    def _await_own(self, url: str, progress: ProgressCallback | None, cancel: Callable[[], bool] | None) -> str:
+        """Wait for OpenFill's ComfyUI at ``url``. When another program takes its port while
+        it loads (it would then fail to listen), start it again once on a free port."""
+        try:
+            return self._wait_ready(url, progress, cancel)
+        except PortTaken as err:
+            configured = _split_host_port(self.settings.url)[1]
+            new = free_port(err.host, err.port, avoid=(configured,))
+            layout = comfy_layout(self.settings.comfy_dir)
+            if new is None or layout is None:
+                raise
+            what = "another ComfyUI" if err.comfy else "another program"
+            if self.log:
+                self.log.warning("port %s is used by %s; starting OpenFill's ComfyUI on port %s", err.port, what, new)
+            self._tell(moved_port_note(err.port, new))
+            if progress:
+                progress(0.0, f"Port {err.port} is used by {what}. Starting OpenFill's own ComfyUI on port {new}...")
+            self._spawn_supervisor(layout, err.host, new)
+            return self._wait_ready(with_port(url, new), progress, cancel)
+
+    def _spawn_supervisor(self, layout: dict[str, Path], host: str, port: int) -> None:
+        """Launch the backend supervisor detached, for ComfyUI on ``host:port``."""
         gimp_pid = self.watch_pid or os.getppid()
         cmd = [
             self._helper_python(),
@@ -306,7 +544,6 @@ class ServerManager:
         if self.log:
             self.log.info("launching supervisor (gimp pid %s): %s", gimp_pid, " ".join(cmd))
         self._spawn_detached(cmd)
-        return self._wait_ready(url, progress, cancel)
 
     # tasks (downloads, node installs) -------------------------------------
 
@@ -484,9 +721,14 @@ class ServerManager:
             subprocess.Popen(cmd, start_new_session=True, **kwargs)
 
     def _wait_ready(self, url: str, progress: ProgressCallback | None, cancel: Callable[[], bool] | None = None) -> str:
+        """Wait until OpenFill's ComfyUI answers at ``url``. A ComfyUI that answers there but is
+        not the one the supervisor started (the user's own, started while ours loaded) does not
+        count: ours is stopped and :class:`PortTaken` raised, so the caller moves to a free port."""
         client = ComfyClient(url)
+        host, port = _split_host_port(url)
         timeout = max(30, int(self.settings.startup_timeout))
         started = time.monotonic()
+        hint = ""
         while time.monotonic() - started < timeout:
             elapsed = time.monotonic() - started
             if cancel and cancel():
@@ -494,22 +736,40 @@ class ServerManager:
                 if self.log:
                     self.log.info("cancelled while the backend was starting (%.0f s)", elapsed)
                 raise GenerationCancelled("cancelled while the AI backend was starting")
-            if progress:
-                progress(min(0.95, elapsed / timeout), f"Starting the AI backend... {int(elapsed)} s")
-            if client.is_alive(timeout=2.0):
-                self.touch()
+            if elapsed >= SLOW_START_S and not hint:
+                hint = slow_start_hint(unresponsive_folders(self._model_folders()))
                 if self.log:
-                    self.log.info("backend ready at %s after %.0f s", url, elapsed)
-                return url
+                    self.log.warning("ComfyUI is still starting after %.0f s. %s", elapsed, hint)
+            if progress:
+                text = f"Starting the AI backend... {int(elapsed)} s"
+                progress(min(0.95, elapsed / timeout), f"{text}. {hint}" if hint else text)
             state = self.read_state()
+            sup = state.get("supervisor_pid")
+            live = state if _valid_pid(sup) and pid_is_python(sup) else {}
+            if client.is_alive(timeout=2.0):
+                mine = self.answering_is_ours(url, live) if live else None
+                if mine is False:
+                    if self.log:
+                        self.log.warning(
+                            "another ComfyUI answers at %s, not the one OpenFill started (pid %s)",
+                            url,
+                            state.get("server_pid"),
+                        )
+                    self._stop_own(live, cancel)
+                    raise PortTaken(host, port, comfy=True)
+                if live:  # ours, or one that does not show its command line (as before)
+                    self.touch()
+                    if self.log:
+                        self.log.info("backend ready at %s after %.0f s", url, elapsed)
+                    return url
+                # no running supervisor has written its state yet: who answers is not known yet
             if state.get("status") == "failed" or (elapsed > 15 and not state):
                 break
             time.sleep(1.5)
         elapsed = time.monotonic() - started
         tail = self.server_log_tail()
         if "already in use" in tail.lower():
-            host, port = _split_host_port(url)
-            raise BackendUnavailable(port_in_use_message(host, port))
+            raise PortTaken(host, port, comfy=ComfyClient(url).is_alive(timeout=2.0))
         if self.log:
             self.log.warning("backend did not come up at %s after %.0f s; log tail:\n%s", url, elapsed, tail)
         raise BackendUnavailable(
@@ -517,6 +777,28 @@ class ServerManager:
             "the extra server arguments in Filters > OpenFill > Generative Fill Settings, then try again. "
             f"Last lines of the ComfyUI log ({self.paths.server_log}):\n{tail}"
         )
+
+    def _stop_own(self, state: dict[str, Any], cancel: Callable[[], bool] | None = None) -> None:
+        """Ask the supervisor of ``state`` to stop its ComfyUI and wait (up to 40 s) until it is
+        gone, so a new one can start on another port."""
+        supervisor = state.get("supervisor_pid")
+        if not self.request_stop():
+            return
+        deadline = time.monotonic() + 40
+        while time.monotonic() < deadline and not (cancel and cancel()):
+            now = self.read_state()
+            if not now or now.get("supervisor_pid") != supervisor or not pid_is_python(supervisor):
+                return
+            time.sleep(0.5)
+
+    def _model_folders(self) -> list[str]:
+        """The folders the starting ComfyUI reads models from besides its own: the shared
+        folders it was started with, else the ones in the settings."""
+        roots = self.read_state().get("shared_roots")
+        if isinstance(roots, list) and roots:
+            return [str(r) for r in roots]
+        # as stored (one per line), without looking at them: that could hang as well
+        return [line.strip() for line in self.settings.shared_models.splitlines() if line.strip()]
 
     def server_log_tail(self, lines: int = 8) -> str:
         """Last ``lines`` lines of the ComfyUI log, for error messages."""

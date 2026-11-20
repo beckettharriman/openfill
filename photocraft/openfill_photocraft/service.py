@@ -53,6 +53,7 @@ GIMP_TEXT = (
 # while one it started again is still loading.
 ENGINE_STOPPED = "stopped"
 ENGINE_RESTARTING = "restarting"
+STARTING_STATES = ("starting", ENGINE_RESTARTING)
 
 
 def photocraft_text(text: str) -> str:
@@ -186,6 +187,24 @@ class Service:
         self._job_base: list[str] = []
         self._expected_history: list[str] = []
         self._collapsed = False  # the job's several steps were made into one (an expand)
+
+    @property
+    def engine(self) -> str:
+        """What ComfyUI is doing: "" (not started by us), "starting", "ready", ENGINE_STOPPED,
+        ENGINE_RESTARTING, or why it failed."""
+        return self._engine
+
+    @engine.setter
+    def engine(self, value: str) -> None:
+        if value in STARTING_STATES and getattr(self, "_engine", "") not in STARTING_STATES:
+            self._engine_since = time.monotonic()  # a start begins: the slow-start hint counts from here
+        self._engine = value
+
+    def starting_for(self) -> float:
+        """Seconds the engine has been starting (0 when it is not starting)."""
+        if self._engine not in STARTING_STATES:
+            return 0.0
+        return time.monotonic() - getattr(self, "_engine_since", time.monotonic())
 
     def _find_comfy(self) -> None:
         """First start: use the ComfyUI OpenFill for GIMP uses, or one already on this computer."""

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- When another ComfyUI or another program already uses ComfyUI's port (8188), OpenFill now starts its own ComfyUI on the next free port and says so, instead of silently using the other one while its own failed to start (#12). This also covers another ComfyUI that takes the port while OpenFill's is still loading. A ComfyUI that already runs at the URL is still used, and Check backend now says so.
+- On Linux, the AMD setting `HSA_OVERRIDE_GFX_VERSION` is no longer set when the computer also has an NVIDIA card that ComfyUI runs on, such as an RTX card next to a Radeon 610M in the processor (#12).
+- A ComfyUI start that takes longer than 90 seconds now says so, with a hint about model folders on sleeping or unplugged drives, and names such a folder when it doesn't answer (#12).
 - Fixed in OpenFill for PhotoCraft 0.2.6: on Windows the installer said PhotoCraft is not installed when PhotoCraft 0.17 or newer was installed just for you.
 
 ## [2.0.0-beta.7] - 2026-11-08

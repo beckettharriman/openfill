@@ -215,7 +215,7 @@ venv/bin/pip install -r requirements.txt opencv-python-headless
 
 Your user needs to be in the `render` and `video` groups (`sudo usermod -aG render,video $USER`, then log out and in). Then choose `~/ComfyUI` in the panel (PhotoCraft) or run `sh install.sh --comfy-dir ~/ComfyUI` (GIMP).
 
-ROCm officially supports the RX 7700 and up and the RX 9000 series on Linux. The RX 6700 and 6600 (and other RDNA 2 cards except the 6800 and 6900) need `HSA_OVERRIDE_GFX_VERSION=10.3.0`, and the Radeon 780M and 760M `11.0.0`, as ComfyUI's README says. OpenFill sets that by itself when it starts ComfyUI for one of those cards (unless you set it already) and writes it in its log. If you installed AMD's own PyTorch (`device-gfx1031`, say), OpenFill leaves it off. With a Ryzen's Radeon graphics next to the card, OpenFill goes by the card with the most memory. All of this is untested on a real RX 6000 so far.
+ROCm officially supports the RX 7700 and up and the RX 9000 series on Linux. The RX 6700 and 6600 (and other RDNA 2 cards except the 6800 and 6900) need `HSA_OVERRIDE_GFX_VERSION=10.3.0`, and the Radeon 780M and 760M `11.0.0`, as ComfyUI's README says. OpenFill sets that by itself when it starts ComfyUI for one of those cards (unless you set it already) and writes it in its log. If you installed AMD's own PyTorch (`device-gfx1031`, say), OpenFill leaves it off. With a Ryzen's Radeon graphics next to the card, OpenFill goes by the card with the most memory. With an NVIDIA card in the same computer it sets nothing, since ComfyUI runs on the NVIDIA card, unless that ComfyUI has PyTorch for ROCm. All of this is untested on a real RX 6000 so far.
 
 ## Install script options (GIMP)
 
@@ -246,6 +246,8 @@ PhotoCraft and GIMP stay installed. Your models stay in your ComfyUI folder, and
 Every error message ends with what to do next, and in GIMP the same advice shows in the progress window. For a bug report, turn on Verbose log in Settings, do it again, and attach the log file to an [issue](https://github.com/beckettharriman/openfill/issues). Never attach `config.json`, it may hold your Hugging Face token or your cloud API key.
 
 - **PhotoCraft was opened another way:** open it with "PhotoCraft with OpenFill" (or the menu entry the installer set up on Linux). A PhotoCraft opened another way has no control channel; OpenFill notices and asks you to close it and open it again.
+- **Another ComfyUI uses the port:** OpenFill starts its own ComfyUI on port 8188 (the port in the ComfyUI URL). If another program or another ComfyUI already holds that port, OpenFill starts its own on the next free port and says so in the status line and under Check. Your settings stay as they are. A ComfyUI that is already running when OpenFill starts is used as it is; it only reads your folders in Models from another ComfyUI if it was set up with them.
+- **The AI engine takes long to start:** the first start takes up to about two minutes. After 90 seconds OpenFill says it is slower than usual. A common cause is a model folder on a sleeping, unplugged or network drive; OpenFill names the folder when it doesn't answer.
 - **Where things are kept:** `%APPDATA%\OpenFill for PhotoCraft` on Windows and `~/.config/openfill-photocraft` on Linux for the PhotoCraft version, `<GIMP profile>/openfill` for the GIMP plug-in. Settings in the GIMP plug-in are created the first time you change one; until then the defaults are used.
 
 ### One-click uninstall (OpenFill for PhotoCraft 0.2.3 and newer)

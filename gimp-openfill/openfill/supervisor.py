@@ -1042,8 +1042,11 @@ def _run_backend(
     # OpenFill's own node pack (native-resolution LaMa) is copied in before ComfyUI loads its nodes.
     downloads.ensure_bundled_nodes(Path(args.main).resolve().parent / "custom_nodes", log)
     try:
-        # Linux, an AMD card PyTorch's ROCm build has no code for (unless AMD's own kernels for it are installed)
-        extra_env = hardware.rocm_env(native=hardware.rocm_native_kernels(args.python))
+        # Linux, an AMD card PyTorch's ROCm build has no code for (unless AMD's own kernels for it are
+        # installed), and only when ComfyUI computes on that card (not next to an NVIDIA card)
+        extra_env, skipped = hardware.comfy_amd_env(args.python, args.extra_args)
+        if skipped and hardware.amd_gfx_targets():
+            log(f"AMD graphics found; {skipped}")
     except Exception as err:  # noqa: BLE001 - ComfyUI starts without it
         log(f"could not check the AMD card: {err}", "WARN")
         extra_env = {}

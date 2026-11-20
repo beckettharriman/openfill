@@ -26,6 +26,8 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from openfill.server import SLOW_START_S
+
 from . import ui
 from .menu import Watcher
 from .modelinfo import choose_card_line, comfy_help_url, download_card_line, hardware_line, needed_by
@@ -54,12 +56,22 @@ NO_MODELS = "No models installed"
 NO_BG_MODEL = "Download BiRefNet in Models"
 # The status line once the AI engine has stopped (crashed or was closed) after it was ready.
 STOPPED = "Stopped: Generate restarts it"
-STATUS_COLOR = {"Ready": OK, "Not set up": WARN, "Checking...": DIM, "Starting the AI engine...": WARN, STOPPED: WARN}
+SLOW_START = "Still starting (slow, see Logs)"
+STATUS_COLOR = {
+    "Ready": OK,
+    "Not set up": WARN,
+    "Checking...": DIM,
+    "Starting the AI engine...": WARN,
+    SLOW_START: WARN,
+    STOPPED: WARN,
+}
 
 
 def status_color(status: str) -> str:
     """The dot's colour; the cloud is always marked, as pictures leave the computer."""
-    return WARN if status.startswith("Cloud:") else STATUS_COLOR.get(status, DIM)
+    if status.startswith("Cloud:"):
+        return WARN
+    return OK if status.startswith("Ready ") else STATUS_COLOR.get(status, DIM)
 
 
 CLOUD_OFFER = (
@@ -1420,11 +1432,16 @@ class Bar:
         if not facts.get("comfy_ok"):
             return "Not set up"
         if engine in ("starting", ENGINE_RESTARTING):
-            return "Starting the AI engine..."
+            # past the usual start time: a model folder on a sleeping or unplugged drive, say
+            return SLOW_START if self.service.starting_for() >= SLOW_START_S else "Starting the AI engine..."
         if engine == ENGINE_STOPPED:
             return STOPPED
         if engine in ("", "ready"):
-            return "Ready"
+            try:  # OpenFill's ComfyUI on another port, or a ComfyUI it did not start
+                note = self.service.app.server.short_note() if engine == "ready" else ""
+            except Exception:  # noqa: BLE001 - only a note
+                note = ""
+            return note or "Ready"
         return "AI engine: " + engine[:60]
 
     def _update_cloud_line(self) -> None:

@@ -899,9 +899,11 @@ def _settings_test_backend(app: App, values: dict, report: Callable[[str], None]
         app.refresh_models_cache(health)
     except Exception as err:  # noqa: BLE001 - the cache only fills the legacy checkpoint lists
         app.log.warning("models cache not refreshed: %s", err)
-    return ui_text.health_text(
+    text = ui_text.health_text(
         True, health.detail, len(health.checkpoints), health.inpaint_nodes, health.device, health.device_kind
     )
+    note = app.backend_note()  # OpenFill's ComfyUI on another port, or one it did not start
+    return f"{text} {note}" if note else text
 
 
 # A Remote GPU pairing code pasted in the Settings dialog: saved to config.json only, never into
@@ -1042,10 +1044,11 @@ def run_settings(procedure: Gimp.Procedure, config: Gimp.ProcedureConfig, _data:
         app = App()
         health = app.check_backend()
         if health.ok:
+            note = app.backend_note()  # OpenFill's ComfyUI on another port, or one it did not start
             Gimp.message(
                 f"Backend OK: {health.detail}\n"
                 f"Checkpoints: {', '.join(health.checkpoints) or 'none'}\n"
-                f"Inpaint nodes: {'yes' if health.inpaint_nodes else 'no'}"
+                f"Inpaint nodes: {'yes' if health.inpaint_nodes else 'no'}" + (f"\n{note}" if note else "")
             )
         else:
             Gimp.message(ui_text.with_next_step(f"Backend check failed: {health.detail}"))
