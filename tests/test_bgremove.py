@@ -95,6 +95,7 @@ class GraphTests(unittest.TestCase):
                 "LoadBackgroundRemovalModel",
                 "RemoveBackground",
                 "MaskComposite",
+                "SolidMask",
                 "InvertMask",
                 "JoinImageWithAlpha",
                 "SaveImage",
@@ -104,7 +105,7 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(graph["load_image"]["inputs"]["image"], "img.png")
         self.assertEqual(graph["foreground"]["inputs"]["bg_removal_model"], ["bg_model", 0])
         self.assertEqual(graph["foreground"]["inputs"]["image"], ["load_image", 0])
-        self.assertEqual(graph["transparency"]["inputs"]["mask"], ["opacity", 0])
+        self.assertEqual(graph["transparency"]["inputs"]["mask"], ["rounded", 0])
         self.assertEqual(graph["cutout"]["inputs"]["alpha"], ["transparency", 0])
         self.assertEqual(graph["cutout"]["inputs"]["image"], ["original", 0])
         self.assertEqual(graph[w.OUTPUT_NODE]["inputs"]["images"], ["cutout", 0])
@@ -141,14 +142,17 @@ class GraphTests(unittest.TestCase):
                     done[node] = (foreground,)
                 elif kind == "InvertMask":
                     done[node] = ([1 - m for m in out(a["mask"])],)
+                elif kind == "SolidMask":
+                    self.assertEqual((a["width"], a["height"]), (64, 48))
+                    done[node] = ([a["value"]] * len(image),)
                 elif kind == "MaskComposite":
-                    self.assertEqual(a["operation"], "multiply")
+                    op = {"multiply": lambda d, s: d * s, "add": lambda d, s: d + s}[a["operation"]]
                     pairs = zip(out(a["destination"]), out(a["source"]), strict=True)
-                    done[node] = ([min(1.0, max(0.0, d * s)) for d, s in pairs],)
+                    done[node] = ([min(1.0, max(0.0, op(d, s))) for d, s in pairs],)
                 elif kind == "JoinImageWithAlpha":
                     done[node] = ([(*rgb, 1 - t) for rgb, t in zip(out(a["image"]), out(a["alpha"]), strict=True)],)
-                elif kind == "SaveImage":
-                    done[node] = (out(a["images"]),)
+                elif kind == "SaveImage":  # 8-bit PNG: 255 x value, cut down to a whole number
+                    done[node] = ([tuple(int(255 * v) for v in p) for p in out(a["images"])],)
                 else:
                     self.fail(f"unexpected node {kind}")
             return done[node][index]
@@ -156,13 +160,19 @@ class GraphTests(unittest.TestCase):
         return out([w.OUTPUT_NODE, 0])
 
     def test_an_opaque_image_is_cut_by_the_model_alone(self):
-        px = [(0.2, 0.4, 0.6, 1.0), (0.9, 0.1, 0.1, 1.0)]
-        self.assertEqual(self.run_graph(px, px, [1.0, 0.0]), [(0.2, 0.4, 0.6, 1.0), (0.9, 0.1, 0.1, 0.0)])
+        px = [(0.2, 0.4, 0.6, 1.0), (1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0)]
+        cut = self.run_graph(px, px, [1.0, 0.0, 0.4])
+        self.assertEqual([p[3] for p in cut], [255, 0, 102])
+        self.assertEqual(cut[1][:3], (255, 0, 0))
+
+    def test_a_subject_the_model_is_almost_sure_of_stays_opaque(self):
+        px = [(1.0, 1.0, 1.0, 1.0), (1.0, 1.0, 1.0, 1.0)]
+        self.assertEqual([p[3] for p in self.run_graph(px, px, [0.9995, 0.0005])], [255, 0])
 
     def test_see_through_pixels_keep_their_alpha_and_colour(self):
-        original = [(1.0, 0.0, 0.0, 0.5), (0.0, 0.0, 1.0, 0.0)]  # half see-through red glass, a hole
+        original = [(1.0, 0.0, 0.0, 128 / 255), (0.0, 0.0, 1.0, 0.0)]  # half see-through red glass, a hole
         flat = [(0.75, 0.25, 0.25, 1.0), (0.5, 0.5, 0.5, 1.0)]  # over a grey mean, for the model
-        self.assertEqual(self.run_graph(flat, original, [1.0, 1.0]), [(1.0, 0.0, 0.0, 0.5), (0.0, 0.0, 1.0, 0.0)])
+        self.assertEqual(self.run_graph(flat, original, [1.0, 1.0]), [(255, 0, 0, 128), (0, 0, 255, 0)])
 
     def test_old_server_gets_a_clear_message(self):
         with self.assertRaisesRegex(ValueError, "ComfyUI 0.39"):

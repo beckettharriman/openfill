@@ -907,8 +907,14 @@ def build_bgremove(
         y=0,
         operation="multiply",
     )
+    # SaveImage cuts 255 x opacity down to a whole number, so a subject the model is 99.9 % sure
+    # of came back at 254 (a little see-through). Half a level more makes that a rounding.
+    g.add("half_level", "SolidMask", value=0.5 / 255, width=min(req.width, 16384), height=min(req.height, 16384))
+    g.add(
+        "rounded", "MaskComposite", destination=g.out("opacity"), source=g.out("half_level"), x=0, y=0, operation="add"
+    )
     # JoinImageWithAlpha reads its mask as transparency, so the opacity is inverted first
-    g.add("transparency", "InvertMask", mask=g.out("opacity"))
+    g.add("transparency", "InvertMask", mask=g.out("rounded"))
     g.add("cutout", "JoinImageWithAlpha", image=g.out("original", 0), alpha=g.out("transparency"))
     g.add(OUTPUT_NODE, "SaveImage", images=g.out("cutout"), filename_prefix=filename_prefix)
     return g.to_dict()
