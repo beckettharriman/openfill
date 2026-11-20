@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0-beta.8] - 2026-11-20
 
 - Fixed: the Qwen-Image-Edit 2511 download failed its check because unsloth replaced the file on Hugging Face (#13). Every Hugging Face download in the model list now comes from a fixed commit, so a file changed upstream can no longer break a download. If a file still doesn't match, the message now says it is OpenFill's list that is out of date, not your download.
 - When another ComfyUI or another program already uses ComfyUI's port (8188), OpenFill now starts its own ComfyUI on the next free port and says so, instead of silently using the other one while its own failed to start (#12). This also covers another ComfyUI that takes the port while OpenFill's is still loading. A ComfyUI that already runs at the URL is still used, and Check backend now says so.
@@ -624,7 +624,8 @@ Rectangular selections as processing region; Windows startup fix.
 Initial release: text to image, image to image, inpainting, upscaling via the
 AUTOMATIC1111 WebUI API.
 
-[Unreleased]: https://github.com/beckettharriman/openfill/compare/v2.0.0-beta.7...HEAD
+[Unreleased]: https://github.com/beckettharriman/openfill/compare/v2.0.0-beta.8...HEAD
+[2.0.0-beta.8]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.8
 [2.0.0-beta.7]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.7
 [2.0.0-beta.6]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.6
 [2.0.0-beta.5]: https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.5

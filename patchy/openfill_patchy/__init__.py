@@ -3,4 +3,4 @@
 """OpenFill as a Patchy companion app: the OpenFill panel next to Patchy, talking to it
 through Patchy's connector (``patchy-mcp --attach``)."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

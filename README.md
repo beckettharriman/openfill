@@ -2,7 +2,7 @@
 
 # OpenFill
 
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) ![OpenFill for PhotoCraft 0.2.6](https://img.shields.io/badge/OpenFill%20for%20PhotoCraft-0.2.6-30a2ff.svg) ![Works with PhotoCraft 0.12 to 0.23](https://img.shields.io/badge/works%20with%20PhotoCraft-0.12%20to%200.23-444.svg) ![GIMP 3.2](https://img.shields.io/badge/GIMP-3.2-444.svg) ![Python + ComfyUI](https://img.shields.io/badge/made%20with-Python%20%2B%20ComfyUI-orange.svg) ![Local](https://img.shields.io/badge/100%25-local-30d158.svg) ![Beta](https://img.shields.io/badge/status-beta-e8a33d.svg)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) ![OpenFill for PhotoCraft 0.2.7](https://img.shields.io/badge/OpenFill%20for%20PhotoCraft-0.2.7-30a2ff.svg) ![Works with PhotoCraft 0.12 to 0.23](https://img.shields.io/badge/works%20with%20PhotoCraft-0.12%20to%200.23-444.svg) ![GIMP 3.2](https://img.shields.io/badge/GIMP-3.2-444.svg) ![Python + ComfyUI](https://img.shields.io/badge/made%20with-Python%20%2B%20ComfyUI-orange.svg) ![Local](https://img.shields.io/badge/100%25-local-30d158.svg) ![Beta](https://img.shields.io/badge/status-beta-e8a33d.svg)
 
 *Generative fill, expand and object removal for PhotoCraft and GIMP 3, running on your graphics card. Local generation stays on your computer.*
 
@@ -12,7 +12,7 @@
 </div>
 
 > [!IMPORTANT]
-> **Beta.** OpenFill for PhotoCraft is at 0.2.6 (that is OpenFill's version; it works with PhotoCraft 0.12 to 0.23) and the GIMP plug-in is at 2.0.0-beta.7, both now with support for AMD graphics cards. Both work end to end on Windows with an 8 GB NVIDIA laptop GPU, which is what I build and test on, and on Linux. A user has also tested all four operations on an RX 7800 XT; see [the report](https://github.com/beckettharriman/openfill/issues/3). The GIMP plug-in also runs on macOS. PhotoCraft supports Apple Silicon and passed all four tools on an M3. OpenFill for PhotoCraft 0.2.4 fixes Mac typing and model-menu focus, and can reuse ComfyUI's Python; [Mac setup and test results](docs/install.md#photocraft-on-macos). Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
+> **Beta.** OpenFill for PhotoCraft is at 0.2.7 (that is OpenFill's version; it works with PhotoCraft 0.12 to 0.23) and the GIMP plug-in is at 2.0.0-beta.8, both now with support for AMD graphics cards. Both work end to end on Windows with an 8 GB NVIDIA laptop GPU, which is what I build and test on, and on Linux. A user has also tested all four operations on an RX 7800 XT; see [the report](https://github.com/beckettharriman/openfill/issues/3). The GIMP plug-in also runs on macOS. PhotoCraft supports Apple Silicon and passed all four tools on an M3. OpenFill for PhotoCraft 0.2.4 fixes Mac typing and model-menu focus, and can reuse ComfyUI's Python; [Mac setup and test results](docs/install.md#photocraft-on-macos). Most of the rough edges are in what the models draw, not in the plug-in; [Status](#status) lists them.
 
 ## Why I made this
 
@@ -47,10 +47,10 @@ The model manager in the steps below is where you get models: in PhotoCraft it's
 
 PhotoCraft and GIMP each have their own download. Both are on the [Releases page](https://github.com/beckettharriman/openfill/releases), where GitHub marks the PhotoCraft one **Latest** and the GIMP one **Pre-release**. Use the link for your app below.
 
-**PhotoCraft: OpenFill for PhotoCraft 0.2.6 · works with PhotoCraft 0.12 to 0.23**
+**PhotoCraft: OpenFill for PhotoCraft 0.2.7 · works with PhotoCraft 0.12 to 0.23**
 
 1. Install PhotoCraft. You can [reuse ComfyUI's Python](docs/install.md#use-comfyuis-python), or install Python from [python.org](https://www.python.org/downloads/) if you need it.
-2. Download **[openfill-photocraft-0.2.6.zip](https://github.com/beckettharriman/openfill/releases/download/photocraft-v0.2.6/openfill-photocraft-0.2.6.zip)** from the release [OpenFill for PhotoCraft 0.2.6](https://github.com/beckettharriman/openfill/releases/tag/photocraft-v0.2.6). Unzip it and run **Install OpenFill for PhotoCraft.cmd** (Linux and macOS: `sh install.sh`).
+2. Download **[openfill-photocraft-0.2.7.zip](https://github.com/beckettharriman/openfill/releases/download/photocraft-v0.2.7/openfill-photocraft-0.2.7.zip)** from the release [OpenFill for PhotoCraft 0.2.7](https://github.com/beckettharriman/openfill/releases/tag/photocraft-v0.2.7). Unzip it and run **Install OpenFill for PhotoCraft.cmd** (Linux and macOS: `sh install.sh`).
 3. Open **PhotoCraft with OpenFill**. The first time, the panel offers **Download ComfyUI** on Windows (or **Choose folder** if you have it) and then **Open model manager** to get LaMa (0.2 GB) and DreamShaper 8 Inpainting (2 GB).
 
 More in [photocraft/README.md](photocraft/README.md).
@@ -61,7 +61,7 @@ OpenFill also runs as a companion app of [Patchy](https://github.com/SethRobinso
 
 **GIMP 3.2**
 
-1. Download **[openfill-2.0.0-beta.7.zip](https://github.com/beckettharriman/openfill/releases/download/v2.0.0-beta.7/openfill-2.0.0-beta.7.zip)** from the release [OpenFill 2.0.0-beta.7](https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.7). That release is the GIMP plug-in only; the PhotoCraft download is the one above. Unzip it and run `Install OpenFill.cmd` (or drag the `gimp-openfill` folder into GIMP's plug-ins folder; macOS and Linux: `sh install.sh`).
+1. Download **[openfill-2.0.0-beta.8.zip](https://github.com/beckettharriman/openfill/releases/download/v2.0.0-beta.8/openfill-2.0.0-beta.8.zip)** from the release [OpenFill 2.0.0-beta.8](https://github.com/beckettharriman/openfill/releases/tag/v2.0.0-beta.8). That release is the GIMP plug-in only; the PhotoCraft download is the one above. Unzip it and run `Install OpenFill.cmd` (or drag the `gimp-openfill` folder into GIMP's plug-ins folder; macOS and Linux: `sh install.sh`).
 2. Restart GIMP and run `Filters > OpenFill > Generative Fill...`. If ComfyUI isn't found, **Download ComfyUI** sets it up (Windows), or **I already have ComfyUI** lets you pick one.
 3. Get LaMa and DreamShaper 8 Inpainting when the model manager opens. The first request starts the backend in about a minute; after that it's seconds.
 

@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version numbers below (0.2.x) are OpenFill for PhotoCraft's own, not PhotoCraft's.
 Each entry from now on says which PhotoCraft versions it works with.
 
-## [Unreleased] · works with PhotoCraft 0.12 to 0.23
+## [0.2.7] - 2026-11-20 · works with PhotoCraft 0.12 to 0.23
 
 Works with PhotoCraft 0.21, 0.22, 0.23 and 0.23.1:
 - Tested on PhotoCraft 0.21.0, 0.22.0, 0.23.0 and 0.23.1: install, the menu entry, and Fill, Remove, Expand and Create in PhotoCraft (with a stand-in for the models). OpenFill for PhotoCraft 0.2.6 already works with them; the panel and the docs said "0.12 to 0.20" only because they had not been tested yet.
