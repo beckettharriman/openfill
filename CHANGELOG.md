@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- OpenFill for PhotoCraft: tested with PhotoCraft 0.21 to 0.23.1, so it now says it works with PhotoCraft 0.12 to 0.23. Filter > Plug-ins > OpenFill is added once a PhotoCraft dialog that was open at start closes (#12).
 - Fixed in OpenFill for PhotoCraft 0.2.6: on Windows the installer said PhotoCraft is not installed when PhotoCraft 0.17 or newer was installed just for you.
 
 ## [2.0.0-beta.7] - 2026-11-08

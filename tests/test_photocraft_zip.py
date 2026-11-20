@@ -116,5 +116,44 @@ class ReleaseTitleTests(unittest.TestCase):
             )
 
 
+class DocsTests(unittest.TestCase):
+    """The PhotoCraft range in the docs is the one the panel shows (issue #20: users on 0.21 and
+    newer read "0.12 to 0.20" as "not supported"), and each app's download link is its own."""
+
+    DOCS = ("README.md", "photocraft/README.md", "docs/install.md")
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "photocraft"))
+        from openfill_photocraft import PHOTOCRAFT_TESTED, __version__
+
+        self.oldest, self.newest = PHOTOCRAFT_TESTED
+        self.version = __version__
+
+    def test_every_doc_gives_the_tested_range(self):
+        import re
+
+        want = f"{self.oldest} to {self.newest}"
+        for name in self.DOCS:
+            text = (ROOT / name).read_text(encoding="utf-8")
+            ranges = set(re.findall(r"works with PhotoCraft (\d+\.\d+ to \d+\.\d+)", text))
+            self.assertEqual(ranges, {want}, name)
+        badge = f"works%20with%20PhotoCraft-{self.oldest}%20to%20{self.newest}"
+        self.assertIn(badge, (ROOT / "README.md").read_text(encoding="utf-8"))
+
+    def test_the_readme_links_each_app_to_its_own_release(self):
+        sys.path.insert(0, str(ROOT / "gimp-openfill"))
+        from openfill import __version__ as gimp
+
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        base = "https://github.com/beckettharriman/openfill/releases"
+        photocraft = f"{base}/download/photocraft-v{self.version}/openfill-photocraft-{self.version}.zip"
+        self.assertIn(photocraft, text)
+        self.assertIn(f"{base}/download/v{gimp}/openfill-{gimp}.zip", text)
+        # the PhotoCraft steps come first and never send people to the GIMP release
+        pc_steps = text[text.index("**PhotoCraft: OpenFill for PhotoCraft") : text.index("**GIMP 3.2**")]
+        self.assertNotIn(f"/v{gimp}", pc_steps)
+        self.assertIn(f"{base}/tag/photocraft-v{self.version}", pc_steps)
+
+
 if __name__ == "__main__":
     unittest.main()
