@@ -93,7 +93,7 @@ Select an area in PhotoCraft (Marquee, Lasso, Object Selection), then type what 
 | Mode | What it does |
 |---|---|
 | Fill | Fills the selection from your prompt, or from the surroundings with no prompt. Up to 5 variations. |
-| Remove | Erases what you selected and continues the background. LaMa does it at the image's own resolution. The Model menu offers every installed model that can remove. |
+| Remove | Erases what you selected and continues the background. LaMa does it at the image's own resolution. The Model menu offers every installed model that can remove. A long menu scrolls and has a search field; Hide leaves a model out of it. |
 | Expand | Grows the canvas: drag the frame's edges, or pick a ratio (Original adds 25 % on each side; 1:1, 5:4, 4:3, 3:2 and 16:9, landscape or portrait). It paints the new edges. |
 | Create | Text to Image as a new image (square, landscape or portrait), or as a layer in the open image. With a selection, the layer fills the selection. |
 

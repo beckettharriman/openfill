@@ -104,7 +104,7 @@ class Api:
                 cat.add_amd_notes(rows, app.catalog)  # what may not work on an AMD card
         except Exception:  # noqa: BLE001
             hw = None
-        return {"rows": rows, "current": current, "pending": pending, "hardware": hw}
+        return {"rows": rows, "current": current, "pending": pending, "hardware": hw, "hidden": app.hidden_models()}
 
     def thumbnail(self, index: int) -> bytes:
         """A small JPEG of variation ``index`` of the last job (for the page's picker)."""
@@ -163,6 +163,8 @@ class Api:
         if path == "/api/models/activate":
             entry = app.set_active(str(body["id"]))
             return {"active": entry.id}
+        if path == "/api/models/hide":  # left out of the Model menus, or listed again
+            return {"hidden": app.set_model_hidden(str(body["id"]), bool(body.get("hidden", True)))}
         if path == "/api/models/remove":
             return {"task": svc.uninstall(str(body["id"]))}
         if path == "/api/models/stop":

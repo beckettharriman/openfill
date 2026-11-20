@@ -21,7 +21,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, GLib, GObject, Gtk, Pango  # noqa: E402
 
 from . import ui_text  # noqa: E402
 
@@ -356,6 +356,241 @@ def _one_line(text: str = "", dim: bool = True) -> Gtk.Label:
 # --------------------------------------------------- generation dialogs ---
 
 
+class ModelPicker(Gtk.Button):
+    """The Model field (issue #14): a button showing the model in use. A click opens a list
+    that fits the screen and scrolls, with a search field from ``model_menu.SEARCH_AT``
+    models on, the user's own model files under their own heading, and a Hide button on
+    each model (``on_hide(model_id, hidden)`` keeps it); "Show hidden models" lists them
+    again. Answers like the GtkComboBoxText it replaces: append, set_active_id,
+    get_active_id and a "changed" signal."""
+
+    __gsignals__ = {"changed": (GObject.SignalFlags.RUN_FIRST, None, ())}
+
+    def __init__(
+        self, hidden: frozenset | set | list = (), on_hide: Callable[[str, bool], object] | None = None
+    ) -> None:
+        super().__init__()
+        self.options: list[tuple[str, str]] = []  # (model id, label), in the tool's order
+        self.active: str | None = None
+        self.hidden: set[str] = set(hidden)
+        self.on_hide = on_hide
+        self.show_hidden = False
+        self.chooser: ModelChooser | None = None
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.label = Gtk.Label(xalign=0)
+        self.label.set_ellipsize(Pango.EllipsizeMode.END)
+        box.pack_start(self.label, True, True, 0)
+        box.pack_end(Gtk.Image.new_from_icon_name("pan-down-symbolic", Gtk.IconSize.BUTTON), False, False, 0)
+        self.add(box)
+        self.connect("clicked", lambda *_: self.popup())
+
+    def append(self, model_id: str, label: str) -> None:
+        self.options.append((model_id, label))
+
+    def label_of(self, model_id: str | None) -> str:
+        return next((label for i, label in self.options if i == model_id), "")
+
+    def set_active_id(self, model_id: str) -> bool:
+        if not any(i == model_id for i, _label in self.options):
+            return False
+        if model_id != self.active:
+            self.active = model_id
+            self.label.set_text(self.label_of(model_id))
+            self.set_tooltip_text(self.label_of(model_id))
+            self.emit("changed")
+        return True
+
+    def get_active_id(self) -> str | None:
+        return self.active
+
+    def rows(self, query: str = "") -> list:
+        """The list as it shows now (``model_menu.Row``s)."""
+        from . import model_menu
+
+        return model_menu.arrange(self.options, self.hidden, self.active or "", self.show_hidden, query)
+
+    def hidden_count(self) -> int:
+        from . import model_menu
+
+        return model_menu.hidden_count(self.options, self.hidden, self.active or "")
+
+    def set_hidden(self, model_id: str, hidden: bool) -> None:
+        if hidden and model_id == self.active:
+            return  # the model in use stays listed
+        if hidden:
+            self.hidden.add(model_id)
+        else:
+            self.hidden.discard(model_id)
+        if self.on_hide:
+            self.on_hide(model_id, hidden)
+        if self.chooser is not None:
+            self.chooser.refresh()
+
+    def popup(self) -> None:
+        if self.chooser is None:
+            self.chooser = ModelChooser(self)
+            self.chooser.connect("destroy", lambda *_: setattr(self, "chooser", None))
+        self.chooser.present()
+
+    def pick(self, model_id: str) -> None:
+        self.set_active_id(model_id)
+        if self.chooser is not None:
+            self.chooser.destroy()
+
+
+class ModelChooser(Gtk.Window):
+    """The list a ModelPicker opens: a small window on top of the dialog, as tall as the
+    screen allows (a popover could not leave the dialog), closed by a pick or Escape."""
+
+    MAX_HEIGHT = 560
+
+    def __init__(self, picker: ModelPicker) -> None:
+        from . import model_menu
+
+        super().__init__(title=model_menu.CHOOSER_TITLE)
+        self.texts = model_menu
+        self.picker = picker
+        parent = picker.get_toplevel()
+        if isinstance(parent, Gtk.Window):
+            self.set_transient_for(parent)
+            self.set_modal(True)
+            self.set_destroy_with_parent(True)
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        self.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
+        self.set_default_size(440, self._height(parent))
+        self.set_border_width(8)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.add(box)
+        self.search = Gtk.SearchEntry()
+        self.search.set_placeholder_text(model_menu.SEARCH_PLACEHOLDER)
+        self.search.set_no_show_all(len(picker.options) < model_menu.SEARCH_AT)
+        self.search.connect("search-changed", lambda *_: self.refresh())
+        self.search.connect("activate", lambda *_: self._pick_first())
+        self.search.connect("stop-search", lambda *_: self.destroy())
+        box.pack_start(self.search, False, False, 0)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_shadow_type(Gtk.ShadowType.IN)
+        scroll.set_vexpand(True)
+        self.scroll = scroll
+        self.list = Gtk.ListBox()
+        self.list.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.list.set_activate_on_single_click(True)
+        self.list.connect("row-activated", self._activated)
+        scroll.add(self.list)
+        box.pack_start(scroll, True, True, 0)
+        self.show_hidden = Gtk.CheckButton()
+        self.show_hidden.set_active(picker.show_hidden)
+        self.show_hidden.set_no_show_all(True)
+        self.show_hidden.connect("toggled", self._toggle_hidden)
+        box.pack_start(self.show_hidden, False, False, 0)
+        self.connect("key-press-event", self._key)
+        self.refresh()
+        self.show_all()
+        if len(picker.options) >= model_menu.SEARCH_AT:
+            self.search.grab_focus()
+        GLib.idle_add(self._scroll_to_active)
+
+    def _height(self, parent: Gtk.Widget) -> int:
+        """At most MAX_HEIGHT, and at most 70% of the work area of the dialog's monitor."""
+        try:
+            display = Gdk.Display.get_default()
+            window = parent.get_window() if parent is not None else None
+            monitor = display.get_monitor_at_window(window) if window else display.get_primary_monitor()
+            monitor = monitor or display.get_monitor(0)
+            return max(200, min(self.MAX_HEIGHT, int(monitor.get_workarea().height * 0.7)))
+        except Exception:  # noqa: BLE001 - no monitor information
+            return 400
+
+    def refresh(self) -> None:
+        picker = self.picker
+        for child in self.list.get_children():
+            self.list.remove(child)
+        rows = picker.rows(self.search.get_text().strip())
+        self.rows: list[Gtk.ListBoxRow] = []
+        for row in rows:
+            item = Gtk.ListBoxRow()
+            item.model_id = row.model_id
+            if row.kind == "head":
+                label = Gtk.Label(xalign=0)
+                label.set_markup(f"<small><b>{GLib.markup_escape_text(row.label)}</b></small>")
+                label.get_style_context().add_class("dim-label")
+                label.set_margin_top(8)
+                label.set_margin_start(6)
+                item.add(label)
+                item.set_activatable(False)
+                item.set_selectable(False)
+            else:
+                line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                line.set_border_width(4)
+                label = Gtk.Label(label=row.label, xalign=0)
+                label.set_ellipsize(Pango.EllipsizeMode.END)
+                if row.hidden:
+                    label.get_style_context().add_class("dim-label")
+                line.pack_start(label, True, True, 2)
+                if row.model_id == picker.active:
+                    line.pack_end(
+                        Gtk.Image.new_from_icon_name("object-select-symbolic", Gtk.IconSize.MENU), False, False, 2
+                    )
+                elif picker.on_hide:
+                    button = Gtk.Button(label=self.texts.SHOW if row.hidden else self.texts.HIDE)
+                    button.set_relief(Gtk.ReliefStyle.NONE)
+                    button.set_focus_on_click(False)
+                    button.connect("clicked", lambda _b, i=row.model_id, h=row.hidden: self.picker.set_hidden(i, not h))
+                    line.pack_end(button, False, False, 0)
+                item.add(line)
+                self.rows.append(item)
+            self.list.add(item)
+        if not rows:
+            empty = Gtk.Label(label=self.texts.NO_MATCH, xalign=0)
+            empty.get_style_context().add_class("dim-label")
+            empty.set_margin_start(6)
+            empty.set_margin_top(6)
+            item = Gtk.ListBoxRow()
+            item.add(empty)
+            item.set_activatable(False)
+            item.set_selectable(False)
+            self.list.add(item)
+        count = picker.hidden_count()
+        self.show_hidden.set_label(f"{self.texts.SHOW_HIDDEN} ({count})")
+        self.show_hidden.set_visible(bool(count) or picker.show_hidden)
+        self.list.show_all()
+        for item in self.rows:
+            if item.model_id == picker.active:
+                self.list.select_row(item)
+
+    def _scroll_to_active(self) -> bool:
+        for item in self.rows:
+            if item.model_id == self.picker.active:
+                alloc = item.get_allocation()
+                adj = self.scroll.get_vadjustment()
+                if alloc.y + alloc.height > adj.get_value() + adj.get_page_size():
+                    adj.set_value(max(0, alloc.y - adj.get_page_size() / 2))
+        return False
+
+    def _toggle_hidden(self, button: Gtk.CheckButton) -> None:
+        self.picker.show_hidden = button.get_active()
+        self.refresh()
+
+    def _activated(self, _list: Gtk.ListBox, item: Gtk.ListBoxRow) -> None:
+        model_id = getattr(item, "model_id", "")
+        if model_id:
+            self.picker.pick(model_id)
+
+    def _pick_first(self) -> None:
+        if self.rows:
+            self.picker.pick(self.rows[0].model_id)
+
+    def _key(self, _window: Gtk.Window, event: Gdk.EventKey) -> bool:
+        if event.keyval == Gdk.KEY_Escape:
+            self.destroy()
+            return True
+        if event.keyval == Gdk.KEY_Down and self.search.has_focus() and self.rows:
+            self.rows[0].grab_focus()
+            return True
+        return False
+
+
 class GenerationDialog(Gtk.Dialog):
     """One dialog class for Fill, Expand and Text to Image.
 
@@ -388,8 +623,12 @@ class GenerationDialog(Gtk.Dialog):
         flux_models: frozenset = frozenset(),
         expand_notes: dict[str, str] | None = None,
         cloud_note: str = "",
+        hidden_models: frozenset | set | list = (),
+        on_hide_model: Callable[[str, bool], object] | None = None,
     ) -> None:
         super().__init__(title=self.TITLES[kind], modal=True)
+        self.hidden_models = set(hidden_models)  # left out of the Model list (issue #14)
+        self.on_hide_model = on_hide_model
         self.kind = kind
         self.values = dict(values)
         self.image_size = image_size
@@ -517,9 +756,7 @@ class GenerationDialog(Gtk.Dialog):
         grid.attach(_right(ui_text.LABEL_AVOID), 0, 0, 1, 1)
         grid.attach(self.negative, 1, 0, 3, 1)
 
-        self.model_combo = Gtk.ComboBoxText()
-        for cell in self.model_combo.get_cells():
-            cell.set_property("ellipsize", Pango.EllipsizeMode.END)
+        self.model_combo = ModelPicker(self.hidden_models, self.on_hide_model)
         self.model_combo.set_size_request(300, -1)
         self.model_combo.set_hexpand(True)
         self.model_combo.set_tooltip_text(ui_text.TIP_MODEL)

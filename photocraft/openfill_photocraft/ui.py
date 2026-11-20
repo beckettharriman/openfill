@@ -1091,7 +1091,13 @@ class Progress(tk.Canvas):
 
 class Select(tk.Canvas):
     """A select, 32 px tall: the current choice and a chevron; a click opens the list of
-    choices below it (``manage`` adds a divider and "Manage models...")."""
+    choices below it (``manage`` adds a divider and "Manage models...").
+
+    A long list (issue #14: a hundred models from a shared folder) fits the screen and
+    scrolls, and from ``model_menu.SEARCH_AT`` choices on it has a search field at the top.
+    ``ids`` maps a choice to its model id; ``hidden`` model ids are left out of the list,
+    and with ``on_hide`` (called with the choice and True to hide, False to show it again)
+    each model can be hidden from the list and listed again with "Show hidden models"."""
 
     def __init__(
         self,
@@ -1100,11 +1106,16 @@ class Select(tk.Canvas):
         command: Callable[[str], Any] | None = None,
         manage: Callable[[], Any] | None = None,
         bg: str = BG,
+        on_hide: Callable[[str, bool], Any] | None = None,
     ) -> None:
         self.h = px(32)
         super().__init__(parent, width=width, height=self.h, bg=bg, bd=0, highlightthickness=0, cursor="hand2")
         self.w, self.bgc, self.command, self.manage = width, bg, command, manage
+        self.on_hide = on_hide
         self.values: list[str] = []
+        self.ids: dict[str, str] = {}
+        self.hidden: set[str] = set()
+        self.show_hidden = False
         self.value = ""
         self.popdown: Popdown | None = None
         self._native_menu: tk.Menu | None = None
@@ -1126,8 +1137,50 @@ class Select(tk.Canvas):
         )
         self.create_image(self.w - px(24), px(8), image=icon("chevron", DIM, px(16), PANEL), anchor="nw")
 
-    def set_values(self, values: list[str]) -> None:
-        self.values = list(values)
+    def set_values(
+        self, values: Sequence[str], ids: dict[str, str] | None = None, hidden: Sequence[str] | set[str] = ()
+    ) -> None:
+        values, ids, hidden = list(values), dict(ids or {}), set(hidden)
+        if (values, ids, hidden) == (self.values, self.ids, self.hidden):
+            return
+        self.values, self.ids, self.hidden = values, ids, hidden
+        if self.popdown is not None:
+            self.popdown.refresh()
+
+    def model_id(self, value: str) -> str:
+        return self.ids.get(value, value)
+
+    def rows(self, query: str = "") -> list:
+        """The list as it shows now (``model_menu.Row``s): hidden ones left out, filtered by ``query``."""
+        from openfill import model_menu
+
+        options = [(self.model_id(v), v) for v in self.values]
+        return model_menu.arrange(options, self.hidden, self.model_id(self.value), self.show_hidden, query)
+
+    def hidden_count(self) -> int:
+        from openfill import model_menu
+
+        options = [(self.model_id(v), v) for v in self.values]
+        return model_menu.hidden_count(options, self.hidden, self.model_id(self.value))
+
+    def hide(self, value: str, hidden: bool = True) -> None:
+        """Hide the choice ``value`` from the list, or list it again."""
+        if value == self.value and hidden:
+            return  # the model in use stays listed
+        model_id = self.model_id(value)
+        if hidden:
+            self.hidden.add(model_id)
+        else:
+            self.hidden.discard(model_id)
+        if self.on_hide:
+            self.on_hide(value, hidden)
+        if self.popdown is not None:
+            self.popdown.refresh()
+
+    def toggle_show_hidden(self) -> None:
+        self.show_hidden = not self.show_hidden
+        if self.popdown is not None:
+            self.popdown.refresh()
 
     def set(self, value: str) -> None:
         if value != self.value:
@@ -1150,16 +1203,41 @@ class Select(tk.Canvas):
         self._draw()
 
     def _mac_menu(self) -> None:
-        """Let Aqua manage selection and dismissal instead of grabbing a borderless window."""
+        """Let Aqua manage selection and dismissal instead of grabbing a borderless window.
+        Aqua scrolls a menu taller than the screen itself; models are hidden from a submenu."""
         menu = self._native_menu = tk.Menu(self, tearoff=False)
         selected = tk.StringVar(self, value=self.value)
-        picked: list[str] = []
-        for value in self.values:
-            menu.add_radiobutton(label=value, value=value, variable=selected, command=lambda v=value: picked.append(v))
+        picked: list[tuple[str, str]] = []
+        for row in self.rows():
+            if row.kind == "head":
+                menu.add_separator()
+                menu.add_command(label=row.label, state="disabled")
+                continue
+            menu.add_radiobutton(
+                label=row.label,
+                value=row.label,
+                variable=selected,
+                command=lambda v=row.label: picked.append(("pick", v)),
+            )
+        if self.on_hide and len(self.values) > 1:
+            from openfill import model_menu
+
+            menu.add_separator()
+            sub = tk.Menu(menu, tearoff=False)
+            self._hide_vars = []
+            for value in self.values:
+                if value == self.value:
+                    continue
+                var = tk.BooleanVar(self, value=self.model_id(value) in self.hidden)
+                self._hide_vars.append(var)
+                sub.add_checkbutton(
+                    label=value, variable=var, command=lambda v=value, b=var: picked.append(("hide", v, b.get()))
+                )
+            menu.add_cascade(label=model_menu.HIDE_MENU, menu=sub)
         if self.manage:
             if self.values:
                 menu.add_separator()
-            menu.add_command(label=MANAGE, command=lambda: picked.append(MANAGE))
+            menu.add_command(label=MANAGE, command=lambda: picked.append(("pick", MANAGE)))
         previous = self.focus_get()
         self._draw()
         self._tracking = True
@@ -1177,7 +1255,11 @@ class Select(tk.Canvas):
             except tk.TclError:
                 pass
         if picked:
-            self.pick(picked[-1])
+            action = picked[-1]
+            if action[0] == "hide":
+                self.hide(action[1], bool(action[2]))
+            else:
+                self.pick(action[1])
 
     def close(self) -> None:
         # Tk keeps running timers while Aqua tracks the menu: a close from one of them
@@ -1207,16 +1289,28 @@ class Select(tk.Canvas):
 
 
 MANAGE = "Manage models..."
+SCROLL_THUMB = "#5a5c63"
 
 
 class Popdown(tk.Toplevel):
-    """A select's open list: 28 px rows, the current one in the accent colour."""
+    """A select's open list: 28 px rows, the current one in the accent colour.
+
+    At most MAX_ROWS rows show, fewer when the screen has no room for them: the rest
+    scroll (wheel, the scroll bar, the arrow keys). A long list has a search field on top;
+    "Show hidden models" and "Manage models..." stay at the bottom, outside the scrolling."""
 
     ROW = px(28)
     INSET = 1 + px(4)  # the 1 px border and the space inside it
+    HEAD = px(24)  # a heading ("Your model files")
+    MAX_ROWS = 14
+    HIDE_W = px(46)  # the Hide / Show button at the right end of a hovered row
+    BAR_W = px(10)  # the scroll bar's strip
 
     def __init__(self, select: Select) -> None:
         super().__init__(select, bg=BG)
+        from openfill import model_menu
+
+        self.texts = model_menu
         self.select = select
         self.withdraw()
         self.tk.call("wm", "overrideredirect", self._w, True)
@@ -1224,96 +1318,378 @@ class Popdown(tk.Toplevel):
             self.attributes("-topmost", True)
         except tk.TclError:
             pass
-        rows = [*select.values]
-        self.rows = rows + ([MANAGE] if select.manage else [])
         self.w = select.w + 2
-        extra = px(7) if select.manage and rows else 0
-        self.h = 2 * self.INSET + len(self.rows) * self.ROW + max(0, len(self.rows) - 1) + extra
-        self.canvas = tk.Canvas(self, width=self.w, height=self.h, bg=BG, bd=0, highlightthickness=0)
+        self.lw = self.w - 2  # the list's width (inside the border)
+        self.query = ""
+        self.hover = -1  # index into self.rows
+        self.hover_hide = False  # the pointer is on the hovered row's Hide button
+        self.foot_hover = -1
+        self.scroll = 0
+        self._drag: tuple[int, int] | None = None  # (pointer y, scroll) when the thumb was grabbed
+        self.below = True
+        self.searching = len(select.values) >= model_menu.SEARCH_AT
+        self.canvas = tk.Canvas(self, width=self.w, height=10, bg=BG, bd=0, highlightthickness=0)
         self.canvas.pack()
-        self.hover = -1
-        self._tops: list[int] = []
-        y = self.INSET
-        for i, _row in enumerate(self.rows):
-            if select.manage and i == len(rows) and rows:
-                y += px(7)  # a divider before "Manage models..."
-            self._tops.append(y)
-            y += self.ROW + 1
-        self._draw()
-        x, top = select.winfo_rootx() - 1, select.winfo_rooty() + select.h + px(2)
-        if top + self.h > select.winfo_screenheight():
-            top = select.winfo_rooty() - px(2) - self.h
-        self.geometry(f"{self.w}x{self.h}+{x}+{top}")
+        self.field: Field | None = None
+        self.list_y = self.INSET
+        if self.searching:
+            self.field = Field(self.canvas, self.w - 2 * self.INSET, model_menu.SEARCH_PLACEHOLDER, bg=PANEL)
+            self.canvas.create_window(self.INSET, self.INSET, window=self.field, anchor="nw")
+            self.field.entry.bind("<KeyRelease>", lambda _e: self._typed(), add="+")
+            self.field.entry.bind("<<Paste>>", lambda _e: self.after_idle(self._typed), add="+")
+            self.list_y = self.INSET + px(32) + px(5)  # the search field is 32 px tall
+        self.list = tk.Canvas(self.canvas, width=self.lw, height=10, bg=PANEL, bd=0, highlightthickness=0)
+        self.canvas.create_window(1, self.list_y, window=self.list, anchor="nw")
+        self._layout(first=True)
         self.deiconify()
         self.lift()
-        self.canvas.bind("<Motion>", self._motion)
-        self.canvas.bind("<Leave>", lambda _e: self._set_hover(-1))
-        self.canvas.bind("<ButtonRelease-1>", self._release)
+        self.list.bind("<Motion>", self._motion)
+        self.list.bind("<Leave>", lambda _e: self._set_hover(-1))
+        self.list.bind("<ButtonPress-1>", self._press)
+        self.list.bind("<B1-Motion>", self._dragged)
+        self.list.bind("<ButtonRelease-1>", self._release)
+        self.canvas.bind("<Motion>", self._foot_motion)
+        self.canvas.bind("<Leave>", lambda _e: self._set_foot_hover(-1))
+        self.canvas.bind("<ButtonRelease-1>", self._foot_release)
         self.bind("<ButtonPress-1>", self._press_outside)
         self.bind("<Escape>", lambda _e: select.close())
-        self.bind("<Return>", lambda _e: self._choose(self.hover))
-        self.bind("<Up>", lambda _e: self._set_hover(max(0, self.hover - 1)))
-        self.bind("<Down>", lambda _e: self._set_hover(min(len(self.rows) - 1, self.hover + 1)))
+        self.bind("<Return>", lambda _e: self._enter())
+        self.bind("<KP_Enter>", lambda _e: self._enter())
+        self.bind("<Up>", lambda _e: self._step(-1))
+        self.bind("<Down>", lambda _e: self._step(1))
+        self.bind("<Prior>", lambda _e: self._wheel(-(self.list_h // (self.ROW + 1))))
+        self.bind("<Next>", lambda _e: self._wheel(self.list_h // (self.ROW + 1)))
+        # the wheel: <MouseWheel> on Windows, macOS and Tk 9 on X11; buttons 4 and 5 on Tk 8.6 X11
+        self.bind("<MouseWheel>", self._mousewheel)
+        self.bind("<Button-4>", lambda _e: self._wheel(-3))
+        self.bind("<Button-5>", lambda _e: self._wheel(3))
         self.after(10, self._grab)
+
+    # layout ---------------------------------------------------------------------------
+
+    def _layout(self, first: bool = False) -> None:
+        """Rows, sizes and place on the screen. The height comes from the unfiltered list,
+        so the window keeps its size while the user types."""
+        sel = self.select
+        self.rows = sel.rows(self.query)
+        self.tops: list[int] = []
+        y = 0
+        for row in self.rows:
+            self.tops.append(y)
+            y += (self.HEAD if row.kind == "head" else self.ROW) + 1
+        self.content_h = max(0, y - 1) if self.rows else self.ROW
+        full = sel.rows("") if self.query else self.rows
+        full_h = sum((self.HEAD if r.kind == "head" else self.ROW) + 1 for r in full) - 1 if full else self.ROW
+        self.foot: list[str] = []
+        n_hidden = sel.hidden_count()
+        if sel.on_hide and (n_hidden or sel.show_hidden):
+            self.foot.append("hidden")
+        if sel.manage:
+            self.foot.append("manage")
+        foot_h = (px(7) + len(self.foot) * (self.ROW + 1)) if self.foot else 0
+        if self.foot and not sel.values:
+            foot_h -= px(7)  # no divider above "Manage models..." when there is nothing else
+        fixed = self.list_y + foot_h + self.INSET
+        screen = self.winfo_screenheight()
+        top_below = sel.winfo_rooty() + sel.h + px(2)
+        room_below = screen - top_below - px(8)
+        room_above = sel.winfo_rooty() - px(2) - px(8)
+        wanted = min(full_h, self.MAX_ROWS * (self.ROW + 1) - 1)
+        if first:
+            self.below = fixed + wanted <= room_below or room_below >= room_above
+        room = room_below if self.below else room_above
+        self.list_h = max(min(wanted, room - fixed), min(full_h, 2 * self.ROW + 1))
+        self.h = fixed + self.list_h
+        if not sel.values:
+            self.list_h = 0
+            self.h = fixed
+        self.list.configure(height=max(1, self.list_h))
+        self.canvas.configure(height=self.h)
+        self.foot_tops = []
+        y = self.list_y + self.list_h + (px(7) if sel.values else 0)
+        for _item in self.foot:
+            self.foot_tops.append(y)
+            y += self.ROW + 1
+        if first:
+            current = next((i for i, r in enumerate(self.rows) if r.kind == "model" and r.label == sel.value), -1)
+            if current >= 0 and self.tops[current] + self.ROW > self.list_h:
+                self.scroll = self.tops[current] - (self.list_h - self.ROW) // 2  # the current one in view
+        self._clamp()
+        x = sel.winfo_rootx() - 1
+        top = top_below if self.below else sel.winfo_rooty() - px(2) - self.h
+        self.geometry(f"{self.w}x{self.h}+{x}+{max(0, top)}")
+        self._draw()
+
+    def refresh(self) -> None:
+        """The select's choices or hidden models changed: list them again."""
+        try:
+            self._layout()
+        except tk.TclError:
+            pass
+
+    def _clamp(self) -> None:
+        self.scroll = max(0, min(self.scroll, self.content_h - self.list_h))
+
+    # drawing --------------------------------------------------------------------------
+
+    def _draw(self) -> None:
+        c = self.canvas
+        c.delete("deco")  # not "all": the search field and the list are windows on this canvas
+        c.create_image(0, 0, image=rrect(self.w, self.h, px(4), PANEL, BG, LINE), anchor="nw", tags="deco")
+        f = fonts(self).body
+        if self.foot and self.select.values:
+            y = self.foot_tops[0] - px(4)
+            c.create_line(self.INSET, y, self.w - self.INSET, y, fill=LINE, tags="deco")
+        for i, (item, top) in enumerate(zip(self.foot, self.foot_tops, strict=False)):
+            if i == self.foot_hover:
+                c.create_image(
+                    self.INSET,
+                    top,
+                    image=rrect(self.w - 2 * self.INSET, self.ROW, px(3), SEG_ON, PANEL),
+                    anchor="nw",
+                    tags="deco",
+                )
+            color = TEXT if i == self.foot_hover else DIM
+            if item == "hidden":
+                label = f"{self.texts.SHOW_HIDDEN} ({self.select.hidden_count()})"
+                box = rrect(
+                    px(14),
+                    px(14),
+                    px(3),
+                    ACCENT if self.select.show_hidden else PANEL,
+                    SEG_ON if i == self.foot_hover else PANEL,
+                    None if self.select.show_hidden else DIM,
+                )
+                c.create_image(self.INSET + px(10), top + px(7), image=box, anchor="nw", tags="deco")
+                if self.select.show_hidden:
+                    check = icon("check", WHITE, px(12), ACCENT)
+                    c.create_image(self.INSET + px(11), top + px(8), image=check, anchor="nw", tags="deco")
+                c.create_text(
+                    self.INSET + px(32), top + self.ROW / 2, text=label, font=f, fill=color, anchor="w", tags="deco"
+                )
+            else:
+                c.create_text(
+                    self.INSET + px(10), top + self.ROW / 2, text=MANAGE, font=f, fill=color, anchor="w", tags="deco"
+                )
+        self._draw_list()
+
+    def _scrolls(self) -> bool:
+        return self.content_h > self.list_h
+
+    def _row_w(self) -> int:
+        return self.lw - px(8) - (self.BAR_W if self._scrolls() else 0)
+
+    def _draw_list(self) -> None:
+        c = self.list
+        c.delete("all")
+        if not self.select.values:
+            return
+        fs = fonts(self)
+        rw = self._row_w()
+        current = self.select.value
+        if not self.rows:
+            c.create_text(px(14), self.ROW / 2, text=self.texts.NO_MATCH, font=fs.body, fill=DIM, anchor="w")
+        for i, (row, top) in enumerate(zip(self.rows, self.tops, strict=False)):
+            y = top - self.scroll
+            h = self.HEAD if row.kind == "head" else self.ROW
+            if y + h < 0 or y > self.list_h:
+                continue
+            if row.kind == "head":
+                c.create_text(px(14), y + h / 2 + px(2), text=row.label, font=fs.label, fill=DIM, anchor="w")
+                continue
+            on = row.label == current
+            hovered = i == self.hover
+            if on or hovered:
+                c.create_image(px(4), y, image=rrect(rw, self.ROW, px(3), ACCENT if on else SEG_ON, PANEL), anchor="nw")
+            button = hovered and self._can_hide(row)
+            room = rw - px(20) - (self.HIDE_W if button else 0)
+            color = WHITE if on else (DIM if row.hidden else TEXT)
+            c.create_text(
+                px(14), y + self.ROW / 2, text=ellipsize(row.label, fs.body, room), font=fs.body, fill=color, anchor="w"
+            )
+            if button:
+                word = self.texts.SHOW if row.hidden else self.texts.HIDE
+                c.create_text(
+                    px(4) + rw - px(10),
+                    y + self.ROW / 2,
+                    text=word,
+                    font=fs.small,
+                    fill=TEXT if self.hover_hide else DIM,
+                    anchor="e",
+                )
+        if self._scrolls():
+            thumb_y, thumb_h = self._thumb()
+            color = DIM if self._drag else SCROLL_THUMB
+            bar = rrect(px(5), thumb_h, px(2.5), color, PANEL)
+            c.create_image(self.lw - self.BAR_W + px(2), thumb_y, image=bar, anchor="nw")
+
+    def _thumb(self) -> tuple[int, int]:
+        thumb_h = max(px(24), round(self.list_h * self.list_h / self.content_h))
+        span = self.content_h - self.list_h
+        return (round(self.scroll / span * (self.list_h - thumb_h)) if span else 0), thumb_h
+
+    def _can_hide(self, row) -> bool:
+        return bool(self.select.on_hide) and row.kind == "model" and row.label != self.select.value
+
+    # pointer --------------------------------------------------------------------------
+
+    def _row_at(self, y: int) -> int:
+        y += self.scroll
+        for i, top in enumerate(self.tops):
+            if self.rows[i].kind == "model" and top <= y < top + self.ROW:
+                return i
+        return -1
+
+    def _set_hover(self, index: int, on_hide: bool = False) -> None:
+        if (index, on_hide) != (self.hover, self.hover_hide):
+            self.hover, self.hover_hide = index, on_hide
+            self._draw_list()
+
+    def _set_foot_hover(self, index: int) -> None:
+        if index != self.foot_hover:
+            self.foot_hover = index
+            self._draw()
+
+    def _on_bar(self, x: int) -> bool:
+        return self._scrolls() and x >= self.lw - self.BAR_W
+
+    def _motion(self, event) -> None:
+        if self._drag or self._on_bar(event.x):
+            self._set_hover(-1)
+            return
+        index = self._row_at(event.y)
+        on_hide = index >= 0 and self._can_hide(self.rows[index]) and event.x >= px(4) + self._row_w() - self.HIDE_W
+        self._set_hover(index, on_hide)
+
+    def _press(self, event) -> None:
+        if not self._on_bar(event.x):
+            return
+        thumb_y, thumb_h = self._thumb()
+        if not thumb_y <= event.y < thumb_y + thumb_h:  # on the track: a page up or down
+            self._wheel((1 if event.y > thumb_y else -1) * max(1, self.list_h // (self.ROW + 1) - 1))
+        self._drag = (event.y, self.scroll)
+        self._draw_list()
+
+    def _dragged(self, event) -> None:
+        if not self._drag:
+            return
+        y0, scroll0 = self._drag
+        _thumb_y, thumb_h = self._thumb()
+        track = self.list_h - thumb_h
+        if track > 0:
+            self.scroll = scroll0 + round((event.y - y0) * (self.content_h - self.list_h) / track)
+            self._clamp()
+            self._draw_list()
+
+    def _release(self, event) -> None:
+        if self._drag:
+            self._drag = None
+            self._draw_list()
+            return
+        index = self._row_at(event.y)
+        if index < 0 or not 0 <= event.x < self.lw:
+            return
+        row = self.rows[index]
+        if self._can_hide(row) and event.x >= px(4) + self._row_w() - self.HIDE_W:
+            self.select.hide(row.label, not row.hidden)
+            return
+        self.select.pick(row.label)
+
+    def _foot_at(self, y: int) -> int:
+        for i, top in enumerate(self.foot_tops):
+            if top <= y < top + self.ROW:
+                return i
+        return -1
+
+    def _foot_motion(self, event) -> None:
+        self._set_foot_hover(self._foot_at(event.y))
+
+    def _foot_release(self, event) -> None:
+        index = self._foot_at(event.y)
+        if index < 0:
+            return
+        if self.foot[index] == "hidden":
+            self.select.toggle_show_hidden()
+        else:
+            self.select.pick(MANAGE)
+
+    def _mousewheel(self, event) -> None:
+        delta = int(getattr(event, "delta", 0) or 0)
+        if not delta:
+            return
+        notches = round(delta / 120) if abs(delta) >= 120 else (1 if delta > 0 else -1)
+        self._wheel(-3 * notches)
+
+    def _wheel(self, rows: int) -> None:
+        """Scroll by ``rows`` rows (down when positive)."""
+        before = self.scroll
+        self.scroll += rows * (self.ROW + 1)
+        self._clamp()
+        if self.scroll != before:
+            try:
+                x = self.winfo_pointerx() - self.list.winfo_rootx()
+                y = self.winfo_pointery() - self.list.winfo_rooty()
+            except tk.TclError:
+                x = y = -1
+            if 0 <= x < self.lw and 0 <= y < self.list_h and self.hover >= 0:
+                self.hover = self._row_at(y)
+            self._draw_list()
+
+    # keyboard -------------------------------------------------------------------------
+
+    def _typed(self) -> None:
+        query = self.field.get() if self.field else ""
+        if query == self.query:
+            return
+        self.query = query
+        self.scroll = 0
+        self._layout()
+        first = next((i for i, r in enumerate(self.rows) if r.kind == "model"), -1)
+        self._set_hover(first if query else -1)
+
+    def _step(self, direction: int) -> None:
+        models = [i for i, r in enumerate(self.rows) if r.kind == "model"]
+        if not models:
+            return
+        if self.hover in models:
+            at = models.index(self.hover) + direction
+        else:
+            current = next((i for i in models if self.rows[i].label == self.select.value), -1)
+            at = models.index(current) + direction if current >= 0 else (0 if direction > 0 else len(models) - 1)
+        index = models[max(0, min(len(models) - 1, at))]
+        self._see(index)
+        self._set_hover(index)
+        self._draw_list()
+
+    def _see(self, index: int) -> None:
+        top = self.tops[index]
+        if index > 0 and self.rows[index - 1].kind == "head" and top - self.tops[index - 1] <= self.HEAD + 1:
+            top = self.tops[index - 1]  # show the heading with the first row under it
+        if top < self.scroll:
+            self.scroll = top
+        elif self.tops[index] + self.ROW > self.scroll + self.list_h:
+            self.scroll = self.tops[index] + self.ROW - self.list_h
+        self._clamp()
+
+    def _enter(self) -> None:
+        if 0 <= self.hover < len(self.rows):
+            self.select.pick(self.rows[self.hover].label)
+            return
+        if self.query:
+            first = next((r for r in self.rows if r.kind == "model"), None)
+            if first is not None:
+                self.select.pick(first.label)
+
+    # window ---------------------------------------------------------------------------
 
     def _grab(self) -> None:
         try:
             self.grab_set()
             self.focus_force()
+            if self.field is not None:
+                self.field.entry.focus_force()
         except tk.TclError:
             pass
-
-    def _draw(self) -> None:
-        c = self.canvas
-        c.delete("all")
-        c.create_image(0, 0, image=rrect(self.w, self.h, px(4), PANEL, BG, LINE), anchor="nw")
-        inset = self.INSET
-        f = fonts(self).body
-        current = self.select.value
-        n_values = len(self.select.values)
-        if self.select.manage and n_values:
-            y = self._tops[n_values] - px(4)
-            c.create_line(inset, y, self.w - inset, y, fill=LINE)
-        for i, (row, top) in enumerate(zip(self.rows, self._tops, strict=False)):
-            manage = row == MANAGE and i >= n_values
-            on = row == current and not manage
-            if on or i == self.hover:
-                c.create_image(
-                    inset,
-                    top,
-                    image=rrect(self.w - 2 * inset, self.ROW, px(3), ACCENT if on else SEG_ON, PANEL),
-                    anchor="nw",
-                )
-            color = WHITE if on else (DIM if manage and i != self.hover else TEXT)
-            c.create_text(
-                inset + px(10),
-                top + self.ROW / 2,
-                text=ellipsize(row, f, self.w - px(30)),
-                font=f,
-                fill=color,
-                anchor="w",
-            )
-
-    def _row_at(self, y: int) -> int:
-        for i, top in enumerate(self._tops):
-            if top <= y < top + self.ROW:
-                return i
-        return -1
-
-    def _set_hover(self, index: int) -> None:
-        if index != self.hover:
-            self.hover = index
-            self._draw()
-
-    def _motion(self, event) -> None:
-        self._set_hover(self._row_at(event.y))
-
-    def _release(self, event) -> None:
-        self._choose(self._row_at(event.y))
-
-    def _choose(self, index: int) -> None:
-        if 0 <= index < len(self.rows):
-            self.select.pick(self.rows[index])
 
     def _press_outside(self, event) -> None:
         x, y = event.x_root - self.winfo_rootx(), event.y_root - self.winfo_rooty()

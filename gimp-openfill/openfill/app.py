@@ -714,6 +714,22 @@ class App:
         self.log.info("active model set to %s", model_id)
         return entry
 
+    def hidden_models(self) -> list[str]:
+        """The model ids the user hid from the model menus."""
+        from . import model_menu
+
+        return model_menu.parse_hidden(self.settings.hidden_models)
+
+    def set_model_hidden(self, model_id: str, hidden: bool) -> list[str]:
+        """Hide ``model_id`` from the model menus, or list it again; returns the hidden ids."""
+        from . import model_menu
+
+        text = model_menu.set_hidden(self.settings.hidden_models, model_id, hidden)
+        if text != self.settings.hidden_models:
+            self.settings.hidden_models = text
+            self._save_settings()
+        return model_menu.parse_hidden(text)
+
     def save_token(self, token: str) -> None:
         self.settings.hf_token = token.strip()
         self._save_settings()

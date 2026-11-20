@@ -300,6 +300,18 @@ def _model_options(
     return options + installed_rows + other_rows, active_name, prompt_free, frozenset(flux_ids), notes
 
 
+def _hide_model(config_path, model_id: str, hidden: bool) -> None:
+    """A model hidden from the dialogs' Model list, or listed again (the ``hidden_models`` setting)."""
+    from openfill import model_menu
+
+    try:
+        fresh = Settings.load(config_path)
+        fresh.hidden_models = model_menu.set_hidden(fresh.hidden_models, model_id, hidden)
+        fresh.save(config_path)
+    except OSError:
+        pass  # the list still changes for this dialog
+
+
 _PICKED_MODEL: str | None = None  # a dialog pick outside the registered model ids (one run)
 
 
@@ -330,7 +342,7 @@ def _generation_dialog(
     """The redesigned dialog; writes the user's choices back into ``config``
     (the same properties NONINTERACTIVE callers set)."""
     gi.require_version("Gtk", "3.0")
-    from openfill import dialogs
+    from openfill import dialogs, model_menu
 
     GimpUi.init("gimp-openfill")
     paths = Paths.for_profile(Gimp.directory()).ensure()
@@ -377,6 +389,8 @@ def _generation_dialog(
         test_dump=hooks.get("dialog_dump"),
         test_out=str(hooks.get("dialog_out") or ""),
         thumbnail=thumbnail,
+        hidden_models=model_menu.parse_hidden(settings.hidden_models),
+        on_hide_model=lambda model_id, hidden: _hide_model(paths.config, model_id, hidden),
         cloud_note=(
             f"{settings.cloud_note('prompt' if kind == 'txt2img' else 'image')} {ui_text.CLOUD_VARIATIONS}"
             if settings.uses_cloud

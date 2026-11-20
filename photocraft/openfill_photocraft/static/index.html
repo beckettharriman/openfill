@@ -50,6 +50,7 @@ textarea:focus,input:focus,.select select:focus{border-color:var(--accent)}
 .select svg{position:absolute;right:8px;top:8px;pointer-events:none}
 .row{display:flex;align-items:center;gap:12px;min-height:32px}
 .row>label{width:84px;flex:none;font-size:12px;line-height:16px;color:var(--dim)}
+.row>label.chk{width:auto;display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer}
 .under{text-align:center;margin:-4px 0 0 96px}
 .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -141,6 +142,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
     <div class="stack">
       <div class="row"><label>Variations</label><div class="seg s12" id="vars"><button class="on">1</button><button>2</button><button>3</button><button>4</button><button>5</button></div></div>
       <div class="row"><label>Model</label><div class="select"><select id="model" aria-label="Model"></select><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9a9ba2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div></div>
+      <div class="row" id="model-tools" hidden><label></label><input id="model-search" type="text" placeholder="Search models" aria-label="Search models"><label class="small chk" id="show-hidden-box" hidden><input type="checkbox" id="show-hidden"> <span id="show-hidden-text">Show hidden</span></label></div>
     </div>
     <details id="advanced"><summary>More options</summary><div class="stack">
       <div class="field"><span class="label">Avoid</span><input id="neg" type="text" placeholder="What should not appear"></div>
@@ -239,7 +241,7 @@ const C={ok:"#3fb950",warn:"#e8a33d",bad:"#e5534b",dim:"#9a9ba2",accent:"#4a8ef0
 const GO={fill:"Generate",remove:"Remove",expand:"Expand",txt2img:"Create",bgremove:"Remove background"};
 const PH={fill:"Describe what to add, or leave it empty to fill from the surroundings.",expand:"Optional: describe what the new area shows.",txt2img:"Describe the image you want."};
 const NO_SEL="Select an area first: Marquee, Lasso or Object Selection.";
-let cloud=null, loaded={}, cloudMeta={}, mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="";
+let cloud=null, loaded={}, cloudMeta={}, mode="fill", doc=null, sel=null, models=[], activeId="", lastSeq=-1, busy=false, lastPick=-1, note=null, gear=false, section="models", pc={}, comfy=true, jobState="idle", variations=1, target="image", size=[1024,1024], removal="", thumbsFor="", hiddenIds=[], showHidden=false;
 
 function segPick(box,btn){box.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b===btn))}
 $("modes").onclick=e=>{const b=e.target.closest("button");if(b)setMode(b.dataset.mode)};
@@ -308,6 +310,10 @@ function removalChoices(){const inst=usable(),rem=inst.filter(r=>(r.capabilities
   if(def)out.push([`${short(rem.find(r=>r.id===def).name)} (default)`,"default"]);
   rem.concat(painters).forEach(r=>{if(r.id!==def)out.push([short(r.name),r.id])});
   return out}
+// A long model list (issue #14): a search field, the user's own model files in their own group,
+// and models hidden from the menu (Show hidden lists them again). The model in use is always listed.
+const SEARCH_AT=10;
+function matches(label,q){const t=label.toLowerCase();return q.toLowerCase().split(/\s+/).filter(Boolean).every(w=>t.includes(w))}
 function fillSelect(){const s=$("model");let opts;
   if(cloud)opts=[[cloud.model,"cloud"]];
   else if(mode==="remove")opts=removalChoices();
@@ -315,11 +321,23 @@ function fillSelect(){const s=$("model");let opts;
     // Fill also offers the removal models: with an empty prompt they remove (LaMa and MAT ignore a prompt, erasers use their own)
     if(mode==="fill")inst.filter(r=>(r.capabilities||[]).includes("remove")&&!(r.capabilities||[]).includes("fill")).forEach(r=>opts.push([r.name,r.id]))}
   const want=mode==="remove"?(opts.some(o=>o[1]===removal)?removal:(opts[0]||[])[1]):(opts.some(o=>o[1]===activeId)?activeId:(opts[0]||[])[1]);
-  const key=JSON.stringify([opts,want]);if(s.dataset.key===key)return;s.dataset.key=key;
+  const q=$("model-search").value.trim(),hidden=new Set(hiddenIds),nHidden=opts.filter(o=>hidden.has(o[1])&&o[1]!==want).length;
+  $("model-tools").hidden=opts.length<SEARCH_AT&&!nHidden;$("show-hidden-box").hidden=!nHidden&&!showHidden;$("show-hidden-text").textContent=`Show hidden (${nHidden})`;
+  const shown=opts.filter(o=>o[1]===want||((showHidden||!hidden.has(o[1]))&&(!q||matches(o[0],q))));
+  const key=JSON.stringify([shown,want,[...hidden]]);if(s.dataset.key===key)return;s.dataset.key=key;
   s.innerHTML="";if(!opts.length){const o=document.createElement("option");o.value="";o.textContent=models.length||!comfy?"No models installed":"Checking...";s.appendChild(o)}
-  for(const[label,value]of opts){const o=document.createElement("option");o.value=value;o.textContent=label;s.appendChild(o)}
+  const own=shown.filter(o=>o[1].startsWith("local-")),tool=shown.filter(o=>!o[1].startsWith("local-"));
+  const add=(parent,[label,value])=>{const o=document.createElement("option");o.value=value;o.textContent=label+(hidden.has(value)?" (hidden)":"");parent.appendChild(o)};
+  tool.forEach(o=>add(s,o));
+  if(own.length&&tool.length){const g=document.createElement("optgroup");g.label="Your model files";own.forEach(o=>add(g,o));s.appendChild(g)}else own.forEach(o=>add(s,o));
   s.appendChild(document.createElement("hr"));const m=document.createElement("option");m.value="__manage";m.textContent="Manage models...";s.appendChild(m);
   s.value=want||"";$("go").disabled=busy||!opts.length}
+$("model-search").oninput=()=>fillSelect();
+$("model-search").onkeydown=e=>{if(e.key!=="Enter")return;e.preventDefault();
+  const first=[...$("model").options].find(o=>o.value&&o.value!=="__manage"&&matches(o.textContent,$("model-search").value.trim()));
+  if(first){$("model").value=first.value;$("model").onchange();$("model-search").value="";fillSelect()}};
+$("show-hidden").onchange=()=>{showHidden=$("show-hidden").checked;fillSelect()};
+async function setHidden(id,hide){try{const r=await post("/api/models/hide",{id,hidden:hide});hiddenIds=r.hidden||[]}catch(e){mnote(e.message,"bad")}loadModels()}
 
 function setupCard(s){const c=$("setup");let html="";const dl=models.find(r=>(r.statusText||"").startsWith("Downloading"))||models.find(r=>r.statusText==="Waiting");
   if(cloud&&!cloud.key)html=`<div class="head">${svg("warn",C.warn)}<span class="t">The cloud service needs your key</span></div><div class="small">${esc(cloud.keyProblem||"Paste your API key under Engine in the settings. Nothing is sent until you generate.")}</div><div style="display:flex"><button class="btn accent flex" id="setup-cloud">Open settings</button></div>`;
@@ -373,18 +391,19 @@ function detail(r){const words={fill:"fill",expand:"expand",txt2img:"create",rem
   if(!caps.length||r.runnable===false)what=r.neededBy||"Needed by other models";return[what,r.size].filter(Boolean).join(" · ")}
 function mnote(t,kind){const n=$("mnote");n.hidden=!t;n.textContent=t||"";n.className="note "+(kind||"bad")}
 async function act(fn){try{await fn();mnote("")}catch(e){mnote(e.message,"bad")}loadModels()}
-async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}models=m.rows||[];$("hw").textContent=m.hardware||m.error||"";
+async function loadModels(){let m;try{m=await get("/api/models")}catch(e){return}models=m.rows||[];hiddenIds=m.hidden||[];$("hw").textContent=m.hardware||m.error||"";
   fillSelect();if(!gear||section!=="models")return;
   const inst=models.filter(r=>r.installed).sort((a,b)=>(!a.runnable)-(!b.runnable)||(!a.active)-(!b.active)||a.name.localeCompare(b.name));
   const avail=models.filter(r=>!r.installed&&r.runnable).sort((a,b)=>a.name.localeCompare(b.name));
   const row=(r)=>{const st=r.statusText||"";let right="",extra="";const busyRow=/^(Downloading|Waiting)/.test(st);
-    if(r.installed){if((r.missing_models||[]).length)right=`<button class="btn" data-get="${r.id}">Download</button>`;else if(/^(Removing|Installing|Working)/.test(st))right=`<span class="pct">${esc(st)}</span>`;else if(r.runnable)right=`<button class="icon-btn" data-remove="${r.id}" aria-label="Uninstall ${esc(r.name)}">${svg("trash","currentColor")}</button>`}
+    if(r.installed){if((r.missing_models||[]).length)right=`<button class="btn" data-get="${r.id}">Download</button>`;else if(/^(Removing|Installing|Working)/.test(st))right=`<span class="pct">${esc(st)}</span>`;else if(r.runnable){const h=hiddenIds.includes(r.id);right=`<button class="btn" data-hide="${r.id}" data-hidden="${h?1:0}" title="${h?"List it in the Model menu again":"Leave it out of the Model menu"}">${h?"Show in menu":"Hide from menu"}</button><button class="icon-btn" data-remove="${r.id}" aria-label="Uninstall ${esc(r.name)}">${svg("trash","currentColor")}</button>`}}
     else if(busyRow){const pct=st.startsWith("Downloading")?st.split(" ").pop():"Waiting";right=`<span class="pct">${pct}</span><button class="icon-btn" data-stop="${r.id}" aria-label="Stop downloading">${svg("close","currentColor")}</button>`;if(st.startsWith("Downloading"))extra=`<div class="bar"><i style="width:${parseInt(pct)||0}%"></i></div>`}
     else right=`<button class="btn" data-get="${r.id}">${r.partial?"Resume":"Download"}</button>`;
     const det=r.installed&&!r.runnable?[r.neededBy||"Needed by other models",r.size].join(" · "):detail(r)+((r.missing_models||[]).length?" · Needs one more download":"");
     return `<div class="mrow"><div class="top"><div class="names"><div>${esc(r.name)}</div><div class="small">${esc(det)}</div></div>${right}</div>${extra}</div>`};
   $("installed").innerHTML=inst.map(row).join("");$("inst-box").hidden=!inst.length;$("available").innerHTML=avail.map(row).join("");$("avail-box").hidden=!avail.length;
   document.querySelectorAll("[data-get]").forEach(b=>b.onclick=()=>act(()=>post("/api/models/download",{id:b.dataset.get})));
+  document.querySelectorAll("[data-hide]").forEach(b=>b.onclick=()=>setHidden(b.dataset.hide,b.dataset.hidden!=="1"));
   document.querySelectorAll("[data-stop]").forEach(b=>b.onclick=()=>act(()=>post("/api/models/stop",{id:b.dataset.stop})));
   document.querySelectorAll("[data-remove]").forEach(b=>b.onclick=()=>{const r=models.find(x=>x.id===b.dataset.remove);if(confirm(`Uninstall ${short(r.name)}? Its files (${r.size}) are deleted. Files other models use are kept.`))act(()=>post("/api/models/remove",{id:r.id}))})}
 $("save-token").onclick=async()=>{try{await post("/api/models/token",{token:$("token").value});$("token").value="";mnote("Hugging Face key saved.","ok")}catch(e){mnote(e.message,"bad")}};
