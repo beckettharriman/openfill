@@ -452,7 +452,8 @@ class AmdEnvTests(unittest.TestCase):
             self.assertTrue(hwmod.nvidia_present(drm, proc))
             (drm / "card1" / "device" / "vendor").write_text("0x8086\n")
             self.assertFalse(hwmod.nvidia_present(drm, proc))  # card0-eDP-1 is a connector, not a card
-            (proc / "0000:01:00.0").mkdir(parents=True)  # the NVIDIA driver lists a card
+            # the NVIDIA driver lists a card (Linux names it 0000:01:00.0; Windows can't make that folder)
+            (proc / ("0000-01-00.0" if os.name == "nt" else "0000:01:00.0")).mkdir(parents=True)
             self.assertTrue(hwmod.nvidia_present(drm, proc))
             self.assertFalse(hwmod.nvidia_present(Path(tmp) / "none", Path(tmp) / "none"))
 
