@@ -428,6 +428,12 @@ Upscale tab. It runs on ComfyUI only (not on a cloud service).
 The result is limited to 100 megapixels and 16384 pixels per side; for a
 bigger image, OpenFill says to use 2x instead.
 
+Measured on an RTX 4070 Laptop GPU (8 GB), 1024 x 1024 photo, through OpenFill's
+own backend: Real-ESRGAN 2x 14 s with the model load, 4x 8 s once loaded;
+SeedVR2 3B int8 2x 18 s. The whole session never went past 7.0 GB of graphics
+memory. Real-ESRGAN smooths fine texture (cloth weave came out flat); SeedVR2
+kept it.
+
 ### SeedVR2: why no custom node
 
 Issue #18 asked for SeedVR2 through numz's ComfyUI-SeedVR2_VideoUpscaler node
