@@ -11,7 +11,7 @@ Each entry from now on says which PhotoCraft versions it works with.
 ## [0.2.7] - 2026-11-20 · works with PhotoCraft 0.12 to 0.23
 
 Works with PhotoCraft 0.21, 0.22, 0.23 and 0.23.1:
-- Tested on PhotoCraft 0.21.0, 0.22.0, 0.23.0 and 0.23.1: install, the menu entry, and Fill, Remove, Expand and Create in PhotoCraft (with a stand-in for the models). OpenFill for PhotoCraft 0.2.6 already works with them; the panel and the docs said "0.12 to 0.20" only because they had not been tested yet.
+- Tested end to end with real models on PhotoCraft 0.21.0 and 0.23.1 (and 0.20.2): install, Fill with three variations, Keep and Discard, Remove, Expand, Remove Background, and Create as a layer and as a new image. 0.22.0 and 0.23.0 passed install and every tool with a stand-in for the models. OpenFill for PhotoCraft 0.2.6 already works with them; the panel and the docs said "0.12 to 0.20" only because they had not been tested yet.
 
 Fixed:
 - If another ComfyUI or another program already used port 8188, OpenFill said the engine was ready while it was talking to that other ComfyUI, and its own ComfyUI then failed to start (#12). OpenFill now starts its own on the next free port. The status line says "Ready on port 8189 (8188 is taken)", and Check says why.
