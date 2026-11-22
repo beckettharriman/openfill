@@ -11,6 +11,8 @@ Menu:
   Filters > OpenFill > Generative Fill...           python-fu-openfill-generative-fill
   Filters > OpenFill > Generative Expand...         python-fu-openfill-generative-expand
   Filters > OpenFill > Text to Image...             python-fu-openfill-text-to-image
+  Filters > OpenFill > Upscale...                   python-fu-openfill-upscale
+  Filters > OpenFill > Remove Background            python-fu-openfill-remove-background
   Filters > OpenFill > Generative Fill Settings...  python-fu-openfill-settings
   Filters > OpenFill > Stop AI Backend              python-fu-openfill-stop-backend
 """
@@ -74,6 +76,7 @@ PROC_TXT2IMG = "python-fu-openfill-text-to-image"
 PROC_SETTINGS = "python-fu-openfill-settings"
 PROC_STOP = "python-fu-openfill-stop-backend"
 PROC_UPSCALE = "python-fu-openfill-upscale"
+PROC_BGREMOVE = "python-fu-openfill-remove-background"
 CUSTOM_WORKFLOW_ID = "custom-workflow"  # openfill.app.CUSTOM_WORKFLOW_ID
 MENU = "<Image>/Filters/OpenFill"
 AUTHOR = "Beckett Harriman"
@@ -903,6 +906,28 @@ def run_upscale(
     return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
 
 
+def run_remove_background(
+    procedure: Gimp.Procedure,
+    run_mode: Gimp.RunMode,
+    image: Gimp.Image,
+    _drawables: list[Gimp.Drawable],
+    _config: Gimp.ProcedureConfig,
+    _data: object,
+) -> Gimp.ValueArray:
+    """Filters > OpenFill > Remove Background: cut the subject out of the whole image with
+    BiRefNet, as one new layer on top. No dialog: it takes no selection and no prompt, and the
+    original layers stay as they are (the same job as the Cutout tab in the PhotoCraft panel)."""
+    from openfill.app import App
+
+    app = None
+    try:
+        app = App(interactive=run_mode == Gimp.RunMode.INTERACTIVE)
+        app.remove_background(image)
+    except Exception as err:  # noqa: BLE001 - every failure must reach the user
+        return _fail(procedure, err, app.log if app else None)
+    return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
+
+
 SETTINGS_KEYS = [
     "backend",
     "comfy_dir",
@@ -1137,7 +1162,7 @@ def run_stop(procedure: Gimp.Procedure, _config: Gimp.ProcedureConfig, _data: ob
 
 
 class OpenFill(Gimp.PlugIn):
-    """The plug-in: registers the six Filters > OpenFill procedures."""
+    """The plug-in: registers the seven Filters > OpenFill procedures."""
 
     def do_set_i18n(self, _name: str) -> tuple[bool, str | None, str | None]:
         """No translations are shipped."""
@@ -1145,7 +1170,7 @@ class OpenFill(Gimp.PlugIn):
 
     def do_query_procedures(self) -> list[str]:
         """Names of the procedures this plug-in provides."""
-        return [PROC_FILL, PROC_EXPAND, PROC_TXT2IMG, PROC_UPSCALE, PROC_SETTINGS, PROC_STOP]
+        return [PROC_FILL, PROC_EXPAND, PROC_TXT2IMG, PROC_UPSCALE, PROC_BGREMOVE, PROC_SETTINGS, PROC_STOP]
 
     def do_create_procedure(self, name: str) -> Gimp.Procedure | None:
         """Build the procedure ``name`` with its arguments."""
@@ -1157,6 +1182,8 @@ class OpenFill(Gimp.PlugIn):
             return self._txt2img()
         if name == PROC_UPSCALE:
             return self._upscale()
+        if name == PROC_BGREMOVE:
+            return self._remove_background()
         if name == PROC_SETTINGS:
             return self._settings()
         if name == PROC_STOP:
@@ -1302,6 +1329,18 @@ class OpenFill(Gimp.PlugIn):
             "upscale-model", "_Model", "Which upscale model to use", _upscale_model_choice(), "default", RW
         )
         return p
+
+    def _remove_background(self) -> Gimp.ImageProcedure:
+        return self._image_procedure(
+            PROC_BGREMOVE,
+            run_remove_background,
+            "Remove _Background",
+            "Cut the subject out of the image with BiRefNet",
+            "Makes the background of the whole visible image transparent with BiRefNet on ComfyUI "
+            "(0.39 or newer) and adds the result as a new layer on top. The original layers are not "
+            "changed. It uses no selection and no prompt. Needs the BiRefNet model from the model "
+            "manager. OpenFill " + __version__,
+        )
 
     def _settings(self) -> Gimp.Procedure:
         p = Gimp.Procedure.new(self, PROC_SETTINGS, Gimp.PDBProcType.PLUGIN, run_settings, None)
