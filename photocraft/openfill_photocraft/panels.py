@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 # Settings the gear view edits: (key, label, kind). The rest stay in config.json.
 SETTINGS = (
     ("autostart", "Start the AI engine with PhotoCraft", bool),
+    ("debug", "Verbose log", bool),
     ("idle_timeout_minutes", "Stop after idle", int),
     ("request_timeout", "Time limit", int),
     ("steps", "Steps", int),
@@ -111,6 +112,7 @@ class GearView(tk.Frame):
         self.engine.load_backend(settings)
         self.engine.folder.set(settings.comfy_dir or "")
         self.engine.autostart.set(bool(settings.autostart))
+        self.engine.debug.set(bool(settings.debug))
         self.engine.idle.set(str(settings.idle_timeout_minutes))
         self.engine.timeout.set(str(settings.request_timeout))
         self.engine.extra.set(str(settings.extra_server_args or ""))
@@ -126,6 +128,7 @@ class GearView(tk.Frame):
     def values(self) -> dict[str, Any]:
         raw: dict[str, Any] = {
             "autostart": self.engine.autostart.get(),
+            "debug": self.engine.debug.get(),
             "idle_timeout_minutes": self.engine.idle.get(),
             "request_timeout": self.engine.timeout.get(),
             "extra_server_args": self.engine.extra.get(),
@@ -480,6 +483,8 @@ class EngineView(tk.Frame):
         row.pack(anchor="w", pady=ui.px((8, 0)))
         for i, (label, command) in enumerate((("Check", self.check), ("Stop engine", self.stop), ("Logs", self.logs))):
             ui.Button(row, label, command).pack(side="left", padx=ui.px((8 if i else 0, 0)))
+        self.debug = ui.Checkbox(tools, "Verbose log")
+        self.debug.pack(anchor="w", pady=ui.px((8, 0)))
         self.result = ui.small(tools, "")
         self._tools = tools
         ui.divider(self).pack(fill="x", pady=ui.px((12, 0)))
