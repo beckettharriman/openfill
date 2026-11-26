@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version numbers below (0.2.x) are OpenFill for PhotoCraft's own, not PhotoCraft's.
 Each entry from now on says which PhotoCraft versions it works with.
 
+## [Unreleased]
+
+- Add an Auto / 1–4 MP resolution control for supported models in the desktop panel. Auto preserves the existing sizing, the last choice is remembered, and RORem keeps its standard resolution.
+
 ## [0.2.7] - 2026-11-20 · works with PhotoCraft 0.12 to 0.23
 
 Works with PhotoCraft 0.21, 0.22, 0.23 and 0.23.1:

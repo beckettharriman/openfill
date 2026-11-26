@@ -99,6 +99,8 @@ Select an area in PhotoCraft (Marquee, Lasso, Object Selection), then type what 
 
 While it works you see a live preview. With several variations, click the thumbnails to compare them in PhotoCraft, then **Keep**, **Keep all** or **Discard**.
 
+In the desktop panel, **Resolution** below Model offers **Auto**, **1 MP**, **2 MP**, **3 MP** and **4 MP** for supported models. Auto is the default and keeps the original working-size calculation. The panel remembers your last choice. Manual values set a generation budget, not the canvas or selection size; higher values can use more VRAM. RORem, LaMa/MAT and cloud jobs keep their own sizing. A custom workflow can still apply its own resize internally.
+
 Every result is a new layer with a mask (variations go into a group), and it is **one step** in PhotoCraft's history: one Undo takes a fill or a whole expand back. Keep leaves it one step, and Discard takes it back completely. Your selection stays as it was, and the clipboard is never touched.
 
 The panel stays with PhotoCraft: it hides when PhotoCraft is minimized and comes back with it. The arrow at its top right folds it into a small strip, and a click on the strip opens it again. The gear opens **Models and settings**: install, uninstall and stop downloads under Models, ComfyUI under Engine, and the generation settings under Generation.
