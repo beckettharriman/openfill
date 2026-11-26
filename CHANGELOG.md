@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- GIMP: Filters > OpenFill > Remove Background cuts the subject out of the whole image with BiRefNet as one new layer, the same job as the Cutout tab in the PhotoCraft panel. It needs ComfyUI 0.39 or newer and the BiRefNet model (424 MB) from the model manager, and it runs on ComfyUI only.
+
 ## [2.0.0-beta.8] - 2026-11-20
 
 - Fixed: the Qwen-Image-Edit 2511 download failed its check because unsloth replaced the file on Hugging Face (#13). Every Hugging Face download in the model list now comes from a fixed commit, so a file changed upstream can no longer break a download. If a file still doesn't match, the message now says it is OpenFill's list that is out of date, not your download.
