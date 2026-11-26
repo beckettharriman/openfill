@@ -11,6 +11,7 @@ Everything else here is plain Python.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -54,7 +55,7 @@ from .backends.gemini import GeminiBackend
 from .comfy_api import ComfyApiError, ComfyClient, unsupported_gpu_line
 from .config import Paths, Settings, comfy_layout, comfy_problem
 from .geometry import Rect
-from .log import get_logger
+from .log import get_logger, redact
 from .progress import OverallProgress
 from .server import ServerManager, _split_host_port, port_answers
 from .supervisor import pid_is_python
@@ -404,7 +405,7 @@ class App:
         """The user picked the cloud service: pictures go to it, and ComfyUI is never used."""
         return self.settings.backend == "cloud"
 
-    def cloud_backend(self) -> CloudBackend:
+    def cloud_backend(self, debug_dir: Path | None = None) -> CloudBackend:
         s = self.settings
         if s.cloud_provider == "gemini":
             return GeminiBackend(
@@ -416,6 +417,7 @@ class App:
                 self.log,
                 decode=getattr(self.io, "decode_image", None),
                 key_problem=s.cloud_key_problem(),
+                debug_dir=debug_dir,
             )
         return CloudBackend(
             s.cloud_provider,
@@ -427,13 +429,14 @@ class App:
             self.log,
             decode=getattr(self.io, "decode_image", None),
             key_problem=s.cloud_key_problem(),
+            debug_dir=debug_dir,
         )
 
     def backend(self, progress=None, cancel=None) -> Backend:
         # Exactly the backend the user picked: the cloud is never a stand-in for a ComfyUI
         # that fails to start, and ComfyUI never runs a job meant for the cloud.
         if self.uses_cloud:
-            return self.cloud_backend()
+            return self.cloud_backend(debug_dir=getattr(self, "_debug_dir", None))
         self._restart_for_shared_models()
         url = self.server.ensure_running(progress, cancel)
         timeout = float(self.settings.request_timeout or 0)
@@ -994,12 +997,17 @@ class App:
             return True
         return ComfyClient(self.server.url(), timeout=3).is_alive(timeout=2.0)
 
+    def sync_log_level(self) -> None:
+        """Match the logger level to ``settings.debug``."""
+        self.log.setLevel(logging.DEBUG if self.settings.debug else logging.INFO)
+
     def reload_settings(self) -> None:
         """Re-read config.json (the setup task changes comfy_dir in another process)."""
         creds = self.settings.gemini_credentials
         fresh = Settings.load(self.paths.config, backup=False)
         self.settings.__dict__.update(fresh.__dict__)
         self.settings.gemini_credentials = creds
+        self.sync_log_level()
 
     def use_comfy_dir(self, path: str) -> None:
         """Make ``path`` the ComfyUI folder; raises ``BackendError`` when it holds no ComfyUI."""
@@ -1278,6 +1286,8 @@ class App:
         runner = self.runner_cls(
             self, title, model_display_name(entry.name) if entry else model.checkpoint, interactive=self.interactive
         )
+        debug_dir = self._debug_folder("fill")
+        self._debug_dir = debug_dir
         try:
             result = runner.run(
                 lambda progress, preview, cancel: self.backend(progress, cancel).inpaint(
@@ -1286,7 +1296,7 @@ class App:
             )
             self.server.touch()
             self._after_generation(result)
-            self._debug_dump("fill", request, result, ctx)
+            self._debug_dump("fill", request, result, ctx, folder=debug_dir)
             # A cloud result is a layer that is transparent outside the selection with its own soft
             # edge inside it; its layer mask is the selection itself, never grown past it.
             layers = self.io.insert_results(
@@ -1299,8 +1309,11 @@ class App:
                 grow=0 if self.uses_cloud else layer_grow,
             )
         except BaseException as err:
+            self._debug_dump("fill", request, rect=ctx, error=err, folder=debug_dir)
             runner.fail(err)
             raise
+        finally:
+            self._debug_dir = None
         # A cloud result is already blended inside the selection on this computer, and these two
         # rewrite the layer where its mask reaches past the selection: skipped, so no pixel there changes.
         if self.settings.seam_correction and not model.prompt_free and not self.uses_cloud:
@@ -1588,13 +1601,22 @@ class App:
                 detail_denoise,
                 [(t.rect.x, t.rect.y, t.rect.width, t.rect.height) for t in detail],
             )
-        result = runner.run(
-            lambda progress, preview, cancel: self.backend(progress, cancel).outpaint(
-                request, tracker.wrap(progress), preview, cancel
+        debug_dir = self._debug_folder("expand")
+        self._debug_dir = debug_dir
+        try:
+            result = runner.run(
+                lambda progress, preview, cancel: self.backend(progress, cancel).outpaint(
+                    request, tracker.wrap(progress), preview, cancel
+                )
             )
-        )
+        except BaseException as err:
+            self._debug_dump("expand", request, rect=plan.context, error=err, folder=debug_dir)
+            raise
+        finally:
+            self._debug_dir = None
         self.server.touch()
         self._after_generation(result)
+        self._debug_dump("expand", request, result, plan.context, folder=debug_dir)
         image.undo_group_start()
         try:
             self.io.resize_canvas(
@@ -1662,6 +1684,8 @@ class App:
             model_display_name(entry.name) if entry else model.checkpoint,
             interactive=self.interactive,
         )
+        debug_dir = self._debug_folder("txt2img")
+        self._debug_dir = debug_dir
         try:
             result = runner.run(
                 lambda progress, preview, cancel: self.backend(progress, cancel).txt2img(
@@ -1669,6 +1693,7 @@ class App:
                 )
             )
             self.server.touch()
+            self._debug_dump("txt2img", request, result, folder=debug_dir)
             name = _layer_name("Text to Image", prompt)
             if image is None or target == "image":
                 self.io.new_image_from_pngs(result.images, name, self.paths.temp)
@@ -1685,8 +1710,11 @@ class App:
                     scale_to_origin=True,
                 )
         except BaseException as err:
+            self._debug_dump("txt2img", request, error=err, folder=debug_dir)
             runner.fail(err)
             raise
+        finally:
+            self._debug_dir = None
         runner.done("Done")
         self.log.info("txt2img: done, seed=%s", result.seed)
 
@@ -1727,6 +1755,7 @@ class App:
         self.log.info("bgremove: %dx%d model=%s", full.width, full.height, entry.id)
         title = "Remove Background"
         runner = self.runner_cls(self, title, model_display_name(entry.name), interactive=self.interactive)
+        debug_dir = self._debug_folder("bgremove")
         try:
             result = runner.run(
                 lambda progress, preview, cancel: self._background_removal_backend(progress, cancel).inpaint(
@@ -1734,6 +1763,7 @@ class App:
                 )
             )
             self.server.touch()
+            self._debug_dump("bgremove", request, result, full, folder=debug_dir)
             layers = self.io.insert_results(
                 image,
                 result.images,
@@ -1744,6 +1774,7 @@ class App:
                 use_selection_mask=False,
             )
         except BaseException as err:
+            self._debug_dump("bgremove", request, rect=full, error=err, folder=debug_dir)
             runner.fail(err)
             raise
         runner.done("Added layer: Background Removed")
@@ -1809,6 +1840,7 @@ class App:
         self.log.info("upscale: %dx%d -> %dx%d (%dx) model=%s", full.width, full.height, new_w, new_h, factor, entry.id)
         title = "Upscale"
         runner = self.runner_cls(self, title, model_display_name(entry.name), interactive=self.interactive)
+        debug_dir = self._debug_folder("upscale")
         try:
             result = runner.run(
                 lambda progress, preview, cancel: self._comfy_only_backend(title, progress, cancel).inpaint(
@@ -1816,12 +1848,14 @@ class App:
                 )
             )
             self.server.touch()
+            self._debug_dump("upscale", request, result, full, folder=debug_dir)
             got = png.read_header(result.images[0])[:2]
             if got != (new_w, new_h):
                 raise BackendError(f"The upscaled image came back at {got[0]} x {got[1]}, not {new_w} x {new_h}.")
             name = f"Upscaled {factor}x"
             new_image = self.io.new_image_from_pngs(result.images[:1], name, self.paths.temp)
         except BaseException as err:
+            self._debug_dump("upscale", request, rect=full, error=err, folder=debug_dir)
             runner.fail(err)
             raise
         runner.done(f"New image: {new_w} x {new_h}")
@@ -1848,33 +1882,92 @@ class App:
             self.log.info("refused: indexed image")
             raise UnsupportedImage(INDEXED_MESSAGE)
 
-    def _debug_dump(self, kind: str, request: InpaintRequest, result, rect: Rect) -> None:
+    def _debug_enabled(self) -> bool:
+        return bool(self.settings.debug or os.environ.get("OPENFILL_DEBUG_DUMP") == "1")
+
+    def _prune_debug_dumps(self, keep: int = 20) -> None:
+        """Keep only the newest ``keep`` per-action debug folders so verbose dumps do not fill the disk."""
+        try:
+            dumps = sorted(
+                (p for p in self.paths.temp.iterdir() if p.is_dir() and p.name.startswith("debug-")),
+                key=lambda p: (p.stat().st_mtime, p.name),
+            )
+            for old in dumps[:-keep] if keep > 0 else dumps:
+                shutil.rmtree(old, ignore_errors=True)
+        except Exception as err:  # noqa: BLE001
+            self.log.warning("debug dump prune failed: %s", err)
+
+    def _debug_folder(self, kind: str) -> Path | None:
+        """Create a unique per-action folder when verbose logging or OPENFILL_DEBUG_DUMP=1 is active."""
+        if not self._debug_enabled():
+            return None
+        try:
+            self._prune_debug_dumps()
+            stem = f"debug-{kind}-{time.strftime('%Y%m%d-%H%M%S')}"
+            folder = self.paths.temp / stem
+            suffix = 1
+            while folder.exists():
+                folder = self.paths.temp / f"{stem}-{suffix}"
+                suffix += 1
+            folder.mkdir(parents=True, exist_ok=True)
+            return folder
+        except Exception as err:  # noqa: BLE001
+            self.log.warning("debug dump folder failed: %s", err)
+            return None
+
+    def _debug_dump(
+        self,
+        kind: str,
+        request: InpaintRequest | Txt2ImgRequest,
+        result: Any = None,
+        rect: Rect | None = None,
+        error: BaseException | None = None,
+        folder: Path | None = None,
+    ) -> None:
         """With debug on (settings or OPENFILL_DEBUG_DUMP=1) keep the exact bytes exchanged
         with the backend next to a JSON description, for bug reports."""
-        if not (self.settings.debug or os.environ.get("OPENFILL_DEBUG_DUMP") == "1"):
+        if not self._debug_enabled():
             return
         try:
-            folder = self.paths.temp / f"debug-{kind}-{time.strftime('%Y%m%d-%H%M%S')}"
+            folder = folder or self._debug_folder(kind)
+            if folder is None:
+                return
             folder.mkdir(parents=True, exist_ok=True)
-            (folder / "sent-image.png").write_bytes(request.image_png)
-            (folder / "sent-mask.png").write_bytes(request.mask_png)
-            for i, data in enumerate(result.images):
-                (folder / f"result-{i}.png").write_bytes(data)
-            info = {
-                "rect": [rect.x, rect.y, rect.width, rect.height],
-                "work": [request.work_width, request.work_height],
-                "mode": request.mode,
-                "grow": request.grow,
-                "feather": request.feather,
-                "prefill": request.prefill,
-                "prompt": request.prompt,
-                "negative": request.negative,
-                "model": request.model.__dict__,
-                "sampling": request.sampling.__dict__,
-                "seed": result.seed,
-                "layer_feather": self.settings.feather,
-                "graph_classes": sorted({n["class_type"] for n in (result.info.get("graph") or {}).values()}),
-            }
+            if isinstance(request, InpaintRequest):
+                (folder / "sent-image.png").write_bytes(request.image_png)
+                (folder / "sent-mask.png").write_bytes(request.mask_png)
+                info: dict[str, Any] = {
+                    "kind": kind,
+                    "rect": [rect.x, rect.y, rect.width, rect.height] if rect is not None else None,
+                    "work": [request.work_width, request.work_height],
+                    "mode": request.mode,
+                    "grow": request.grow,
+                    "feather": request.feather,
+                    "prefill": request.prefill,
+                    "prompt": request.prompt,
+                    "negative": request.negative,
+                    "model": request.model.__dict__,
+                    "sampling": request.sampling.__dict__,
+                    "layer_feather": self.settings.feather,
+                }
+            else:
+                info = {
+                    "kind": kind,
+                    "width": request.width,
+                    "height": request.height,
+                    "prompt": request.prompt,
+                    "negative": request.negative,
+                    "model": request.model.__dict__,
+                    "sampling": request.sampling.__dict__,
+                }
+            if result is not None:
+                for i, data in enumerate(result.images):
+                    (folder / f"result-{i}.png").write_bytes(data)
+                info["seed"] = result.seed
+                info["graph_classes"] = sorted({n["class_type"] for n in (result.info.get("graph") or {}).values()})
+            if error is not None:
+                info["error"] = redact(f"{type(error).__name__}: {error}")
+                (folder / "error.txt").write_text(redact(f"{type(error).__name__}: {error}\n"), encoding="utf-8")
             (folder / "request.json").write_text(json.dumps(info, indent=2, default=str), encoding="utf-8")
             self.log.info("debug dump: %s", folder)
         except Exception as err:  # noqa: BLE001

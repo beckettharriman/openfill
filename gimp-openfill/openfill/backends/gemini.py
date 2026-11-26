@@ -23,6 +23,7 @@ import random
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -309,6 +310,7 @@ class GeminiBackend(CloudBackend):
         key_problem: str = "",
         max_retries: int = 2,
         retry_base_delay: float = 1.0,
+        debug_dir: Path | None = None,
     ) -> None:
         problem = key_problem or (
             ""
@@ -328,6 +330,7 @@ class GeminiBackend(CloudBackend):
             decode=decode,
             opener=opener,
             key_problem=problem,
+            debug_dir=debug_dir,
         )
         self.mask_mode = "overlay" if mask_mode == "overlay" else "second_image"
         self.max_retries = max(0, int(max_retries))
@@ -580,6 +583,7 @@ class GeminiBackend(CloudBackend):
                 f"{self.where} answered without a picture. The model may not make images, or it declined this one; "
                 "try another prompt or model."
             )
+        self._dump_raw_images(raw)
         feather = max(1, min(24, round(request.feather * w / max(1, request.work_width))))
         solid_mask = b"\xff" * (w * h)
         full_source = (0.0, 0.0, float(w), float(h))

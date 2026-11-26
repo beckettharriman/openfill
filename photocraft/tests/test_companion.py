@@ -3611,9 +3611,9 @@ console.log(JSON.stringify(out));
         gear.generation = SimpleNamespace(fields={})
         for limit, ok in (("-5", False), ("0", True), ("90", True)):
             gear.engine = SimpleNamespace(
-                autostart=entry(True), idle=entry("20"), timeout=entry(limit), extra=entry("")
+                autostart=entry(True), debug=entry(False), idle=entry("20"), timeout=entry(limit), extra=entry("")
             )
-            engine_keys = ("autostart", "idle_timeout_minutes", "request_timeout", "extra_server_args")
+            engine_keys = ("autostart", "debug", "idle_timeout_minutes", "request_timeout", "extra_server_args")
             gear.generation.fields = {key: entry("1") for key, _label, _kind in SETTINGS if key not in engine_keys}
             if ok:
                 self.assertEqual(gear.values()["request_timeout"], int(limit))
@@ -4523,6 +4523,15 @@ class UpscaleAndCustomWorkflowTests(unittest.TestCase):
         keys = {key: kind for key, _label, kind in panels.SETTINGS}
         self.assertIs(keys["custom_workflow"], str)
         self.assertIs(keys["custom_workflow_inputs"], str)
+        self.assertIs(keys["debug"], bool)
+
+    def test_verbose_log_toggle_is_in_web_page(self):
+        from openfill_photocraft import web
+
+        self.assertIs(web.EDITABLE["debug"], bool)
+        page = (Path(web.__file__).with_name("static") / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="s-debug"', page)
+        self.assertIn("Verbose log", page)
 
 
 class ReopenBrowserPageTests(unittest.TestCase):

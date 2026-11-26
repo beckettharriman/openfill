@@ -1799,3 +1799,105 @@ class OpenRouterMultipleVariationsFallbackTests(CloudTestCase):
         req, _rgba, _mask = inpaint_request(batch=3)
         result = self.backend("openrouter").inpaint(req)
         self.assertEqual(len(result.images), 1)
+
+
+class VerboseDebugDumpTests(CloudTestCase):
+    def test_cloud_writes_redacted_request_response_and_raw_images_to_debug_dir(self):
+        secret = "sk-or-v1-secret-token-value-1234567890"
+        raw_png = solid_png(48, 32, (12, 34, 56, 255))
+        self.fake.json_route("/v1/images", {"data": [{"b64_json": base64.b64encode(raw_png).decode()}]})
+        with tempfile.TemporaryDirectory() as tmp:
+            dump_dir = Path(tmp) / "debug-txt2img-test"
+            backend = CloudBackend(
+                "openrouter",
+                api_key=secret,
+                model="recraft/recraft-v4.1-flash-v2",
+                url=f"{self.fake.url}/v1",
+                debug_dir=dump_dir,
+            )
+            req = Txt2ImgRequest(512, 512, "a red apple", "", ModelSpec("x", "sd15"), Sampling(batch=1))
+            res = backend.txt2img(req)
+            self.assertEqual(len(res.images), 1)
+            req_dump = (dump_dir / "cloud-request-1.json").read_text(encoding="utf-8")
+            resp_dump = (dump_dir / "cloud-response-1.json").read_text(encoding="utf-8")
+            self.assertIn("a red apple", req_dump)
+            self.assertNotIn(secret, req_dump)
+            self.assertNotIn(secret, resp_dump)
+            self.assertIn("<base64,", resp_dump)
+            self.assertEqual((dump_dir / "cloud-raw-0.png").read_bytes(), raw_png)
+
+    def test_cloud_writes_error_response_to_debug_dir(self):
+        secret = "sk-or-v1-secret-token-value-1234567890"
+        self.fake.json_route(
+            "/v1/images",
+            {"error": {"message": f"bad model for {secret}"}},
+            status=400,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            dump_dir = Path(tmp) / "debug-err-test"
+            backend = CloudBackend(
+                "openrouter",
+                api_key=secret,
+                model="bad/model",
+                url=f"{self.fake.url}/v1",
+                debug_dir=dump_dir,
+            )
+            req = Txt2ImgRequest(512, 512, "hello", "", ModelSpec("x", "sd15"), Sampling(batch=1))
+            with self.assertRaises(CloudRefused):
+                backend.txt2img(req)
+            resp_dump = (dump_dir / "cloud-response-1.json").read_text(encoding="utf-8")
+            self.assertNotIn(secret, resp_dump)
+            self.assertIn("[redacted]", resp_dump)
+            self.assertIn("400", resp_dump)
+
+    def test_app_debug_dump_handles_txt2img_and_errors(self):
+        from types import SimpleNamespace
+
+        from openfill.app import App
+        from openfill.config import Paths, Settings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app = App.__new__(App)
+            app.paths = Paths(root)
+            app.paths.ensure()
+            app.settings = Settings(debug=True)
+            app.log = logging.getLogger("test-verbose-dump")
+            folder = app._debug_folder("txt2img")
+            self.assertIsNotNone(folder)
+            req = Txt2ImgRequest(512, 512, "a mountain", "blurry", ModelSpec("m", "sd15"), Sampling(batch=1))
+            app._debug_dump("txt2img", req, error=RuntimeError("boom"), folder=folder)
+            self.assertIn("a mountain", (folder / "request.json").read_text(encoding="utf-8"))
+            self.assertIn("RuntimeError: boom", (folder / "error.txt").read_text(encoding="utf-8"))
+            # A second folder in the same second gets a unique suffix
+            second = app._debug_folder("txt2img")
+            self.assertIsNotNone(second)
+            self.assertNotEqual(folder, second)
+            app.sync_log_level()
+            self.assertEqual(app.log.level, logging.DEBUG)
+            app.settings = SimpleNamespace(debug=False)
+            app.sync_log_level()
+            self.assertEqual(app.log.level, logging.INFO)
+
+    def test_prune_debug_dumps_keeps_newest(self):
+        from openfill.app import App
+        from openfill.config import Paths, Settings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app = App.__new__(App)
+            app.paths = Paths(root)
+            app.paths.ensure()
+            app.settings = Settings(debug=True)
+            app.log = logging.getLogger("test-prune-dump")
+            created = []
+            for i in range(4):
+                p = app.paths.temp / f"debug-fill-20261126-14000{i}"
+                p.mkdir()
+                os.utime(p, (1000 + i, 1000 + i))
+                created.append(p)
+            app._prune_debug_dumps(keep=2)
+            self.assertFalse(created[0].exists())
+            self.assertFalse(created[1].exists())
+            self.assertTrue(created[2].exists())
+            self.assertTrue(created[3].exists())

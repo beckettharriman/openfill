@@ -39,6 +39,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -286,6 +287,7 @@ class CloudBackend(Backend):
         decode: Callable[[bytes], tuple[int, int, bytes]] | None = None,
         opener: Any = None,
         key_problem: str = "",
+        debug_dir: Path | None = None,
     ) -> None:
         self.provider = provider(provider_id)
         self._key = api_key.strip()
@@ -304,6 +306,9 @@ class CloudBackend(Backend):
         self._cancelled = threading.Event()
         self._deadline = 0.0  # monotonic time the whole job must end by (0 = none)
         self.key_problem = key_problem  # why the saved key is not used here (another service or address)
+        self.debug_dir = Path(debug_dir) if debug_dir else None
+        self._debug_seq = 0
+        self._debug_lock = threading.Lock()
 
     def __repr__(self) -> str:  # the key never appears, even in a traceback's locals
         return f"CloudBackend({self.provider.id!r}, model={self.model!r}, url={self.url!r})"
@@ -319,6 +324,49 @@ class CloudBackend(Backend):
     def _info(self, fmt: str, *args: Any) -> None:
         if self.log:
             self.log.info("cloud: " + fmt, *(self._clean(a) if isinstance(a, str) else a for a in args))
+
+    def _sanitize_debug(self, value: Any) -> Any:
+        """Redact secrets and summarize large base64 image payloads so debug JSON stays readable."""
+        if isinstance(value, dict):
+            out: dict[str, Any] = {}
+            for k, v in value.items():
+                if k in ("b64_json", "data") and isinstance(v, str) and len(v) > 100:
+                    out[k] = f"<base64, {len(v)} chars>"
+                else:
+                    out[k] = self._sanitize_debug(v)
+            return out
+        if isinstance(value, list):
+            return [self._sanitize_debug(v) for v in value]
+        if isinstance(value, str):
+            if value.startswith("data:") and ";base64," in value and len(value) > 200:
+                header, b64 = value.split(";base64,", 1)
+                return f"<{header};base64, {len(b64)} chars>"
+            return self._clean(value)
+        return value
+
+    def _debug_json(self, name: str, payload: Any) -> None:
+        if self.debug_dir is None:
+            return
+        try:
+            self.debug_dir.mkdir(parents=True, exist_ok=True)
+            (self.debug_dir / name).write_text(
+                json.dumps(self._sanitize_debug(payload), indent=2, default=str), encoding="utf-8"
+            )
+        except OSError as err:
+            if self.log:
+                self.log.warning("cloud debug write failed (%s): %s", name, err)
+
+    def _dump_raw_images(self, raw: list[bytes]) -> None:
+        if self.debug_dir is None:
+            return
+        try:
+            self.debug_dir.mkdir(parents=True, exist_ok=True)
+            for i, data in enumerate(raw):
+                ext = imaging.sniff(data) or "bin"
+                (self.debug_dir / f"cloud-raw-{i}.{ext}").write_bytes(data)
+        except OSError as err:
+            if self.log:
+                self.log.warning("cloud raw image dump failed: %s", err)
 
     def _check_ready(self) -> None:
         problem = url_problem(self.url, resolve=True)
@@ -355,6 +403,25 @@ class CloudBackend(Backend):
             raise GenerationCancelled("cancelled before the request was sent")
         if self._deadline:
             timeout = min(timeout, max(0.1, self._deadline - time.monotonic()))
+        seq = 0
+        if self.debug_dir is not None:
+            with self._debug_lock:
+                self._debug_seq += 1
+                seq = self._debug_seq
+            req_dump: dict[str, Any] = {
+                "method": method,
+                "url": self._clean(self.url + path),
+                "content_type": content_type,
+            }
+            if body is not None:
+                if "json" in content_type:
+                    try:
+                        req_dump["body"] = json.loads(body.decode("utf-8"))
+                    except (UnicodeDecodeError, ValueError):
+                        req_dump["body_bytes"] = len(body)
+                else:
+                    req_dump["body_bytes"] = len(body)
+            self._debug_json(f"cloud-request-{seq}.json", req_dump)
         req = Request(self.url + path, data=body, method=method, headers=self._headers(content_type))
         started = time.monotonic()
         try:
@@ -368,6 +435,12 @@ class CloudBackend(Backend):
                 detail = ""
             finally:
                 err.close()
+            if seq:
+                try:
+                    parsed_detail: Any = json.loads(detail) if detail else ""
+                except ValueError:
+                    parsed_detail = detail
+                self._debug_json(f"cloud-response-{seq}.json", {"status": err.code, "error": parsed_detail})
             self._info("%s %s -> HTTP %s after %.1f s", method, path, err.code, time.monotonic() - started)
             raise self._http_error(err.code, detail, err.headers) from None
         except TimeoutError:
@@ -391,10 +464,17 @@ class CloudBackend(Backend):
         try:
             data = json.loads(raw.decode("utf-8")) if raw else {}
         except ValueError:
+            if seq:
+                self._debug_json(
+                    f"cloud-response-{seq}.json",
+                    {"status": status, "raw_text": raw[:4000].decode("utf-8", "replace")},
+                )
             raise CloudRefused(
                 f"{self.where} sent an answer OpenFill cannot read. Check the address in the cloud settings "
                 "(it should end in /v1 or /api/v1)."
             ) from None
+        if seq:
+            self._debug_json(f"cloud-response-{seq}.json", {"status": status, "data": data})
         if isinstance(data, dict) and isinstance(data.get("error"), (dict, str)):  # an error inside a 200 answer
             code = data["error"].get("code") if isinstance(data["error"], dict) else None
             try:
@@ -862,6 +942,7 @@ class CloudBackend(Backend):
                 f"{self.where} answered without a picture. The model may not make images, or it declined this one; "
                 "try another prompt or model."
             )
+        self._dump_raw_images(raw)
         feather = max(1, min(8, round(request.feather * w / max(1, request.work_width) / 2)))
         images = []
         for data in raw:
@@ -898,6 +979,7 @@ class CloudBackend(Backend):
         raw = self._run("Waiting for", call, progress, cancel, requests)
         if not raw:
             raise CloudRefused(f"{self.where} answered without a picture. Try another prompt or model.")
+        self._dump_raw_images(raw)
         # always read and written again here: the editor only ever gets a PNG OpenFill made itself
         images = [self._image(data).png() for data in raw]
         return GenerationResult(
