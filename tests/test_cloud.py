@@ -1728,3 +1728,74 @@ class GeminiKeyWordingTests(unittest.TestCase):
         err = backend._http_error(401, "{}", {})
         self.assertNotIn("session", str(err))
         self.assertIn("cloud settings", str(err))
+
+
+class OpenRouterMultipleVariationsFallbackTests(CloudTestCase):
+    def test_falls_back_to_n1_requests_when_provider_rejects_multiple_n_and_notifies_user(self):
+        sent_ns = []
+
+        def handler(_h, body):
+            payload = json.loads(body)
+            sent_ns.append(payload["n"])
+            if payload["n"] > 1:
+                msg = (
+                    "No provider for google/gemini-2.5-flash-image supports the requested parameter(s): "
+                    'aspect_ratio "1:1", n "3", input_references (2 items). '
+                    "Provider rejections: Google: n: must be exactly 1"
+                )
+                return 400, {"Content-Type": "application/json"}, json.dumps({"error": {"message": msg}}).encode()
+            return (
+                200,
+                {"Content-Type": "application/json"},
+                json.dumps({"data": [{"b64_json": b64(solid_png(30, 20, (len(sent_ns) * 30, 80, 90, 255)))}]}).encode(),
+            )
+
+        self.fake.routes["/api/v1/images"] = handler
+        req, _rgba, _mask = inpaint_request(batch=3)
+        notes = []
+        result = self.backend("openrouter").inpaint(req, progress=lambda _f, text: notes.append(text))
+
+        self.assertEqual(sent_ns, [3, 1, 1, 1])
+        self.assertEqual(len(result.images), 3)
+        self.assertTrue(any("separate n=1 requests" in n for n in notes), notes)
+        self.assertTrue(any("rejected n=3" in line for line in self.logs.lines))
+
+    def test_non_n_400_error_does_not_retry_as_n1(self):
+        sent_ns = []
+
+        def handler(_h, body):
+            sent_ns.append(json.loads(body)["n"])
+            return (
+                400,
+                {"Content-Type": "application/json"},
+                json.dumps({"error": {"message": "Recraft accepts at most 1 input reference images."}}).encode(),
+            )
+
+        self.fake.routes["/api/v1/images"] = handler
+        req, _rgba, _mask = inpaint_request(batch=3)
+        with self.assertRaises(CloudRefused):
+            self.backend("openrouter").inpaint(req)
+        self.assertEqual(sent_ns, [3])
+
+    def test_n1_fallback_keeps_completed_variations_when_later_request_fails(self):
+        calls = 0
+
+        def handler(_h, body):
+            nonlocal calls
+            calls += 1
+            payload = json.loads(body)
+            if payload["n"] > 1:
+                msg = "Provider rejections: Google: n: must be exactly 1"
+                return 400, {"Content-Type": "application/json"}, json.dumps({"error": {"message": msg}}).encode()
+            if calls == 3:
+                return 500, {"Content-Type": "application/json"}, b'{"error":{"message":"upstream down"}}'
+            return (
+                200,
+                {"Content-Type": "application/json"},
+                json.dumps({"data": [{"b64_json": b64(solid_png(30, 20, (10, 20, 30, 255)))}]}).encode(),
+            )
+
+        self.fake.routes["/api/v1/images"] = handler
+        req, _rgba, _mask = inpaint_request(batch=3)
+        result = self.backend("openrouter").inpaint(req)
+        self.assertEqual(len(result.images), 1)
