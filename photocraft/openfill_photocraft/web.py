@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import secrets
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -61,13 +62,19 @@ class Api:
         self.key = secrets.token_urlsafe(24)
         self.on_show = None  # brings the OpenFill bar up (set by the launcher)
         self._pick = {"seq": 0, "action": ""}  # the last Filter menu pick, for the page
+        self._last_seen = 0.0  # monotonic timestamp of the last /api/state poll from the page
 
     def pick(self, action: str) -> None:
         self._pick = {"seq": self._pick["seq"] + 1, "action": action}
 
+    def page_open(self, max_age: float = 2.5) -> bool:
+        """True when a browser tab polled /api/state recently."""
+        return bool(self._last_seen) and (time.monotonic() - self._last_seen) <= max_age
+
     # GET ------------------------------------------------------------------------------
 
     def state(self) -> dict[str, Any]:
+        self._last_seen = time.monotonic()
         app = self.service.app
         return {
             "version": __version__,

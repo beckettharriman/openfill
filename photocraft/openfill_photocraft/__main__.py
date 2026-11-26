@@ -17,10 +17,13 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 HERE = Path(__file__).resolve().parent
 # The shared OpenFill core: next to this package in a release, in gimp-openfill/ in the repo.
@@ -132,6 +135,32 @@ def _registry_photocraft(winreg=None) -> list[Path]:
 def open_panel(url: str) -> bool:
     """Use the user's default browser when the native panel is unavailable."""
     return webbrowser.open(url, new=2)
+
+
+_PAGE_TABS = {"fill": "fill", "expand": "expand", "txt2img": "t2i", "models": "models", "settings": "settings"}
+
+
+def show_picked_action(
+    action: str,
+    bar: Any,
+    api: Any,
+    url: str,
+    open_fn: Callable[[str], Any] = open_panel,
+) -> bool:
+    """Route a Filter > Plug-ins > OpenFill pick (or /api/show) to the Tk bar or browser page.
+
+    When running without the Tk bar, reopen the browser tab if no tab polled recently.
+    Returns True if a browser open was scheduled.
+    """
+    if bar is not None:
+        bar.call_soon(bar.show, action)
+        return False
+    api.pick(action)  # an open tab switches to it on its next poll
+    if os.environ.get("OPENFILL_NO_BROWSER") or api.page_open():
+        return False
+    target = f"{url}#{_PAGE_TABS.get(action, 'fill')}"
+    threading.Thread(target=open_fn, args=(target,), name="openfill-browser", daemon=True).start()
+    return True
 
 
 def photocraft_settings_dir() -> Path | None:
@@ -410,11 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     holder: dict = {}
 
     def picked(action: str) -> None:
-        bar = holder.get("bar")
-        if bar is not None:
-            bar.call_soon(bar.show, action)
-        else:
-            api.pick(action)  # the page switches to it on its next look
+        show_picked_action(action, holder.get("bar"), api, url)
 
     watcher = menu.Watcher(client, picked)
     service.watcher = watcher

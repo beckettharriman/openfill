@@ -4523,3 +4523,61 @@ class UpscaleAndCustomWorkflowTests(unittest.TestCase):
         keys = {key: kind for key, _label, kind in panels.SETTINGS}
         self.assertIs(keys["custom_workflow"], str)
         self.assertIs(keys["custom_workflow_inputs"], str)
+
+
+class ReopenBrowserPageTests(unittest.TestCase):
+    def test_filter_menu_reopens_browser_when_tab_was_closed(self):
+        import threading
+        import time
+        from types import SimpleNamespace
+
+        from openfill_photocraft import __main__ as main_mod
+        from openfill_photocraft import web
+
+        service = SimpleNamespace(
+            app=SimpleNamespace(
+                uses_cloud=False,
+                active_model_id=lambda: "dreamshaper",
+                settings=SimpleNamespace(backend="comfyui", comfy_dir=""),
+                cloud_note=lambda *_a: "",
+            ),
+            state=SimpleNamespace(snapshot=lambda: {}),
+            photocraft=lambda: {},
+            busy=lambda: False,
+            setup_progress=lambda: None,
+        )
+        api = web.Api(service)
+        url = "http://127.0.0.1:43210/?key=abc"
+
+        opened = []
+        done = threading.Event()
+
+        def fake_open(target):
+            opened.append(target)
+            done.set()
+
+        with mock.patch.dict(os.environ, {"OPENFILL_NO_BROWSER": ""}):
+            # No active tab yet (or tab was closed) -> opens browser
+            self.assertFalse(api.page_open())
+            self.assertTrue(main_mod.show_picked_action("panel", None, api, url, open_fn=fake_open))
+            self.assertTrue(done.wait(2))
+            self.assertEqual(opened, [url + "#fill"])
+
+            # Active tab polling /api/state -> switches tab via pick without opening a duplicate tab
+            with mock.patch("openfill_photocraft.web._comfy_set", return_value=True):
+                api.state()
+            self.assertTrue(api.page_open())
+            self.assertFalse(main_mod.show_picked_action("expand", None, api, url, open_fn=fake_open))
+            self.assertEqual(api._pick["action"], "expand")
+            self.assertEqual(len(opened), 1)
+
+            # Stale poll -> reopens to the requested tool hash
+            api._last_seen = time.monotonic() - 10.0
+            done.clear()
+            self.assertTrue(main_mod.show_picked_action("txt2img", None, api, url, open_fn=fake_open))
+            self.assertTrue(done.wait(2))
+            self.assertEqual(opened[-1], url + "#t2i")
+
+        # Headless / test mode never opens a browser
+        with mock.patch.dict(os.environ, {"OPENFILL_NO_BROWSER": "1"}):
+            self.assertFalse(main_mod.show_picked_action("panel", None, api, url, open_fn=fake_open))
