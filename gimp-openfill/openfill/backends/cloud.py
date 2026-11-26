@@ -32,6 +32,7 @@ import ipaddress
 import json
 import logging
 import math
+import re
 import socket
 import threading
 import time
@@ -262,6 +263,12 @@ def _short(text: str, limit: int = 200) -> str:
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
 
 
+def _rejects_multiple_n(err: CloudRefused) -> bool:
+    """True when a 400/422 error says the service only accepts ``n=1``."""
+    text = str(err).lower()
+    return bool(re.search(r"\bn\b[^.]{0,40}\b1\b", text) or ("n:" in text and "1" in text) or "n=1" in text)
+
+
 class CloudBackend(Backend):
     """Generation through a cloud image API (see the module text)."""
 
@@ -487,8 +494,9 @@ class CloudBackend(Backend):
         per request times the requests it makes), so a server that answers slowly byte by byte
         cannot keep it waiting."""
         self._cancelled.clear()
-        limit = limit or self.request_timeout * max(1, requests)
-        self._deadline = time.monotonic() + limit
+        self._status_label = label
+        self._limit = limit or self.request_timeout * max(1, requests)
+        self._deadline = time.monotonic() + self._limit
         result: list[Any] = []
         error: list[BaseException] = []
 
@@ -510,12 +518,12 @@ class CloudBackend(Backend):
                     f"cancelled; {self.where} may still finish (and charge for) the request it already received"
                 )
             elapsed = time.monotonic() - started
-            if elapsed > limit + 1.0:
+            if elapsed > self._limit + 1.0:
                 self._cancelled.set()
                 self._progress = Progress(0.0, "timed out", False)
-                raise self._timeout_error(limit)
+                raise self._timeout_error(self._limit)
             fraction = 0.05 + 0.85 * (1.0 - math.exp(-elapsed / EXPECTED_SECONDS))
-            text = f"{label} {self.where} ({elapsed:.0f} s)..."
+            text = f"{self._status_label} {self.where} ({elapsed:.0f} s)..."
             self._progress = Progress(fraction, text, True)
             if progress:
                 progress(fraction, text)
@@ -608,36 +616,54 @@ class CloudBackend(Backend):
                 f"The picture from {self.where} could not be downloaded ({self._clean(err)})."
             ) from None
 
+    def _openrouter_loop(
+        self, path: str, payload: bytes, count: int, extract: Callable[[dict], list[bytes]]
+    ) -> list[bytes]:
+        images: list[bytes] = []
+        for index in range(count):
+            if self._cancelled.is_set():  # Cancel or the time limit: no further paid request
+                break
+            try:
+                data = self._send("POST", path, payload, "application/json", self.request_timeout)
+                images += extract(data)
+            except CloudError as err:
+                if not images:
+                    raise
+                # the pictures already received are paid for: keep them
+                self._info("variation %d of %d failed, keeping %d: %s", index + 1, count, len(images), str(err))
+                break
+        return images
+
     def _openrouter(self, prompt: str, inputs: list[bytes], ratio: str, count: int) -> list[bytes]:
         refs = [{"type": "image_url", "image_url": {"url": _data_url(png)}} for png in inputs]
         if self.api == "chat":
-            images: list[bytes] = []
-            for index in range(count):
-                if self._cancelled.is_set():  # Cancel or the time limit: no further paid request
-                    break
-                body = {
-                    "model": self.model,
-                    "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}, *refs]}],
-                    "modalities": ["image", "text"],
-                    "image_config": {"aspect_ratio": ratio},
-                }
-                try:
-                    data = self._send(
-                        "POST", "/chat/completions", json.dumps(body).encode(), "application/json", self.request_timeout
-                    )
-                    images += self._chat_images(data)
-                except CloudError as err:
-                    if not images:
-                        raise
-                    # the pictures already received are paid for: keep them
-                    self._info("variation %d of %d failed, keeping %d: %s", index + 1, count, len(images), str(err))
-                    break
-            return images
+            body = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}, *refs]}],
+                "modalities": ["image", "text"],
+                "image_config": {"aspect_ratio": ratio},
+            }
+            return self._openrouter_loop("/chat/completions", json.dumps(body).encode(), count, self._chat_images)
         body: dict[str, Any] = {"model": self.model, "prompt": prompt, "n": count, "aspect_ratio": ratio}
         if refs:
             body["input_references"] = refs
-        data = self._send("POST", "/images", json.dumps(body).encode(), "application/json", self.request_timeout)
-        return self._collect(data)
+        try:
+            data = self._send("POST", "/images", json.dumps(body).encode(), "application/json", self.request_timeout)
+            return self._collect(data)
+        except CloudRefused as err:
+            if count <= 1 or not _rejects_multiple_n(err):
+                raise
+            self._info(
+                "openrouter: %s rejected n=%d; sending %d separate n=1 requests",
+                self.model,
+                count,
+                count,
+            )
+            self._status_label = f"Model allows 1 variation per request; sending {count} to"
+            self._limit = self.request_timeout * count
+            self._deadline = time.monotonic() + self._limit
+            body["n"] = 1
+            return self._openrouter_loop("/images", json.dumps(body).encode(), count, self._collect)
 
     def _chat_images(self, data: dict) -> list[bytes]:
         out = []
@@ -844,7 +870,12 @@ class CloudBackend(Backend):
             source = (pad.left * sx, pad.top * sy, w / factor * sx, h / factor * sy)
             images.append(imaging.overlay(generated, mask, w, h, source, feather).png())
         if progress:
-            progress(1.0, "Done")
+            done_text = (
+                f"Done (sent {len(images)} separate n=1 requests)"
+                if getattr(self, "_status_label", "").startswith("Model allows 1 variation")
+                else "Done"
+            )
+            progress(1.0, done_text)
         return GenerationResult(
             images, seed_or_random(-1), {"backend": self.name, "provider": self.provider.id, "model": self.model}
         )
