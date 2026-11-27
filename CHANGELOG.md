@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- PhotoCraft and Patchy: add an optional fal object-removal LoRA for local FLUX.2 [klein] 4B fp8. Enable it in Generation settings and choose Klein 4B in Remove.
 - GIMP: Filters > OpenFill > Remove Background cuts the subject out of the whole image with BiRefNet as one new layer, the same job as the Cutout tab in the PhotoCraft panel. It needs ComfyUI 0.39 or newer and the BiRefNet model (424 MB) from the model manager, and it runs on ComfyUI only.
 
 ## [2.0.0-beta.8] - 2026-11-20

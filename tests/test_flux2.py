@@ -1,13 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """FLUX.2 [klein] (issue #18): the catalog entries, the graph and the sampling settings."""
 
+import logging
+import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from openfill import catalog as cat
-from openfill import geometry, hardware
+from openfill import flux2_remove, geometry, hardware
 from openfill import workflow as w
-from openfill.backend import InpaintRequest, ModelSpec, Sampling, Txt2ImgRequest
+from openfill.app import App
+from openfill.backend import InpaintRequest, ModelMissing, ModelSpec, Sampling, Txt2ImgRequest
+from openfill.config import Settings
 
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / "models" / "catalog.json"
@@ -112,15 +119,112 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(graph["unet"]["class_type"], "UnetLoaderGGUF")
         self.assertEqual(graph["clip"]["class_type"], "CLIPLoaderGGUF")
 
+    def test_removal_adapter_uses_a_marked_reference_and_masks_the_result(self):
+        req = request(replace(KLEIN, lora=flux2_remove.LORA_NAME), batch=3)
+        req.flux2_remove_box = (24, 32, 80, 96)
+        req.prompt = flux2_remove.PROMPT
+        graph = w.build_fill(req, "i", "m", 1, w.Capabilities(inpaint_nodes=True))
+        self.assertEqual(graph["encode"]["inputs"]["pixels"], ["highlight_reference", 0])
+        self.assertEqual(graph["highlight_red"]["inputs"]["color"], 0xFF0000)
+        self.assertEqual(graph["highlight_reference"]["inputs"]["x"], 32)
+        self.assertEqual(graph["highlight_reference"]["inputs"]["y"], 43)
+        self.assertEqual(graph["remove_lora"]["inputs"]["lora_name"], flux2_remove.LORA_NAME)
+        self.assertEqual(graph["remove_lora"]["inputs"]["strength_model"], 1.1)
+        self.assertEqual(graph["empty"]["inputs"]["batch_size"], 3)
+        self.assertEqual(graph["reference_batch"]["inputs"]["image"], ["image_scale", 0])
+        self.assertEqual(graph["remove_composite"]["inputs"]["mask"], ["mask_stable", 0])
+        self.assertEqual(graph["color_match"]["inputs"]["reference"], ["image_scale", 0])
+        self.assertNotIn("noise_mask", graph)
+
+    def test_removal_outline_handles_a_one_pixel_selection(self):
+        req = request(replace(KLEIN, lora=flux2_remove.LORA_NAME), size=(512, 512), work=(512, 512))
+        req.flux2_remove_box = (511, 511, 512, 512)
+        graph = w.build_fill(req, "i", "m", 1, w.Capabilities())
+        self.assertEqual(graph["highlight_red"]["inputs"]["width"], 1)
+        self.assertEqual(graph["highlight_red"]["inputs"]["height"], 1)
+        self.assertEqual(graph["highlight_reference"]["inputs"]["mask"], ["highlight_outer", 0])
+
+    def test_stock_fill_and_expand_do_not_load_the_adapter(self):
+        for mode in ("fill", "expand"):
+            with self.subTest(mode=mode):
+                req = replace(request(replace(KLEIN, lora=flux2_remove.LORA_NAME)), mode=mode)
+                graph = w.build_fill(req, "i", "m", 1, w.Capabilities())
+                self.assertEqual(graph["encode"]["inputs"]["pixels"], ["image_scale", 0])
+                self.assertFalse(any(node["class_type"] == "LoraLoaderModelOnly" for node in graph.values()))
+
     def test_no_text_to_image(self):
         with self.assertRaises(ValueError):
             w.build_txt2img(Txt2ImgRequest(64, 64, "x", "", KLEIN), 1)
 
 
+class RemoveSettingTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.app = App.__new__(App)
+        self.app.settings = Settings(comfy_dir=tmp.name)
+        self.app.interactive = False
+        self.app.log = logging.getLogger(__name__)
+        self.app.io = SimpleNamespace(
+            is_indexed=lambda _image: False,
+            selection_rect=lambda _image: geometry.Rect(180, 220, 80, 134),
+            image_rect=lambda _image: geometry.Rect(0, 0, 448, 512),
+            export_region=lambda _image, _rectangle: (b"image", b"pixels"),
+            export_selection_mask=lambda _image, _rectangle: (b"mask", b"pixels"),
+        )
+        self.app.resolve_model = lambda choice: (SimpleNamespace(id=choice, name=choice), KLEIN)
+        self.app._is_default_choice = lambda _choice: False
+        self.stop = RuntimeError("request captured")
+        self.inpaint = Mock(side_effect=self.stop)
+        self.app.backend = lambda *_args: SimpleNamespace(inpaint=self.inpaint)
+        runner = Mock()
+        runner.run.side_effect = lambda run: run(None, None, None)
+        self.app.runner_cls = lambda *_args, **_kwargs: runner
+        self.lora = Path(tmp.name) / "models" / "loras" / flux2_remove.LORA_NAME
+        self.lora.parent.mkdir(parents=True)
+
+    def fill(self, model="flux2-klein-4b-fp8", *, remove=True, as_picked=True):
+        return self.app.generative_fill(object(), "", "", 1, 1.0, 7, model, remove=remove, as_picked=as_picked)
+
+    def captured(self, *args, **kwargs):
+        with self.assertRaisesRegex(RuntimeError, "request captured"):
+            self.fill(*args, **kwargs)
+        return self.inpaint.call_args.args[0]
+
+    def test_default_off_keeps_stock_remove(self):
+        self.lora.touch()
+        self.assertFalse(self.app.settings.flux2_remove_lora)
+        req = self.captured()
+        self.assertIsNone(req.flux2_remove_box)
+        self.assertEqual(req.model.lora, "")
+
+    def test_enabled_runs_only_for_an_explicit_local_klein_4b_remove(self):
+        self.lora.touch()
+        self.app.settings.flux2_remove_lora = True
+        req = self.captured()
+        self.assertIsNotNone(req.flux2_remove_box)
+        self.assertEqual(req.model.lora, flux2_remove.LORA_NAME)
+        self.assertEqual(req.prompt, flux2_remove.PROMPT)
+        for model, opts in (
+            ("flux2-klein-4b-fp8", {"remove": False}),
+            ("flux2-klein-4b-fp8", {"as_picked": False}),
+            ("flux2-klein-9b-fp8", {}),
+        ):
+            with self.subTest(model=model, opts=opts):
+                self.assertIsNone(self.captured(model, **opts).flux2_remove_box)
+        self.app.settings.backend = "remote"
+        self.assertIsNone(self.captured().flux2_remove_box)
+
+    def test_enabled_with_missing_adapter_explains_how_to_install_it(self):
+        self.app.settings.flux2_remove_lora = True
+        with self.assertRaisesRegex(ModelMissing, "models/loras"):
+            self.fill()
+        self.inpaint.assert_not_called()
+
+
 class SamplingTests(unittest.TestCase):
     def test_klein_samples_in_four_steps_without_guidance(self):
-        from openfill.app import FLUX2_KLEIN_STEPS, App
-        from openfill.config import Settings
+        from openfill.app import FLUX2_KLEIN_STEPS
 
         app = App.__new__(App)
         app.settings = Settings(steps=30, cfg=7.0)

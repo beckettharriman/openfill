@@ -26,6 +26,7 @@ from . import (
     caption,
     comfy_setup,
     custom_workflow,
+    flux2_remove,
     geometry,
     hardware,
     local_models,
@@ -1150,6 +1151,21 @@ class App:
                     model_choice,
                 )
         entry, model = self.resolve_model(model_choice)
+        use_remove_lora = (
+            remove
+            and as_picked
+            and entry is not None
+            and entry.id == "flux2-klein-4b-fp8"
+            and self.settings.flux2_remove_lora
+            and self.settings.backend == "comfyui"
+        )
+        if use_remove_lora:
+            if not (self.models_root / "loras" / flux2_remove.LORA_NAME).is_file():
+                raise ModelMissing(
+                    f"Put {flux2_remove.LORA_NAME} in ComfyUI's models/loras folder "
+                    "or turn off the FLUX.2 Klein 4B removal LoRA in Generation settings."
+                )
+            model = replace(model, lora=flux2_remove.LORA_NAME)
         profile = self.profile_for(model)
         full = self.io.image_rect(image)
         target = selection
@@ -1167,7 +1183,7 @@ class App:
             removal_intent,
             geometry.fill_padding(removal_intent, model.prompt_free),
             refine=refine,
-            layout=float(self.settings.tile_denoise) < 1.0,
+            layout=not use_remove_lora and float(self.settings.tile_denoise) < 1.0,
             layout_min_scale=float(self.settings.layout_min_scale),
             # Erasers work at full image resolution, in tiles of their own working size.
             min_scale=1.0 if model.eraser else None,
@@ -1196,6 +1212,9 @@ class App:
             # The cloud backend words its own instruction for a removal ("remove what is there").
             prompt = "" if removal_intent else prompt
             strength = 1.0
+        elif use_remove_lora:
+            prompt, negative, strength = flux2_remove.PROMPT, "", 1.0
+            self.log.info("fill: FLUX.2 Klein 4B fal object-removal LoRA")
         elif model.prompt_free:
             prompt, negative = "", ""
         elif model.eraser:
@@ -1255,6 +1274,7 @@ class App:
             if description:
                 prompt = caption.augment(prompt, description)
                 self.log.info("fill: scene description added: %s", description)
+        box = target.relative_to(ctx) if use_remove_lora else None
         request = workflow.PlannedInpaintRequest(
             image_png=image_png,
             mask_png=mask_png,
@@ -1266,6 +1286,7 @@ class App:
             negative=negative,
             model=model,
             sampling=self.sampling(model, variations, seed, strength),
+            flux2_remove_box=(box.x, box.y, box.right, box.bottom) if box is not None else None,
             mode="remove" if self.uses_cloud and removal_intent else "fill",
             grow=mp.grow_work,
             feather=mp.blur_work,

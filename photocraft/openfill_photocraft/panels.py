@@ -36,6 +36,7 @@ SETTINGS = (
     ("cfg", "Prompt strictness (CFG)", float),
     ("grow_percent", "Repaint margin (%)", float),
     ("feather_percent", "Edge softness (%)", float),
+    ("flux2_remove_lora", "FLUX.2 Klein 4B removal LoRA", bool),
     ("extra_server_args", "Extra ComfyUI options", str),
     ("custom_workflow", "Custom ComfyUI workflow", str),
     ("custom_workflow_inputs", "Workflow inputs", str),
@@ -132,6 +133,7 @@ class GearView(tk.Frame):
             "idle_timeout_minutes": self.engine.idle.get(),
             "request_timeout": self.engine.timeout.get(),
             "extra_server_args": self.engine.extra.get(),
+            "flux2_remove_lora": self.generation.remove_lora.get(),
         }
         raw.update({key: entry.get() for key, entry in self.generation.fields.items()})
         out = {}
@@ -192,6 +194,8 @@ class GearView(tk.Frame):
                 app.use_comfy_dir(folder)
                 self.bar.service.rescan_models()
                 self.bar.service.warm_up()
+            if values["flux2_remove_lora"] == self.generation.loaded_remove_lora:
+                del values["flux2_remove_lora"]  # an unchanged field preserves a newer browser setting
             for key, value in values.items():
                 setattr(app.settings, key, value)
             # a new key is bound to this service and address; an empty field never moves the saved one
@@ -755,6 +759,9 @@ class GenerationView(tk.Frame):
             "Steps: more is slower and finer. Strictness: how closely the prompt is followed. "
             "Margin: how far past the selection the fill may repaint, as a share of its size.",
         ).pack(fill="x", pady=ui.px((12, 0)))
+        self.remove_lora = ui.Checkbox(self, labels["flux2_remove_lora"])
+        self.remove_lora.pack(anchor="w", pady=ui.px((12, 0)))
+        ui.small(self, "Used when you choose Klein 4B in Remove with local ComfyUI.").pack(fill="x")
         # Advanced: a custom ComfyUI workflow, hidden until asked for
         self.advanced = ui.Checkbox(self, "Advanced")
         self.advanced.pack(anchor="w", pady=ui.px((12, 0)))
@@ -796,6 +803,8 @@ class GenerationView(tk.Frame):
         """After load or save: open Advanced when a workflow is set, and say what was found in it."""
         from openfill import custom_workflow
 
+        self.loaded_remove_lora = settings.flux2_remove_lora
+        self.remove_lora.set(self.loaded_remove_lora)
         path = str(getattr(settings, "custom_workflow", "") or "")
         if path and not self.advanced.get():
             self.advanced.set(True)

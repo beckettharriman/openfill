@@ -1284,6 +1284,11 @@ def build_fill(
     filename_prefix: str = "openfill/fill",
 ) -> dict:
     """Dispatch on the active model's template."""
+    if req.flux2_remove_box is not None:
+        # App only sets the box for local ComfyUI. Keep this graph outside the remote GPU allowlist.
+        from .flux2_remove import build_remove
+
+        return build_remove(req, image_ref, mask_ref, seed, caps, filename_prefix)
     return select_builder(req.model.effective_template)(req, image_ref, mask_ref, seed, caps, filename_prefix)
 
 

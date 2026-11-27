@@ -43,6 +43,24 @@ The ComfyUI node packs OpenFill adds when a model needs them are
 the FLUX and Qwen GGUF files). They are downloaded into your ComfyUI, not
 shipped with OpenFill.
 
+### Optional FLUX.2 Klein removal LoRA
+
+PhotoCraft and Patchy can use the Apache-2.0
+[fal object-removal adapter](https://huggingface.co/fal/flux-2-klein-4B-object-remove-lora)
+with the regular FLUX.2 [klein] 4B fp8 model on local ComfyUI.
+
+1. Download the [ComfyUI safetensors file](https://huggingface.co/fal/flux-2-klein-4B-object-remove-lora/resolve/0e3f58790356bf1319b263fc56b333c294b42ff7/kDEkt5q7tDLKOpQJIVMPx_pytorch_lora_weights_comfy_converted.safetensors)
+   (76 MB). Check that its SHA-256 is
+   `dc197de62e174863f83fc4052465603f4389de7c3a78e17f3d41a1f6f11488ec`.
+2. Save it in your local ComfyUI `models/loras` folder as
+   `fal-flux2-klein-4b-object-remove.safetensors`.
+3. In OpenFill, open **Settings > Generation**, enable **FLUX.2 Klein 4B
+   removal LoRA**, and save. In **Remove**, select the object and choose
+   **FLUX.2 [klein] 4B fp8**.
+
+The option starts off. The adapter uses the selection to mark the object in
+a reference image and composites the generated patch through the selection mask.
+
 ## Where the files come from
 
 The backend and the verified model list were downloaded from the official
