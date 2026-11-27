@@ -698,7 +698,8 @@ class App:
         except (OSError, ValueError) as err:
             self.log.warning("could not queue the live-preview file: %s", err)
 
-    def profile_for(self, model: ModelSpec) -> geometry.ModelProfile:
+    def profile_for(self, model: ModelSpec, megapixels: int | None = None) -> geometry.ModelProfile:
+        """Resolve the standard model profile, with optional manual diffusion sizing."""
         base = geometry.PROFILES.get(model.arch, geometry.SD15)
         if model.arch == "sd15":
             max_side = self.settings.max_side_sd15
@@ -706,7 +707,10 @@ class App:
             max_side = base.max_side
         else:
             max_side = self.settings.max_side_sdxl
-        return replace(base, max_side=max(base.min_side, int(max_side)))
+        profile = replace(base, max_side=max(base.min_side, int(max_side)))
+        if megapixels is None or model.prompt_free or model.effective_template == "sdxl_eraser" or self.uses_cloud:
+            return profile  # LaMa/MAT, RORem and cloud providers keep their own sizing
+        return geometry.with_megapixels(profile, megapixels)
 
     def sampling(self, model: ModelSpec, variations: int, seed: int, denoise: float | None = None) -> Sampling:
         steps, cfg = int(self.settings.steps), float(self.settings.cfg)
@@ -1121,6 +1125,8 @@ class App:
         model_choice: str,
         remove: bool = False,
         as_picked: bool = False,
+        *,
+        megapixels: int | None = None,
     ) -> list:
         # ``as_picked``: ``model_choice`` was picked by hand for this job (a Remove menu), so it
         # is used even when it is also the active model.
@@ -1150,7 +1156,7 @@ class App:
                     model_choice,
                 )
         entry, model = self.resolve_model(model_choice)
-        profile = self.profile_for(model)
+        profile = self.profile_for(model, megapixels)
         full = self.io.image_rect(image)
         target = selection
         removal_intent = remove or not prompt.strip() or model.prompt_free or model.eraser
@@ -1442,6 +1448,8 @@ class App:
         variations: int,
         seed: int,
         model_choice: str,
+        *,
+        megapixels: int | None = None,
     ) -> list:
         """Crop and/or grow the canvas by the given margins and generate the new area.
 
@@ -1491,7 +1499,18 @@ class App:
                 count = variations if index == len(rounds) - 1 else 1
                 this_crop = crop if index == 0 else (0, 0, 0, 0)
                 layers = self._expand_round(
-                    image, prompt, negative, round_margins, this_crop, count, seed, entry, model, runner, tracker
+                    image,
+                    prompt,
+                    negative,
+                    round_margins,
+                    this_crop,
+                    count,
+                    seed,
+                    entry,
+                    model,
+                    runner,
+                    tracker,
+                    megapixels=megapixels,
                 )
             runner.done(f"Canvas is now {image.get_width()} x {image.get_height()}")
         except BaseException as err:
@@ -1514,12 +1533,14 @@ class App:
         model: ModelSpec,
         runner: Any,
         tracker: OverallProgress,
+        *,
+        megapixels: int | None = None,
     ) -> list:
         """One expand pass: all margins at once. ``crop`` (left, top, right,
         bottom) is cut off in the same canvas resize and is not part of the context."""
         left, top, right, bottom = margins
         old_width, old_height = image.get_width(), image.get_height()
-        profile = self.profile_for(model)
+        profile = self.profile_for(model, megapixels)
         plan = geometry.plan_expand(
             image.get_width() - crop[0] - crop[2],
             image.get_height() - crop[1] - crop[3],
@@ -1656,6 +1677,8 @@ class App:
         seed: int,
         model_choice: str,
         target: str,
+        *,
+        megapixels: int | None = None,
     ) -> None:
         if image is not None and target == "layer":
             self._check_image(image)
@@ -1664,7 +1687,7 @@ class App:
             raise ModelMissing(
                 f"'{model_display_name(entry.name)}' does not support Text to Image; pick an SD 1.5 or SDXL model"
             )
-        profile = self.profile_for(model)
+        profile = self.profile_for(model, megapixels)
         origin = Rect(0, 0, 0, 0)
         if image is not None and target == "layer":
             selection = self.io.selection_rect(image)

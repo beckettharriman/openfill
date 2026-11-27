@@ -77,6 +77,36 @@ class WorkingSizeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             g.working_size(0, 10, g.SD15)
 
+    def test_auto_preserves_original_working_size(self):
+        profile = g.with_megapixels(g.FLUX, None)
+        self.assertIs(profile, g.FLUX)
+        size = g.working_size(1300, 1000, profile)
+        self.assertEqual((size.width, size.height), (1024, 784))
+        for invalid in (True, 0, 5, 2.5, "auto", float("inf")):
+            self.assertIsNone(g.generation_megapixels(invalid))
+
+    def test_manual_budgets_keep_aspect_ratio_and_model_alignment(self):
+        observed = []
+        for mp in (1, 2, 3, 4):
+            profile = g.with_megapixels(g.FLUX, mp)
+            size = g.working_size(1300, 1000, profile)
+            self.assertLessEqual(size.width * size.height, mp * 1_000_000)
+            self.assertGreater(size.width * size.height, mp * 1_000_000 * 0.95)
+            self.assertAlmostEqual(size.width / size.height, 1.3, delta=0.03)
+            self.assertEqual((size.width % 16, size.height % 16), (0, 0))
+            observed.append(size.width * size.height)
+        self.assertEqual(observed, sorted(set(observed)))
+
+    def test_tiled_fill_stays_within_manual_budget(self):
+        whole = g.Rect(0, 0, 6000, 4000)
+        selection = g.Rect(1000, 500, 3600, 2700)
+        profile = g.with_megapixels(g.SD15, 2)
+        plan = g.plan_fill(selection, whole, profile, "sd15", False, 0.5, layout=True, refine=True)
+        self.assertTrue(plan.tiles)
+        self.assertLessEqual(plan.work.width * plan.work.height, 2_000_000)
+        for tile in (*plan.tiles, *plan.refine_tiles):
+            self.assertLessEqual(tile.work_width * tile.work_height, 2_000_000)
+
 
 class SmallSelectionPipelineTests(unittest.TestCase):
     """The bug report: a 38x33 px button in a 3024x4032 photo with SDXL."""

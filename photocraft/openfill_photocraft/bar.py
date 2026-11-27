@@ -26,6 +26,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from openfill.geometry import generation_megapixels
 from openfill.server import SLOW_START_S
 
 from . import dpi, ui
@@ -136,6 +137,7 @@ def short_name(name: str) -> str:
 
 # LaMa and MAT give the same result for the same input: one variation is enough.
 PROMPT_FREE = ("lama-big", "mat-places512")
+RESOLUTION_OPTIONS = ((None, "Auto"), (1, "1 MP"), (2, "2 MP"), (3, "3 MP"), (4, "4 MP"))
 
 
 def removal_choices(facts: dict[str, Any]) -> dict[str, str]:
@@ -450,6 +452,7 @@ class Bar:
         self.tether = tether
         self.tab = tk.StringVar(value="fill")
         self.variations = tk.IntVar(value=max(1, min(5, int(self.prefs.get("variations", 1)))))
+        self.resolution_mp = generation_megapixels(self.prefs.get("megapixels"))
         self.model_choice = tk.StringVar(value="")
         self.target = tk.StringVar(value="image")
         self.upscale_factor = tk.IntVar(value=4 if int(self.prefs.get("upscale_factor", 2) or 2) == 4 else 2)
@@ -587,6 +590,10 @@ class Bar:
             on_hide=self._model_hidden,
         )
         self.model_box.pack(side="left")
+        self.resolution_controls = self._row(self.options, "Resolution", pady=ui.px((8, 0)))
+        self.resolution_seg = ui.Seg(self.resolution_controls, RESOLUTION_OPTIONS, self.pick_resolution, ui.FIELD_W, 12)
+        self.resolution_seg.pack(side="left")
+        self.resolution_seg.set(self.resolution_mp)
 
         # The setup card (ComfyUI missing, no models, a download) and the job card
         self.setup = ui.Card(m)
@@ -1146,6 +1153,7 @@ class Bar:
             var_row.pack_forget()  # one cutout, one bigger image or one custom result per run
         elif not var_row.winfo_manager():
             var_row.pack(fill="x", before=model_row)
+        self._layout_resolution()
         parts: list[tk.Misc] = [self.modes, self.context_row]
         if self._shown.get("cloud_note"):
             parts.append(self.cloud_line)
@@ -1216,6 +1224,29 @@ class Bar:
         self.var_seg.set(n)
         self.prefs["variations"] = n
 
+    def pick_resolution(self, value: int | None) -> None:
+        """Save Auto or the selected megapixel count immediately."""
+        self.resolution_mp = generation_megapixels(value)
+        self.resolution_seg.set(self.resolution_mp)
+        self.prefs["megapixels"] = self.resolution_mp
+        self._save_prefs()
+
+    def supports_resolution(self) -> bool:
+        """The whole-image tools, cloud and fixed-sizing removal models don't use this control."""
+        return (
+            self.tab.get() not in WHOLE_IMAGE
+            and not self.service.app.uses_cloud
+            and self._model() not in (*PROMPT_FREE, "default", "rorem-sdxl")
+        )
+
+    def _layout_resolution(self) -> None:
+        row = self.resolution_controls.master
+        if self.supports_resolution():
+            if not row.winfo_manager():
+                row.pack(fill="x", after=self.model_box.master.master, pady=ui.px((8, 0)))
+        elif row.winfo_manager():
+            row.pack_forget()
+
     def _fetch_thumbnail(self, key: tuple) -> None:
         """The image for the Expand editor, read once per document size (off the UI thread)."""
         self._thumb_busy = True
@@ -1277,6 +1308,8 @@ class Bar:
         choice; a removal model picked in Fill is used for that run only)."""
         self.model_choice.set(label)
         self._sync_custom()
+        if not self.view:
+            self._layout_resolution()
         if self.tab.get() == "remove":
             self.prefs["removal"] = label
             return
@@ -1316,6 +1349,8 @@ class Bar:
             return
         kind, prompt = self.tab.get(), self.prompt.get().strip()
         body: dict[str, Any] = {"variations": self.variations.get(), "seed": -1, "model": self._model()}
+        if self.supports_resolution() and self.resolution_mp is not None:
+            body["megapixels"] = self.resolution_mp
         try:
             if kind in ("fill", "remove"):
                 if not (self.watcher.snapshot().get("selection")):
@@ -1589,6 +1624,7 @@ class Bar:
         if not self.view:
             self._update_context()
             self._fill_models()
+            self._layout_resolution()
         status = self._engine_status(facts)
         if self._shown.get("status") != status:
             self._shown["status"] = status

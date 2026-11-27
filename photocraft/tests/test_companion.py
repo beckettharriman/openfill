@@ -2608,28 +2608,91 @@ class LookTests(unittest.TestCase):
             root.destroy()
 
 
+class DesktopResolutionTests(unittest.TestCase):
+    """Auto, persistence and opt-outs in the PhotoCraft desktop panel."""
+
+    def test_resolution_preferences_round_trip(self):
+        from types import SimpleNamespace
+
+        try:
+            from openfill_photocraft import bar
+        except ImportError:
+            self.skipTest("no tkinter")
+        from openfill.geometry import generation_megapixels
+
+        with tempfile.TemporaryDirectory() as tmp:
+            panel = bar.Bar.__new__(bar.Bar)
+            panel.settings_file = Path(tmp) / "ui.json"
+            panel.prefs = panel._load_prefs()
+            panel.resolution_mp = generation_megapixels(panel.prefs.get("megapixels"))
+            panel.resolution_seg = mock.Mock()
+            panel.tab = SimpleNamespace(get=lambda: "fill")
+            panel.service = SimpleNamespace(app=SimpleNamespace(uses_cloud=False))
+            panel._model = lambda: "flux1-fill-dev-fp8"
+            self.assertEqual(bar.RESOLUTION_OPTIONS[0], (None, "Auto"))
+            self.assertIsNone(panel.resolution_mp)
+            self.assertTrue(panel.supports_resolution())
+            panel.pick_resolution(3)
+            self.assertEqual(generation_megapixels(panel._load_prefs().get("megapixels")), 3)
+            for model in ("rorem-sdxl", "lama-big", "mat-places512"):
+                panel._model = lambda current=model: current
+                self.assertFalse(panel.supports_resolution())
+            self.assertEqual(panel.resolution_mp, 3)
+            panel._model = lambda: "flux1-fill-dev-fp8"
+            panel.pick_resolution(None)
+            self.assertTrue(panel.supports_resolution())
+            self.assertIsNone(generation_megapixels(panel._load_prefs()["megapixels"]))
+
+    def test_fixed_model_profiles_ignore_manual_budget(self):
+        from types import SimpleNamespace
+
+        from openfill.app import App
+        from openfill.backend import ModelSpec
+
+        app = SimpleNamespace(settings=SimpleNamespace(max_side_sdxl=1024), uses_cloud=False)
+        for spec in (ModelSpec(arch="sdxl", template="sdxl_eraser"), ModelSpec(arch="inpaint_model")):
+            self.assertEqual(App.profile_for(app, spec, 4), App.profile_for(app, spec))
+        flux = ModelSpec(arch="flux")
+        self.assertEqual(App.profile_for(app, flux, 4).megapixels, 4)
+        app.uses_cloud = True
+        self.assertEqual(App.profile_for(app, flux, 4), App.profile_for(app, flux))
+
+
 class ServiceRemoveTests(unittest.TestCase):
     """Remove object runs once, with the model picked (LaMa at full resolution by default)."""
 
-    def run_remove(self, removal):
+    def run_remove(self, removal, megapixels=None):
         from types import SimpleNamespace
 
         from openfill_photocraft.service import Service
 
         calls, picked = [], []
         self.picked = picked
+        self.sizes = []
 
         class App:
             def generative_fill(
-                self, image, prompt, negative, variations, strength, seed, model, remove=False, as_picked=False
+                self,
+                image,
+                prompt,
+                negative,
+                variations,
+                strength,
+                seed,
+                model,
+                remove=False,
+                as_picked=False,
+                megapixels=None,
             ):
                 calls.append((prompt, variations, strength, model, remove))
                 picked.append(as_picked)
+                self_sizes.append(megapixels)
                 return [SimpleNamespace(name="x")]
 
+        self_sizes = self.sizes
         stub = SimpleNamespace(app=App(), OLD_REMOVALS=Service.OLD_REMOVALS)
         image = SimpleNamespace(pending_group="g")
-        layers = Service._remove(stub, image, {"removal": removal} if removal is not None else {}, 5, 2)
+        layers = Service._remove(stub, image, {"removal": removal, "megapixels": megapixels}, 5, 2)
         self.assertEqual(len(calls), 1)  # one pass, never LaMa then a second model
         self.assertEqual(layers[0].name, "Object Removal")
         self.assertEqual(image.pending_group, "Object Removal")
@@ -2646,6 +2709,10 @@ class ServiceRemoveTests(unittest.TestCase):
         self.assertEqual(self.run_remove("lama")[3], "lama-big")
         self.assertEqual(self.run_remove("mat")[3], "mat-places512")
         self.assertEqual(self.run_remove("refine:realvisxl-v5")[3], "active")
+
+    def test_remove_forwards_manual_size(self):
+        self.run_remove("realvisxl-v5", 3)
+        self.assertEqual(self.sizes, [3])
 
 
 class ServiceModelTests(unittest.TestCase):

@@ -20,6 +20,7 @@ from typing import Any
 from openfill.app import App, NothingSelected
 from openfill.backend import BackendUnavailable, GenerationCancelled, describe_error
 from openfill.backends.comfy import CONNECTION_LOST
+from openfill.geometry import generation_megapixels
 from openfill.progress import parse_preview_frame
 from openfill.supervisor import process_name
 
@@ -406,6 +407,7 @@ class Service:
             seed = int(p.get("seed", -1))
             variations = int(p.get("variations", 1))
             model = str(p.get("model") or "active")
+            megapixels = generation_megapixels(p.get("megapixels"))
             if kind == "fill" and p.get("remove"):
                 layers = self._remove(image, p, seed, variations)
             elif kind == "fill":
@@ -418,6 +420,7 @@ class Service:
                     seed,
                     model,
                     remove=bool(p.get("remove")),
+                    megapixels=megapixels,
                 )
             elif kind == "expand":
                 layers = self.app.generative_expand(
@@ -431,6 +434,7 @@ class Service:
                     variations,
                     seed,
                     model,
+                    megapixels=megapixels,
                 )
             elif kind == "bgremove":
                 layers = self.app.remove_background(image)
@@ -450,6 +454,7 @@ class Service:
                     seed,
                     model,
                     str(p.get("target", "image")),
+                    megapixels=megapixels,
                 )
                 layers = []
             else:
@@ -520,7 +525,16 @@ class Service:
             how = "active"
         how = self.OLD_REMOVALS.get(how, how)
         layers = self.app.generative_fill(
-            image, "", "", variations, 1.0, seed, how, remove=True, as_picked=how != "active"
+            image,
+            "",
+            "",
+            variations,
+            1.0,
+            seed,
+            how,
+            remove=True,
+            as_picked=how != "active",
+            megapixels=generation_megapixels(p.get("megapixels")),
         )
         for index, layer in enumerate(layers):
             layer.name = "Object Removal" if len(layers) == 1 else f"Object Removal ({index + 1})"

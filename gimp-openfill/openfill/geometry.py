@@ -64,6 +64,7 @@ class ModelProfile:
     max_side: int  # longest side we send to the model
     min_context: int  # minimum context region size cropped from the image
     multiple: int = 8  # latent alignment
+    megapixels: int | None = None  # optional budget for explicit generation sizing
 
 
 # min_context is deliberately small: a tiny selection gets a tight crop that is
@@ -98,9 +99,30 @@ PROFILES = {
 }
 
 
-def round_to_multiple(value: int, multiple: int) -> int:
+def round_to_multiple(value: int | float, multiple: int) -> int:
     """Round ``value`` to the nearest multiple, never below ``multiple``."""
     return max(multiple, round(value / multiple) * multiple)
+
+
+def generation_megapixels(value: object) -> int | None:
+    """Return a supported manual size; None keeps the original automatic sizing."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        n = int(value)
+        return n if float(value) == n and 1 <= n <= 4 else None
+    except (ValueError, OverflowError):
+        return None
+
+
+def with_megapixels(profile: ModelProfile, value: int | None) -> ModelProfile:
+    """Apply an optional budget to the main pass and all square tile planners."""
+    mp = generation_megapixels(value)
+    if mp is None:
+        return profile
+    # Tile and detail planners use max_side as a square limit.
+    side = math.isqrt(mp * 1_000_000) // profile.multiple * profile.multiple
+    return replace(profile, max_side=side, megapixels=mp)
 
 
 def clamp_rect(rect: Rect, bounds: Rect) -> Rect:
@@ -142,6 +164,20 @@ class WorkingSize:
     scale: float  # working / source
 
 
+def _megapixel_size(source_w: int, source_h: int, mp: int, multiple: int) -> WorkingSize:
+    budget = mp * 1_000_000
+    # Retain the aspect ratio, with a long-side limit for extreme panoramas.
+    scale = min(math.sqrt(budget / (source_w * source_h)), 4096 / max(source_w, source_h))
+    width = round_to_multiple(source_w * scale, multiple)
+    height = round_to_multiple(source_h * scale, multiple)
+    while width * height > budget:
+        if width > multiple and (height <= multiple or width / source_w >= height / source_h):
+            width -= multiple
+        else:
+            height -= multiple
+    return WorkingSize(width, height, width / source_w)
+
+
 def working_size(source_w: int, source_h: int, profile: ModelProfile, max_upscale: float = 8.0) -> WorkingSize:
     """Resolution to generate at for a context region of ``source_w x source_h``.
 
@@ -151,6 +187,8 @@ def working_size(source_w: int, source_h: int, profile: ModelProfile, max_upscal
     """
     if source_w <= 0 or source_h <= 0:
         raise ValueError("source size must be positive")
+    if profile.megapixels is not None:
+        return _megapixel_size(source_w, source_h, profile.megapixels, profile.multiple)
     longer = max(source_w, source_h)
     shorter = min(source_w, source_h)
     scale = 1.0
@@ -521,7 +559,12 @@ def fill_profile(profile: ModelProfile, context: Rect, arch: str, removal: bool)
     context needs no upscaling (shorter side at least ``profile.min_side``) the
     longest side is capped at ``SD15_PROMPT_MAX_SIDE``. Small contexts keep the
     full ``max_side`` so their upscale to ``min_side`` is not limited."""
-    if removal or arch != "sd15" or min(context.width, context.height) < profile.min_side:
+    if (
+        profile.megapixels is not None
+        or removal
+        or arch != "sd15"
+        or min(context.width, context.height) < profile.min_side
+    ):
         return profile
     return replace(profile, max_side=min(profile.max_side, max(profile.min_side, SD15_PROMPT_MAX_SIDE)))
 
@@ -738,6 +781,8 @@ def layout_work(
     """Working size of the layout pass of a tiled fill: the single-pass scale
     ``single.scale`` raised to ``LAYOUT_MIN_SCALE``, but never with a working
     long side above ``LAYOUT_MAX_SIDE_FACTOR * profile.max_side`` nor above 1:1."""
+    if profile.megapixels is not None:
+        return single  # keep the explicit budget in a layout prepass too
     long_side = max(context.width, context.height)
     scale = max(single.scale, min_scale)
     scale = min(scale, LAYOUT_MAX_SIDE_FACTOR * profile.max_side / long_side, 1.0)
