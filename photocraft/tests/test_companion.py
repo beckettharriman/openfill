@@ -3586,6 +3586,17 @@ console.log(JSON.stringify(out));
         self.assertLess(line.index("cm.key_saved?"), line.index("Saved."))
         self.assertIn("from the environment", line)
 
+    def test_klein_remove_lora_setting_round_trips(self):
+        from openfill.config import Settings
+
+        api, _warmed = self.api()
+        self.assertFalse(api.settings()["flux2_remove_lora"])
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                self.assertIs(api.post("/api/settings", {"flux2_remove_lora": enabled})["flux2_remove_lora"], enabled)
+                self.assertIs(Settings.load(self.config).flux2_remove_lora, enabled)
+                self.assertIs(api.settings()["flux2_remove_lora"], enabled)
+
     def test_a_time_limit_below_zero_is_refused(self):
         api, _warmed = self.api()
         before = self.config.read_text("utf-8") if self.config.exists() else ""
@@ -3608,12 +3619,19 @@ console.log(JSON.stringify(out));
             return SimpleNamespace(get=lambda: value)
 
         gear = GearView.__new__(GearView)
-        gear.generation = SimpleNamespace(fields={})
+        gear.generation = SimpleNamespace(fields={}, remove_lora=entry(False))
         for limit, ok in (("-5", False), ("0", True), ("90", True)):
             gear.engine = SimpleNamespace(
                 autostart=entry(True), debug=entry(False), idle=entry("20"), timeout=entry(limit), extra=entry("")
             )
-            engine_keys = ("autostart", "debug", "idle_timeout_minutes", "request_timeout", "extra_server_args")
+            engine_keys = (
+                "autostart",
+                "debug",
+                "idle_timeout_minutes",
+                "request_timeout",
+                "extra_server_args",
+                "flux2_remove_lora",
+            )
             gear.generation.fields = {key: entry("1") for key, _label, _kind in SETTINGS if key not in engine_keys}
             if ok:
                 self.assertEqual(gear.values()["request_timeout"], int(limit))

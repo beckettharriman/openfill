@@ -38,6 +38,7 @@ EDITABLE = {
     "cfg": float,
     "grow_percent": float,
     "feather_percent": float,
+    "flux2_remove_lora": bool,
     "debug": bool,
     "backend": str,
     "cloud_provider": str,

@@ -214,6 +214,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
       <div class="grid2"><div class="field"><span class="label">Steps</span><input id="s-steps" type="number"></div><div class="field"><span class="label">Prompt strictness (CFG)</span><input id="s-cfg" type="number" step="0.5"></div></div>
       <div class="grid2"><div class="field"><span class="label">Repaint margin (%)</span><input id="s-grow_percent" type="number"></div><div class="field"><span class="label">Edge softness (%)</span><input id="s-feather_percent" type="number"></div></div>
       <div class="small">Steps: more is slower and finer. Strictness: how closely the prompt is followed. Margin: how far past the selection the fill may repaint, as a share of its size.</div>
+      <div class="field"><label class="check"><input type="checkbox" id="s-flux2_remove_lora"><span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span><span>FLUX.2 Klein 4B removal LoRA</span></label><div class="small">Used when you choose Klein 4B in Remove with local ComfyUI.</div></div>
       <details id="gen-advanced"><summary>Advanced</summary><div class="stack">
         <div class="field"><span class="label">Custom ComfyUI workflow</span><input id="s-custom_workflow" type="text" placeholder="path of an API format .json file"></div>
         <div class="field"><span class="label">Workflow inputs</span><input id="s-custom_workflow_inputs" type="text" placeholder="found by itself, or image=10, mask=11, prompt=6.text"></div>
@@ -430,7 +431,7 @@ async function loadSettings(){const s=await get("/api/settings");for(const[k,v]o
   $("custom-found").textContent=s.custom_workflow_found||"";if(s.custom_workflow)$("gen-advanced").open=true;
   $("cloud-key").value="";
   cloudMeta={key_saved:!!s.cloud_key_saved,key_elsewhere:!!s.cloud_key_elsewhere,key_env:s.cloud_key_env||"",key_session:!!s.cloud_key_session};
-  loaded={backend:s.backend,cloud_provider:s.cloud_provider,cloud_url:s.cloud_url,cloud_model:s.cloud_model};cloudFields()}
+  loaded={backend:s.backend,cloud_provider:s.cloud_provider,cloud_url:s.cloud_url,cloud_model:s.cloud_model,flux2_remove_lora:s.flux2_remove_lora};cloudFields()}
 // The cloud fields show only while the cloud is picked; the note says where pictures go.
 function cloudFields(){const on=$("s-backend").value==="cloud";$("cloud-fields").hidden=!on;const rf=$("remote-fields");if(rf)rf.hidden=$("s-backend").value!=="remote";
   const p=$("s-cloud_provider").value,u=$("s-cloud_url").value.trim();
@@ -455,7 +456,7 @@ function settingsNote(t,kind){const n=section==="generation"?$("gen-out"):$("che
 $("save-settings").onclick=async()=>{const b={};document.querySelectorAll("[id^=s-]").forEach(el=>{const k=el.id.slice(2);b[k]=el.type==="checkbox"?el.checked:(el.type==="number"?+el.value:el.value)});
   // what was not changed in this form is not sent: a page opened earlier never writes back an old
   // backend, service, address or model that was changed elsewhere since
-  for(const k of ["backend","cloud_provider","cloud_url","cloud_model"])if(b[k]===loaded[k])delete b[k];
+  for(const k of ["backend","cloud_provider","cloud_url","cloud_model","flux2_remove_lora"])if(b[k]===loaded[k])delete b[k];
   const key=$("cloud-key").value.trim();if(key)b.cloud_api_key=key;
   try{await post("/api/settings",b);await loadSettings();settingsNote("Settings saved.","ok")}catch(e){settingsNote(e.message,"bad")}};
 $("check").onclick=async()=>{settingsNote("Checking the AI engine (starting it takes about a minute)...","dim");try{const r=await post("/api/backend/check");settingsNote((r.ok?"Working: ":"Not working: ")+r.detail+(r.device?` on ${r.device}.`:".")+(r.note?" "+r.note:""),r.ok?"ok":"bad")}catch(e){settingsNote(e.message,"bad")}};

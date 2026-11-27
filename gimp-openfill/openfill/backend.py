@@ -184,6 +184,7 @@ class InpaintRequest:
     prefill_style: str = "blur"  # "blur": soften existing content (fill); "border": paint the area
     # from its surroundings first (expand, object removal)
     color_match: float = 1.0  # strength of the post color correction (0 = off)
+    flux2_remove_box: tuple[int, int, int, int] | None = None  # selection bounds in crop pixels
 
     @property
     def needs_scaling(self) -> bool:

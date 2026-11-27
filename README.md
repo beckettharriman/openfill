@@ -82,6 +82,8 @@ OpenFill doesn't ship a model. The model manager only recommends models that fit
 | Fast fill | DreamShaper 8 Inpainting | 4 GB | about 9 s |
 | Quality fill | RealVisXL V5 with the Fooocus inpaint patch | 8 GB | 20 to 45 s |
 
+PhotoCraft and Patchy can also use the fal removal adapter with FLUX.2 [klein] 4B. See the [LoRA setup](docs/models.md#optional-flux2-klein-removal-lora).
+
 Each model has its own license. MAT, the FLUX.1 Fill models and FLUX.2 [klein] 9B are **non-commercial**. Details in [docs/models.md](docs/models.md), which also covers using your own ComfyUI workflow (Advanced).
 
 ## Status

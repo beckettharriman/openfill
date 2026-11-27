@@ -120,6 +120,7 @@ class Settings:
     grow_percent: float = 15.0  # dilation as percent of the selection's larger side (covers object rims)
     feather_percent: float = 6.0  # layer mask feather as percent of the larger side
     prefill: bool = True
+    flux2_remove_lora: bool = False  # fal adapter when Klein 4B is explicitly picked in Remove
     # Second pass at full resolution over the regenerated area when the fill
     # was worked below 1:1 (SD 1.5 and SDXL tiers), at this denoise. Off: in
     # the A/B it made fills softer (SD 1.5) or changed their content (SDXL).
