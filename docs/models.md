@@ -11,7 +11,7 @@ Fill, and FLUX.2 [klein] 9B are non-commercial.**
 |---|---|---|---|---|
 | LaMa | 0.2 GB | 2 GB | Remove (default) | Apache-2.0 |
 | MAT Places512 | 0.1 GB | 2 GB | Remove | **CC BY-NC 4.0, non-commercial** |
-| BiRefNet | 0.4 GB | 2 GB | Remove Background (GIMP menu, PhotoCraft panel Cutout) | MIT |
+| BiRefNet | 0.4 GB | 2 GB | Remove Background (GIMP menu: new layer or layer mask; PhotoCraft panel Cutout) | MIT |
 | Real-ESRGAN x4plus | 64 MB | 2 GB | Upscale 2x and 4x | BSD-3-Clause |
 | SeedVR2 3B int8 | 3.7 GB | 8 GB | Upscale (slow, restores detail) | Apache-2.0 |
 | SeedVR2 7B int8 (untested) | 8.2 GB | 12 GB | Upscale | Apache-2.0 |

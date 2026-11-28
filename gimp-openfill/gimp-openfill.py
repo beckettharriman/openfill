@@ -12,7 +12,7 @@ Menu:
   Filters > OpenFill > Generative Expand...         python-fu-openfill-generative-expand
   Filters > OpenFill > Text to Image...             python-fu-openfill-text-to-image
   Filters > OpenFill > Upscale...                   python-fu-openfill-upscale
-  Filters > OpenFill > Remove Background            python-fu-openfill-remove-background
+  Filters > OpenFill > Remove Background...         python-fu-openfill-remove-background
   Filters > OpenFill > Generative Fill Settings...  python-fu-openfill-settings
   Filters > OpenFill > Stop AI Backend              python-fu-openfill-stop-backend
 """
@@ -911,18 +911,25 @@ def run_remove_background(
     run_mode: Gimp.RunMode,
     image: Gimp.Image,
     _drawables: list[Gimp.Drawable],
-    _config: Gimp.ProcedureConfig,
+    config: Gimp.ProcedureConfig,
     _data: object,
 ) -> Gimp.ValueArray:
     """Filters > OpenFill > Remove Background: cut the subject out of the whole image with
-    BiRefNet, as one new layer on top. No dialog: it takes no selection and no prompt, and the
-    original layers stay as they are (the same job as the Cutout tab in the PhotoCraft panel)."""
+    BiRefNet. It takes no selection and no prompt; the dialog only asks where the result goes:
+    a new layer on top (the default, as in the PhotoCraft Cutout tab) or a layer mask on the
+    selected layer. The original pixels are never changed."""
+    hooks = _test_hooks() if run_mode == Gimp.RunMode.INTERACTIVE else {}
+    if run_mode == Gimp.RunMode.INTERACTIVE:
+        if hooks.get("autoclose"):
+            return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, GLib.Error())
+        if not _dialog(procedure, config, "Remove Background"):
+            return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, GLib.Error())
     from openfill.app import App
 
     app = None
     try:
         app = App(interactive=run_mode == Gimp.RunMode.INTERACTIVE)
-        app.remove_background(image)
+        app.remove_background(image, output=str(config.get_property("output")))
     except Exception as err:  # noqa: BLE001 - every failure must reach the user
         return _fail(procedure, err, app.log if app else None)
     return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
@@ -1331,16 +1338,26 @@ class OpenFill(Gimp.PlugIn):
         return p
 
     def _remove_background(self) -> Gimp.ImageProcedure:
-        return self._image_procedure(
+        p = self._image_procedure(
             PROC_BGREMOVE,
             run_remove_background,
-            "Remove _Background",
+            "Remove _Background...",
             "Cut the subject out of the image with BiRefNet",
-            "Makes the background of the whole visible image transparent with BiRefNet on ComfyUI "
-            "(0.39 or newer) and adds the result as a new layer on top. The original layers are not "
-            "changed. It uses no selection and no prompt. Needs the BiRefNet model from the model "
-            "manager. OpenFill " + __version__,
+            "Finds the subject in the whole visible image with BiRefNet on ComfyUI (0.39 or newer) and "
+            "hides the background: either as a new layer on top (a cutout), or as a layer mask on the "
+            "selected layer. The original pixels are not changed. It uses no selection and no prompt. "
+            "Needs the BiRefNet model from the model manager. OpenFill " + __version__,
         )
+        p.add_choice_argument(
+            "output",
+            "_Result",
+            "New layer keeps the original and adds a cutout on top; Layer mask hides the background "
+            "of the selected layer, so you can paint it back",
+            _choice([("layer", "New layer (cutout)"), ("mask", "Layer mask on the selected layer")]),
+            "layer",
+            RW,
+        )
+        return p
 
     def _settings(self) -> Gimp.Procedure:
         p = Gimp.Procedure.new(self, PROC_SETTINGS, Gimp.PDBProcType.PLUGIN, run_settings, None)

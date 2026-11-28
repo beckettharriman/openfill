@@ -117,6 +117,7 @@ INDEXED_MESSAGE = (
     "them. Convert it with Image > Mode > RGB (or Grayscale) and run the command again."
 )
 TRANSPARENT_MESSAGE = "The image is fully transparent, so there is nothing to cut out. Open or paste a picture first."
+BGREMOVE_OUTPUTS = ("layer", "mask")  # Remove Background: a new layer, or a layer mask on the selected layer
 NO_SELECTION_MESSAGE = (
     "Nothing is selected. Select the area to fill first (for example with the Rectangle or "
     "Free Select tool), then run Generative Fill again. To regenerate the whole image, use "
@@ -1723,10 +1724,27 @@ class App:
         found = cat.runnable_installed(self.catalog, self.models_root, self.custom_nodes_dir, "bgremove")
         return found[0] if found else None
 
-    def remove_background(self, image) -> list:
-        """Cut the subject out of the whole image with BiRefNet: one new layer on top, the
-        original untouched below it. No selection and no prompt are used."""
+    def _mask_target(self, image):
+        """The layer that gets the mask for ``output="mask"``; says why when there is none."""
+        finder = getattr(self.io, "mask_target", None)
+        if finder is None:
+            raise UnsupportedImage("A layer mask can only be added in the GIMP plug-in. Use a new layer instead.")
+        layer, why = finder(image)
+        if layer is None:
+            raise UnsupportedImage(why)
+        return layer
+
+    def remove_background(self, image, output: str = "layer") -> list:
+        """Cut the subject out of the whole image with BiRefNet. No selection and no prompt are used.
+
+        ``output="layer"`` (the default): one new layer on top, the original untouched below it.
+        ``output="mask"``: the cutout becomes a layer mask on the one selected layer, so the
+        background is hidden, not lost (GIMP plug-in only).
+        """
+        if output not in BGREMOVE_OUTPUTS:
+            raise ValueError(f"Remove Background output must be one of {BGREMOVE_OUTPUTS}, not {output!r}")
         self._check_image(image)
+        target = self._mask_target(image) if output == "mask" else None  # before the model runs
         entry = self.background_removal_model_available()
         if entry is None:
             raise ModelMissing(
@@ -1764,21 +1782,24 @@ class App:
             )
             self.server.touch()
             self._debug_dump("bgremove", request, result, full, folder=debug_dir)
-            layers = self.io.insert_results(
-                image,
-                result.images,
-                full,
-                "Background Removed",
-                0.0,
-                self.paths.temp,
-                use_selection_mask=False,
-            )
+            if target is not None:
+                layers = [self.io.add_alpha_mask(image, target, result.images[0], full, self.paths.temp)]
+            else:
+                layers = self.io.insert_results(
+                    image,
+                    result.images,
+                    full,
+                    "Background Removed",
+                    0.0,
+                    self.paths.temp,
+                    use_selection_mask=False,
+                )
         except BaseException as err:
             self._debug_dump("bgremove", request, rect=full, error=err, folder=debug_dir)
             runner.fail(err)
             raise
-        runner.done("Added layer: Background Removed")
-        self.log.info("bgremove: done, %d layer(s)", len(layers))
+        runner.done("Added a layer mask" if target is not None else "Added layer: Background Removed")
+        self.log.info("bgremove: done, output=%s, %d layer(s)", output, len(layers))
         return layers
 
     def upscale_models(self) -> list[cat.ModelEntry]:

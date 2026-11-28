@@ -281,6 +281,112 @@ class TransparentImageTests(unittest.TestCase):
             app.remove_background(object())
 
 
+class OutputChoiceTests(unittest.TestCase):
+    """Remove Background puts the cutout on a new layer (the default) or into a layer mask of the
+    selected layer; the mask target is checked before the model runs."""
+
+    LAYER = object()
+
+    class Runner:
+        started = 0
+
+        def __init__(self, *args, **kwargs):
+            type(self).started += 1
+
+        def run(self, job):
+            return SimpleNamespace(images=[b"cutout-png"])
+
+        def done(self, text):
+            self.text = text
+
+        def fail(self, err):
+            pass
+
+    def make(self, mask_target=("unset",), cutout_layers=None):
+        import logging
+
+        from openfill.app import App
+
+        calls = []
+
+        class Io:
+            def is_indexed(self, image):
+                return False
+
+            def image_rect(self, image):
+                return Rect(0, 0, 2, 1)
+
+            def export_region(self, image, rect, transparent_outside=False, keep_alpha=False):
+                rgba = bytes((10, 20, 30, 255)) * 2
+                return png.encode(2, 1, rgba, 4), rgba
+
+            def insert_results(self, image, images, origin, name, feather, temp, **kwargs):
+                calls.append(("insert_results", name, kwargs))
+                return ["new layer"]
+
+        io = Io()
+        if mask_target != ("unset",):
+            io.mask_target = lambda image: mask_target
+
+            def add_alpha_mask(image, layer, data, origin, temp):
+                calls.append(("add_alpha_mask", layer, data, origin))
+                return layer
+
+            io.add_alpha_mask = add_alpha_mask
+        app = App.__new__(App)
+        app.io = io
+        app.log = logging.getLogger("test-bgremove-output")
+        entry = SimpleNamespace(id="birefnet", name="BiRefNet")
+        app.background_removal_model_available = lambda: entry
+        app.resolve_model = lambda entry_id: (entry, BIREFNET)
+        app.interactive = False
+        app.runner_cls = self.Runner
+        app.server = SimpleNamespace(touch=lambda: None)
+        app.paths = SimpleNamespace(temp=None)
+        app._debug_folder = lambda name: None
+        app._debug_dump = lambda *args, **kwargs: None
+        return app, calls
+
+    def setUp(self):
+        self.Runner.started = 0
+
+    def test_the_default_is_a_new_layer(self):
+        app, calls = self.make()
+        self.assertEqual(app.remove_background(object()), ["new layer"])
+        self.assertEqual(calls[0][:2], ("insert_results", "Background Removed"))
+        self.assertIs(calls[0][2]["use_selection_mask"], False)
+
+    def test_mask_output_puts_the_cutout_in_the_selected_layers_mask(self):
+        app, calls = self.make(mask_target=(self.LAYER, ""))
+        self.assertEqual(app.remove_background(object(), output="mask"), [self.LAYER])
+        self.assertEqual([c[0] for c in calls], ["add_alpha_mask"])  # no new layer
+        self.assertIs(calls[0][1], self.LAYER)
+        self.assertEqual(calls[0][2], b"cutout-png")
+        self.assertEqual(calls[0][3], Rect(0, 0, 2, 1))
+
+    def test_no_layer_to_mask_is_refused_before_the_model_runs(self):
+        from openfill.app import UnsupportedImage
+
+        app, calls = self.make(mask_target=(None, "Select one layer to add the mask to."))
+        with self.assertRaisesRegex(UnsupportedImage, "Select one layer"):
+            app.remove_background(object(), output="mask")
+        self.assertEqual(self.Runner.started, 0)
+        self.assertEqual(calls, [])
+
+    def test_an_editor_without_layer_masks_says_so(self):
+        from openfill.app import UnsupportedImage
+
+        app, _ = self.make()  # the PhotoCraft companion's io has no mask_target
+        with self.assertRaisesRegex(UnsupportedImage, "GIMP plug-in"):
+            app.remove_background(object(), output="mask")
+        self.assertEqual(self.Runner.started, 0)
+
+    def test_an_unknown_output_is_a_programming_error(self):
+        app, _ = self.make()
+        with self.assertRaisesRegex(ValueError, "output"):
+            app.remove_background(object(), output="channel")
+
+
 class OnlyComfyTests(unittest.TestCase):
     """Remove Background is a ComfyUI graph: another backend would fill the whole image instead."""
 
