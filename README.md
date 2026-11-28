@@ -22,7 +22,7 @@ Here's what you get:
 
 <table>
 <tr><td><b>Fill with a prompt</b></td><td>Select, type "a red door with brass handles", Enter. The fill lands on a new layer with a soft mask.</td></tr>
-<tr><td><b>Remove background</b></td><td>In PhotoCraft press Cutout; in GIMP use Filters > OpenFill > Remove Background. BiRefNet makes the background of the whole image transparent as a new layer. Needs the BiRefNet model (0.4 GB) from the Models tab.</td></tr>
+<tr><td><b>Remove background</b></td><td>In PhotoCraft press Cutout; in GIMP use Filters > OpenFill > Remove Background... and choose a new layer (a cutout on top) or a layer mask on the selected layer. BiRefNet makes the background of the whole image transparent. Needs the BiRefNet model (0.4 GB) from the Models tab.</td></tr>
 <tr><td><b>Remove object</b></td><td>Select, press Remove. No prompt. It erases the selection at your image's own resolution.</td></tr>
 <tr><td><b>Generative Expand</b></td><td>Drag the canvas edges outward or pick a ratio, and it paints the new border. The prompt is optional.</td></tr>
 <tr><td><b>Create</b></td><td>A new image or a new layer from a prompt, sized to the selection if there is one.</td></tr>

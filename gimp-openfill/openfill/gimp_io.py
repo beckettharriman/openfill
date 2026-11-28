@@ -320,6 +320,45 @@ def insert_results(
     return layers
 
 
+def mask_target(image: Gimp.Image) -> tuple[Gimp.Layer | None, str]:
+    """The one selected layer that can take a layer mask, or (None, why not)."""
+    layers = image.get_selected_layers()
+    if len(layers) != 1:
+        return None, "Select one layer to add the mask to, then run Remove Background again."
+    if layers[0].get_mask() is not None:
+        return None, "The selected layer already has a layer mask. Apply or delete it first, or choose New layer."
+    return layers[0], ""
+
+
+def add_alpha_mask(
+    image: Gimp.Image, layer: Gimp.Layer, data: bytes, origin: Rect, temp_dir: Path | None
+) -> Gimp.Layer:
+    """Give ``layer`` a layer mask made from the transparency of the PNG ``data`` (placed at
+    ``origin``): opaque pixels stay visible, transparent ones are hidden, soft edges stay soft.
+
+    The PNG goes in as a temporary layer, its alpha becomes the selection, and the selection
+    becomes the mask, which GIMP fits to the layer's own size and position. Runs inside one
+    undo group and restores the user's selection.
+    """
+    image.undo_group_start()
+    try:
+        with SavedSelection(image):
+            cutout = load_layer_from_png(image, data, "OpenFill cutout", temp_dir)
+            image.insert_layer(cutout, None, 0)
+            try:
+                cutout.set_offsets(origin.x, origin.y)
+                image.select_item(Gimp.ChannelOps.REPLACE, cutout)  # a layer's selection is its alpha
+                if not layer.has_alpha():
+                    layer.add_alpha()  # e.g. a flattened JPEG: the hidden part must be able to be see-through
+                layer.add_mask(layer.create_mask(Gimp.AddMaskType.SELECTION))
+            finally:
+                image.remove_layer(cutout)
+    finally:
+        image.undo_group_end()
+    Gimp.displays_flush()
+    return layer
+
+
 def resize_canvas(image: Gimp.Image, new_w: int, new_h: int, off_x: int, off_y: int) -> None:
     image.resize(new_w, new_h, off_x, off_y)
 

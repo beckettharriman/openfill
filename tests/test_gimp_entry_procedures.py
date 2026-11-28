@@ -47,14 +47,27 @@ class EntryProcedureTests(unittest.TestCase):
         values = list(self._constants().values())
         self.assertEqual(len(values), len(set(values)))
 
-    def test_remove_background_is_registered_without_a_dialog(self):
+    def test_remove_background_asks_where_the_result_goes(self):
         self.assertEqual(self._constants()["PROC_BGREMOVE"], "python-fu-openfill-remove-background")
         runner = next(n for n in self.tree.body if isinstance(n, ast.FunctionDef) and n.name == "run_remove_background")
-        calls = [n.func.attr for n in ast.walk(runner) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
-        self.assertIn("remove_background", calls)  # App.remove_background does the work
-        self.assertNotIn("_dialog", self._names_used(runner))  # no selection, no prompt, no settings
+        calls = [n for n in ast.walk(runner) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+        work = [c for c in calls if c.func.attr == "remove_background"]
+        self.assertEqual(len(work), 1)  # App.remove_background does the work
+        self.assertEqual([k.arg for k in work[0].keywords], ["output"])  # the dialog's choice is passed on
+        self.assertIn("_dialog", self._names_used(runner))  # the dialog asks for it
+
+    def test_remove_background_registers_the_output_choice(self):
+        method = self._plugin_method("_remove_background")
+        choices = [
+            n
+            for n in ast.walk(method)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "add_choice_argument"
+        ]
+        self.assertEqual([ast.literal_eval(c.args[0]) for c in choices], ["output"])
+        self.assertEqual(ast.literal_eval(choices[0].args[4]), "layer")  # the default: a new layer
 
     def test_menu_docstring_lists_remove_background(self):
+        self.assertIn("Remove Background...", ast.get_docstring(self.tree))
         self.assertIn("python-fu-openfill-remove-background", ast.get_docstring(self.tree))
 
 

@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- GIMP: Remove Background now asks where the result goes: a new layer on top (the default, as before) or a layer mask on the selected layer, which hides the background without losing it. The mask option needs exactly one selected layer without a mask, and says so before the model runs. Scripts that call the procedure without a dialog still get a new layer.
 - GIMP: Filters > OpenFill > Remove Background cuts the subject out of the whole image with BiRefNet as one new layer, the same job as the Cutout tab in the PhotoCraft panel. It needs ComfyUI 0.39 or newer and the BiRefNet model (424 MB) from the model manager, and it runs on ComfyUI only.
 
 ## [2.0.0-beta.8] - 2026-11-20
